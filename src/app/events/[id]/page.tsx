@@ -2,16 +2,17 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Image from 'next/image';
-import { ExternalLink, Pencil, Check, X, BookOpen, Send } from 'lucide-react';
+import { ExternalLink, Pencil, Check, X, BookOpen, Send, RotateCcw } from 'lucide-react';
 import { formatSessionRange, getTimezoneLabel } from '@/lib/timezone';
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import firebaseApp from '@/lib/firebase';
 
 const STATUS_STYLES: Record<string, { bg:string; color:string; label:string }> = {
-  pending:     { bg:'#fff3e0', color:'#c05e00', label:'Pending review' },
-  approved:    { bg:'#e8f5e9', color:'#2a6b2e', label:'Published'      },
-  rejected:    { bg:'#fdecea', color:'#c0392b', label:'Rejected'       },
-  resubmitted: { bg:'#e3f2fd', color:'#1565c0', label:'Resubmitted'    },
+  pending:     { bg:'#fff3e0', color:'#c05e00', label:'Pending review'   },
+  approved:    { bg:'#e8f5e9', color:'#2a6b2e', label:'Published'        },
+  rejected:    { bg:'#fdecea', color:'#c0392b', label:'Rejected'         },
+  resubmitted: { bg:'#e3f2fd', color:'#1565c0', label:'Resubmitted'      },
+  pending_fix: { bg:'#fff3e0', color:'#c05e00', label:'Sent for correction' },
 };
 const GEO_LABELS: Record<string,string> = {
   hyper_local:'Hyper-local', city_wide:'City-wide', county:'County', regional:'Regional',
@@ -38,6 +39,12 @@ export default function EventDeepLinkPage() {
   // Resubmit state
   const [resubmitting,  setResubmitting]  = useState(false);
   const [resubmitMsg,   setResubmitMsg]   = useState('');
+
+  // Send Back state
+  const [showSendBack,    setShowSendBack]    = useState(false);
+  const [correctionNotes, setCorrectionNotes] = useState('');
+  const [sendingBack,     setSendingBack]     = useState(false);
+  const [sendBackMsg,     setSendBackMsg]     = useState('');
 
   useEffect(() => {
     const auth = getAuth(firebaseApp);
@@ -109,6 +116,29 @@ export default function EventDeepLinkPage() {
       alert(`Save failed: ${err.message}`);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function sendBackForCorrection() {
+    if (!authToken || !correctionNotes.trim()) return;
+    setSendingBack(true);
+    try {
+      const res = await fetch(`/api/review/events/${id}/send-for-correction`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ correction_notes: correctionNotes }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed');
+      setShowSendBack(false);
+      setCorrectionNotes('');
+      setSendBackMsg('✅ Sent for correction — the fix agent will update this event');
+      const r2 = await fetch(`/api/events/${id}`);
+      if (r2.ok) setEvent(await r2.json());
+    } catch (err: any) {
+      setSendBackMsg(`❌ ${err.message}`);
+    } finally {
+      setSendingBack(false);
     }
   }
 
@@ -185,10 +215,18 @@ export default function EventDeepLinkPage() {
               )}
               <span style={{ fontSize:11, color:'#aaa', marginLeft:'auto' }}>Source: {event.calendar_source_name}</span>
               {canEdit && !editing && (
-                <button onClick={startEdit}
-                  style={{ display:'flex', alignItems:'center', gap:4, background:'#f0f7f0', border:'1px solid #c8e6c9', color:'#3a8c3f', borderRadius:6, padding:'4px 10px', fontSize:12, fontWeight:600, cursor:'pointer' }}>
-                  <Pencil size={12}/> Edit
-                </button>
+                <>
+                  <button onClick={startEdit}
+                    style={{ display:'flex', alignItems:'center', gap:4, background:'#f0f7f0', border:'1px solid #c8e6c9', color:'#3a8c3f', borderRadius:6, padding:'4px 10px', fontSize:12, fontWeight:600, cursor:'pointer' }}>
+                    <Pencil size={12}/> Edit
+                  </button>
+                  {event.status !== 'pending_fix' && (
+                    <button onClick={() => { setShowSendBack(true); setCorrectionNotes(''); setSendBackMsg(''); }}
+                      style={{ display:'flex', alignItems:'center', gap:4, background:'#fff3e0', border:'1px solid #ffcc80', color:'#c05e00', borderRadius:6, padding:'4px 10px', fontSize:12, fontWeight:600, cursor:'pointer' }}>
+                      <RotateCcw size={12}/> Send for fix
+                    </button>
+                  )}
+                </>
               )}
             </div>
 
@@ -352,10 +390,52 @@ export default function EventDeepLinkPage() {
           </div>
         </div>
 
+        {sendBackMsg && (
+          <div style={{ marginTop:'1rem', padding:'8px 12px', background: sendBackMsg.startsWith('✅') ? '#e8f5e9' : '#fdecea', borderRadius:6, fontSize:13, color: sendBackMsg.startsWith('✅') ? '#2a6b2e' : '#c0392b', fontWeight:600 }}>
+            {sendBackMsg}
+          </div>
+        )}
+
         <p style={{ textAlign:'center', fontSize:11, color:'#aaa', marginTop:'1.5rem' }}>
           AI Events Aggregator · Oberlin Environmental Dashboard
         </p>
       </div>
+
+      {/* Send Back modal */}
+      {showSendBack && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.4)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:'1rem' }}
+          onClick={e => { if (e.target === e.currentTarget) setShowSendBack(false); }}>
+          <div style={{ background:'white', borderRadius:12, padding:'1.5rem', maxWidth:460, width:'100%', boxShadow:'0 8px 32px rgba(0,0,0,0.2)' }}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'1rem' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <RotateCcw size={16} color="#c05e00"/>
+                <span style={{ fontSize:15, fontWeight:700 }}>Send back for correction</span>
+              </div>
+              <button onClick={() => setShowSendBack(false)} style={{ background:'none', border:'none', cursor:'pointer', color:'#bbb' }}><X size={16}/></button>
+            </div>
+            <p style={{ fontSize:13, color:'#666', marginBottom:'0.75rem' }}>Describe what the fix agent should change:</p>
+            <textarea
+              value={correctionNotes}
+              onChange={e => setCorrectionNotes(e.target.value)}
+              placeholder="e.g. geo_scope should be city_wide not regional. The description has wrong details."
+              rows={4}
+              autoFocus
+              style={{ width:'100%', border:'1px solid #ddd', borderRadius:7, padding:'10px 12px', fontSize:13, fontFamily:'inherit', resize:'vertical', boxSizing:'border-box', outline:'none', marginBottom:0 }}
+            />
+            <div style={{ display:'flex', gap:8, marginTop:'1rem', justifyContent:'flex-end' }}>
+              <button onClick={() => setShowSendBack(false)} style={{ background:'#f5f5f5', border:'1px solid #ddd', color:'#666', borderRadius:7, padding:'8px 16px', fontSize:13, cursor:'pointer' }}>
+                Cancel
+              </button>
+              <button
+                onClick={sendBackForCorrection}
+                disabled={!correctionNotes.trim() || sendingBack}
+                style={{ background: correctionNotes.trim() ? '#c05e00' : '#ddd', color:'white', border:'none', borderRadius:7, padding:'8px 18px', fontSize:13, fontWeight:700, cursor: correctionNotes.trim() ? 'pointer' : 'not-allowed', display:'flex', alignItems:'center', gap:6 }}>
+                <RotateCcw size={13}/> {sendingBack ? 'Sending…' : 'Send for correction'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

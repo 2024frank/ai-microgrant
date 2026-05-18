@@ -70,6 +70,16 @@ export async function POST(
     await (conn as any).beginTransaction();
 
     for (const ev of events) {
+      // O(1) dedup check: if this event was previously sent for correction, resolve it
+      const fixedFromId: number | null = ev.fixedFromEventId ? parseInt(ev.fixedFromEventId) : null;
+      let fixEntry: any = null;
+      if (fixedFromId) {
+        const [[row]] = await conn.query(
+          'SELECT * FROM needs_fix WHERE raw_event_id = ?', [fixedFromId]
+        ) as any;
+        fixEntry = row || null;
+      }
+
       const [res] = await conn.query(
         `INSERT INTO raw_events (
           source_id, agent_run_id, event_type, title, description,
@@ -77,8 +87,9 @@ export async function POST(
           location_type, location, place_id, place_name, room_num,
           url_link, display, screen_ids, buttons, contact_email,
           phone, website, image_cdn_url, calendar_source_name,
-          calendar_source_url, geo_scope, geo_json, status
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')`,
+          calendar_source_url, geo_scope, geo_json,
+          corrected_from_id, sent_for_fix_by, status
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')`,
         [
           source.id, runId,
           ev.eventType       || 'ot',
@@ -105,6 +116,8 @@ export async function POST(
           ev.calendarSourceUrl  || null,
           ev.geo_scope       || null,
           ev.geo ? JSON.stringify(ev.geo) : null,
+          fixedFromId,
+          fixEntry?.sent_by_email || null,
         ]
       ) as any;
 
@@ -114,6 +127,24 @@ export async function POST(
         'UPDATE raw_events SET ingested_post_url = ? WHERE id = ?',
         [ingestedPostUrl, eventId]
       );
+
+      // If this resolves a fix request: remove from needs_fix and notify the sender
+      if (fixedFromId && fixEntry) {
+        await conn.query('DELETE FROM needs_fix WHERE raw_event_id = ?', [fixedFromId]);
+        if (fixEntry.sent_by_user_id) {
+          await conn.query(
+            `INSERT INTO notifications (user_id, type, title, message, raw_event_id)
+             VALUES (?, 'event_fixed', ?, ?, ?)`,
+            [
+              fixEntry.sent_by_user_id,
+              'Your correction is ready for review',
+              `The event you sent back for correction has been fixed and is ready to review.`,
+              eventId,
+            ]
+          );
+        }
+      }
+
       inserted++;
     }
 

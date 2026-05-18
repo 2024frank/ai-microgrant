@@ -1,0 +1,65 @@
+import { NextRequest } from 'next/server';
+import pool from '@/lib/db';
+import { getAuthUser, unauthorized } from '@/lib/auth';
+
+export async function POST(
+  req: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  const user = await getAuthUser(req);
+  if (!user) return unauthorized();
+
+  const { id: eventId } = await context.params;
+  const { correction_notes } = await req.json();
+
+  if (!correction_notes?.trim()) {
+    return Response.json({ error: 'correction_notes required' }, { status: 400 });
+  }
+
+  const [[event]] = await pool.query(
+    'SELECT id, source_id, title, status FROM raw_events WHERE id = ?', [eventId]
+  ) as any;
+  if (!event) return Response.json({ error: 'Not found' }, { status: 404 });
+
+  const [[dbUser]] = await pool.query(
+    'SELECT id, email FROM users WHERE firebase_uid = ?', [user.uid]
+  ) as any;
+
+  const conn = await pool.getConnection();
+  try {
+    await (conn as any).beginTransaction();
+
+    // Upsert into needs_fix (UNIQUE on raw_event_id prevents dupes)
+    await conn.query(
+      `INSERT INTO needs_fix (raw_event_id, source_id, correction_notes, sent_by_user_id, sent_by_email)
+       VALUES (?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         correction_notes = VALUES(correction_notes),
+         sent_by_user_id  = VALUES(sent_by_user_id),
+         sent_by_email    = VALUES(sent_by_email),
+         created_at       = CURRENT_TIMESTAMP`,
+      [eventId, event.source_id, correction_notes.trim(), dbUser?.id ?? null, dbUser?.email ?? null]
+    );
+
+    // Mark the event so the queue shows it differently
+    await conn.query(
+      "UPDATE raw_events SET sent_for_correction = 1, status = 'pending_fix' WHERE id = ?",
+      [eventId]
+    );
+
+    // Log as activity in review_sessions
+    await conn.query(
+      `INSERT INTO review_sessions (raw_event_id, reviewer_id, action, time_spent_sec, submitted_to_ch)
+       VALUES (?, ?, 'sent_for_correction', 0, 0)`,
+      [eventId, dbUser?.id ?? null]
+    );
+
+    await (conn as any).commit();
+    return Response.json({ ok: true });
+  } catch (err: any) {
+    await (conn as any).rollback();
+    return Response.json({ error: err.message }, { status: 500 });
+  } finally {
+    (conn as any).release();
+  }
+}

@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/hooks/useAuth';
-import { Clock, Globe, Calendar, ArrowUpDown, Filter } from 'lucide-react';
+import { Clock, Globe, Calendar, ArrowUpDown, Filter, RotateCcw, X, Wrench } from 'lucide-react';
 import { formatDateTime } from '@/lib/timezone';
 
 const GEO_COLORS: Record<string,string> = {
@@ -30,6 +30,9 @@ export default function ReviewerQueuePage() {
   const [sort, setSort]        = useState('ingested_asc');
   const [sourceId, setSourceId] = useState('');
   const [newEventsToast, setNewEventsToast] = useState(false);
+  const [sendBackModal, setSendBackModal]   = useState<{ eventId: number; title: string } | null>(null);
+  const [correctionNotes, setCorrectionNotes] = useState('');
+  const [sendingBack, setSendingBack]         = useState(false);
   const lastTotalRef = useRef<number | null>(null);
   const pollRef      = useRef<NodeJS.Timeout | null>(null);
   const router = useRouter();
@@ -86,6 +89,26 @@ export default function ReviewerQueuePage() {
     setNewEventsToast(false);
     lastTotalRef.current = null;
     loadQueue();
+  }
+
+  async function submitSendBack() {
+    if (!token || !sendBackModal || !correctionNotes.trim()) return;
+    setSendingBack(true);
+    try {
+      const res = await fetch(`/api/review/events/${sendBackModal.eventId}/send-for-correction`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ correction_notes: correctionNotes }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error);
+      setSendBackModal(null);
+      setCorrectionNotes('');
+      loadQueue();
+    } catch (err: any) {
+      alert(`Failed: ${err.message}`);
+    } finally {
+      setSendingBack(false);
+    }
   }
 
   function formatEventDate(sessions: any) {
@@ -168,34 +191,104 @@ export default function ReviewerQueuePage() {
           <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
             {events.map(ev => {
               const [bg,fg] = (GEO_COLORS[ev.geo_scope]||'#f0f0f0|#555').split('|');
+              const isPendingFix = ev.sent_for_correction;
+              const isFixed      = !!ev.corrected_from_id;
               return (
-                <div key={ev.id} onClick={() => router.push(`/reviewer/events/${ev.id}`)}
+                <div key={ev.id}
                   className="card"
-                  style={{ cursor:'pointer', display:'flex', alignItems:'center', gap:'1rem', padding:'1rem 1.25rem' }}
+                  style={{ cursor:'pointer', display:'flex', alignItems:'center', gap:'1rem', padding:'1rem 1.25rem', opacity: isPendingFix ? 0.7 : 1 }}
                   onMouseEnter={e=>(e.currentTarget.style.boxShadow='0 2px 12px rgba(58,140,63,0.15)')}
                   onMouseLeave={e=>(e.currentTarget.style.boxShadow='none')}>
-                  <div style={{ width:36, height:36, borderRadius:8, background:'#e8f5e9', display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, fontWeight:700, color:'#3a8c3f', flexShrink:0 }}>
-                    {ev.source_name?.[0] || '?'}
-                  </div>
-                  <div style={{ flex:1, minWidth:0 }}>
-                    <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:2 }}>
-                      <span style={{ fontSize:14, fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{ev.title}</span>
-                      {ev.geo_scope && (
-                        <span style={{ fontSize:10, padding:'1px 8px', borderRadius:20, background:bg, color:fg, fontWeight:600, flexShrink:0 }}>
-                          {GEO_LABELS[ev.geo_scope]}
-                        </span>
-                      )}
+                  {/* Clickable area */}
+                  <div style={{ display:'flex', alignItems:'center', gap:'1rem', flex:1, minWidth:0 }}
+                    onClick={() => router.push(`/reviewer/events/${ev.id}`)}>
+                    <div style={{ width:36, height:36, borderRadius:8, background: isPendingFix ? '#fff3e0' : '#e8f5e9', display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, fontWeight:700, color: isPendingFix ? '#c05e00' : '#3a8c3f', flexShrink:0 }}>
+                      {isPendingFix ? <Wrench size={16}/> : (ev.source_name?.[0] || '?')}
                     </div>
-                    <div style={{ fontSize:12, color:'#888', display:'flex', gap:12, flexWrap:'wrap' }}>
-                      <span style={{ display:'flex', alignItems:'center', gap:3 }}><Globe size={11}/> {ev.source_name}</span>
-                      <span style={{ display:'flex', alignItems:'center', gap:3 }}><Calendar size={11}/> {formatEventDate(ev.sessions)}</span>
-                      <span style={{ display:'flex', alignItems:'center', gap:3 }}><Clock size={11}/> added {new Date(ev.created_at).toLocaleDateString()}</span>
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:2, flexWrap:'wrap' }}>
+                        <span style={{ fontSize:14, fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{ev.title}</span>
+                        {ev.geo_scope && (
+                          <span style={{ fontSize:10, padding:'1px 8px', borderRadius:20, background:bg, color:fg, fontWeight:600, flexShrink:0 }}>
+                            {GEO_LABELS[ev.geo_scope]}
+                          </span>
+                        )}
+                        {isPendingFix && (
+                          <span style={{ fontSize:10, padding:'1px 8px', borderRadius:20, background:'#fff3e0', color:'#c05e00', fontWeight:700, flexShrink:0 }}>
+                            Sent for correction
+                          </span>
+                        )}
+                        {isFixed && (
+                          <span style={{ fontSize:10, padding:'1px 8px', borderRadius:20, background:'#e8f5e9', color:'#2a6b2e', fontWeight:700, flexShrink:0 }} title={`Sent back by ${ev.sent_for_fix_by || 'reviewer'}`}>
+                            ✓ Fixed
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize:12, color:'#888', display:'flex', gap:12, flexWrap:'wrap' }}>
+                        <span style={{ display:'flex', alignItems:'center', gap:3 }}><Globe size={11}/> {ev.source_name}</span>
+                        <span style={{ display:'flex', alignItems:'center', gap:3 }}><Calendar size={11}/> {formatEventDate(ev.sessions)}</span>
+                        <span style={{ display:'flex', alignItems:'center', gap:3 }}><Clock size={11}/> added {new Date(ev.created_at).toLocaleDateString()}</span>
+                        {isFixed && ev.sent_for_fix_by && (
+                          <span style={{ color:'#3a8c3f', fontWeight:600 }}>by {ev.sent_for_fix_by}</span>
+                        )}
+                      </div>
                     </div>
                   </div>
-                  <div style={{ fontSize:11, color:'#bbb' }}>→</div>
+
+                  {/* Send Back button — only on non-pending-fix events */}
+                  {!isPendingFix && (
+                    <button
+                      onClick={e => { e.stopPropagation(); setSendBackModal({ eventId: ev.id, title: ev.title }); setCorrectionNotes(''); }}
+                      title="Send back for correction"
+                      style={{ flexShrink:0, display:'flex', alignItems:'center', gap:4, background:'none', border:'1px solid #e0e0e0', color:'#888', borderRadius:6, padding:'5px 10px', fontSize:11, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}
+                      onMouseEnter={e=>{ e.currentTarget.style.borderColor='#c05e00'; e.currentTarget.style.color='#c05e00'; e.currentTarget.style.background='#fff3e0'; }}
+                      onMouseLeave={e=>{ e.currentTarget.style.borderColor='#e0e0e0'; e.currentTarget.style.color='#888'; e.currentTarget.style.background='none'; }}
+                    >
+                      <RotateCcw size={11}/> Fix
+                    </button>
+                  )}
+                  <div style={{ fontSize:11, color:'#bbb' }} onClick={() => router.push(`/reviewer/events/${ev.id}`)}>→</div>
                 </div>
               );
             })}
+          </div>
+        )}
+
+        {/* Send Back modal */}
+        {sendBackModal && (
+          <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.4)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:'1rem' }}
+            onClick={e => { if (e.target === e.currentTarget) setSendBackModal(null); }}>
+            <div style={{ background:'white', borderRadius:12, padding:'1.5rem', maxWidth:460, width:'100%', boxShadow:'0 8px 32px rgba(0,0,0,0.2)' }}>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'1rem' }}>
+                <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                  <RotateCcw size={16} color="#c05e00"/>
+                  <span style={{ fontSize:15, fontWeight:700 }}>Send back for correction</span>
+                </div>
+                <button onClick={() => setSendBackModal(null)} style={{ background:'none', border:'none', cursor:'pointer', color:'#bbb' }}><X size={16}/></button>
+              </div>
+              <p style={{ fontSize:13, color:'#666', marginBottom:'0.75rem' }}>
+                <strong style={{ color:'#333' }}>{sendBackModal.title}</strong> — describe what the fix agent should change:
+              </p>
+              <textarea
+                value={correctionNotes}
+                onChange={e => setCorrectionNotes(e.target.value)}
+                placeholder="e.g. The geo_scope should be city_wide not regional. The event is on-campus and open to the public."
+                rows={4}
+                autoFocus
+                style={{ width:'100%', border:'1px solid #ddd', borderRadius:7, padding:'10px 12px', fontSize:13, fontFamily:'inherit', resize:'vertical', boxSizing:'border-box', outline:'none' }}
+              />
+              <div style={{ display:'flex', gap:8, marginTop:'1rem', justifyContent:'flex-end' }}>
+                <button onClick={() => setSendBackModal(null)} style={{ background:'#f5f5f5', border:'1px solid #ddd', color:'#666', borderRadius:7, padding:'8px 16px', fontSize:13, cursor:'pointer' }}>
+                  Cancel
+                </button>
+                <button
+                  onClick={submitSendBack}
+                  disabled={!correctionNotes.trim() || sendingBack}
+                  style={{ background: correctionNotes.trim() ? '#c05e00' : '#ddd', color:'white', border:'none', borderRadius:7, padding:'8px 18px', fontSize:13, fontWeight:700, cursor: correctionNotes.trim() ? 'pointer' : 'not-allowed', display:'flex', alignItems:'center', gap:6 }}>
+                  <RotateCcw size={13}/> {sendingBack ? 'Sending…' : 'Send for correction'}
+                </button>
+              </div>
+            </div>
           </div>
         )}
 

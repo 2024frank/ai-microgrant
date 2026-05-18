@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { useParams, useRouter } from 'next/navigation';
 import Sidebar from '@/components/layout/Sidebar';
-import { ExternalLink, Check, X, Plus, Trash2, Save } from 'lucide-react';
+import { ExternalLink, Check, X, Plus, Trash2, Save, RotateCcw } from 'lucide-react';
 import { getTimezoneLabel } from '@/lib/timezone';
 
 const REASON_CODES = [
@@ -64,6 +64,9 @@ export default function ReviewEventPage() {
   const [event, setEvent]           = useState<any>(null);
   const [edits, setEdits]           = useState<Record<string,any>>({});
   const [showReject, setShowReject] = useState(false);
+  const [showSendBack, setShowSendBack] = useState(false);
+  const [correctionNotes, setCorrectionNotes] = useState('');
+  const [sendingBack, setSendingBack]         = useState(false);
   const [reasons, setReasons]       = useState<string[]>([]);
   const [note, setNote]             = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -148,6 +151,26 @@ export default function ReviewEventPage() {
     }
   }
 
+  async function sendBackForCorrection() {
+    if (!correctionNotes.trim()) return;
+    setSendingBack(true);
+    const res = await fetch(`/api/review/events/${id}/send-for-correction`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+      body: JSON.stringify({ correction_notes: correctionNotes }),
+    });
+    if (res.ok) {
+      showToast('Sent for correction — fix agent will pick it up');
+      setShowSendBack(false);
+      setCorrectionNotes('');
+      setTimeout(() => router.push('/reviewer/queue'), 1200);
+    } else {
+      const d = await res.json().catch(() => ({}));
+      showToast(`Error: ${d.error || 'Please try again'}`);
+      setSendingBack(false);
+    }
+  }
+
   async function reject() {
     if (!reasons.length) return;
     setSubmitting(true);
@@ -193,6 +216,10 @@ export default function ReviewEventPage() {
             <button onClick={saveEdits} disabled={!hasEdits || saving} className="btn-ghost"
               style={{ fontSize:13, display:'flex', alignItems:'center', gap:5, opacity: hasEdits ? 1 : 0.4 }}>
               <Save size={14}/> {saving ? 'Saving…' : 'Save edits'}
+            </button>
+            <button onClick={() => { setShowSendBack(true); setCorrectionNotes(''); }} disabled={submitting} className="btn-ghost"
+              style={{ fontSize:13, display:'flex', alignItems:'center', gap:5, borderColor:'#c05e00', color:'#c05e00' }}>
+              <RotateCcw size={14}/> Send for fix
             </button>
             <button onClick={() => setShowReject(true)} disabled={submitting} className="btn-ghost"
               style={{ fontSize:13, display:'flex', alignItems:'center', gap:5, borderColor:'#c0392b', color:'#c0392b' }}>
@@ -425,6 +452,36 @@ export default function ReviewEventPage() {
           )}
         </SectionCard>
       </main>
+
+      {showSendBack && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.4)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:100 }}
+          onClick={e => { if (e.target === e.currentTarget) setShowSendBack(false); }}>
+          <div style={{ background:'white', borderRadius:12, padding:'1.75rem', width:'100%', maxWidth:440 }}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'0.5rem' }}>
+              <h2 style={{ fontSize:17, fontWeight:700 }}>Send back for correction</h2>
+              <button onClick={() => setShowSendBack(false)} style={{ background:'none', border:'none', cursor:'pointer', color:'#bbb' }}><X size={16}/></button>
+            </div>
+            <p style={{ fontSize:13, color:'#888', marginBottom:'1rem' }}>Describe what the fix agent should change:</p>
+            <textarea
+              value={correctionNotes}
+              onChange={e => setCorrectionNotes(e.target.value)}
+              placeholder="e.g. geo_scope should be city_wide. The poster image is wrong — use a different one."
+              rows={4}
+              autoFocus
+              style={{...inputStyle, resize:'vertical', marginBottom:'1rem'}}
+            />
+            <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+              <button onClick={() => setShowSendBack(false)} className="btn-ghost" style={{ fontSize:13 }}>Cancel</button>
+              <button
+                onClick={sendBackForCorrection}
+                disabled={!correctionNotes.trim() || sendingBack}
+                style={{ background: correctionNotes.trim() ? '#c05e00' : '#ddd', color:'white', border:'none', borderRadius:7, padding:'8px 18px', fontSize:13, fontWeight:700, cursor: correctionNotes.trim() ? 'pointer' : 'not-allowed', display:'flex', alignItems:'center', gap:6 }}>
+                <RotateCcw size={13}/> {sendingBack ? 'Sending…' : 'Send for correction'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showReject && (
         <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.4)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:100 }}>
