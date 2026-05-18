@@ -45,8 +45,8 @@ beforeEach(() => {
   // Reset fetch call history, then set default CommunityHub response
   mockFetch.mockReset();
   mockFetch.mockResolvedValue({
-    json: jest.fn().mockResolvedValue({ id: 'ch_post_abc123' }),
     ok: true,
+    text: jest.fn().mockResolvedValue(JSON.stringify({ id: 'ch_post_abc123' })),
   });
   mockVerify.mockReset();
   mockVerify.mockResolvedValue({ uid: 'uid-admin', email: 'admin@oberlin.edu' });
@@ -57,7 +57,8 @@ describe('GET /api/review/queue', () => {
     db.default.query
       .mockResolvedValueOnce([[ADMIN]])
       .mockResolvedValueOnce([[PENDING]])
-      .mockResolvedValueOnce([[{ total: 1 }]]);
+      .mockResolvedValueOnce([[{ total: 1 }]])
+      .mockResolvedValueOnce([[{ id: 1, name: 'Apollo' }]]); // sources dropdown
 
     const data = await (await GET(makeReq('/api/review/queue'))).json();
     expect(data.events[0].title).toBe('Jazz Night');
@@ -231,7 +232,8 @@ describe('POST /api/review/events/:id/action — approve path', () => {
       .mockResolvedValueOnce([[{ id: 1 }]]);
 
     mockFetch.mockResolvedValueOnce({
-      json: jest.fn().mockResolvedValue({ id: 'post_xyz_999' }),
+      ok: true,
+      text: jest.fn().mockResolvedValue(JSON.stringify({ id: 'post_xyz_999' })),
     });
 
     await POST(

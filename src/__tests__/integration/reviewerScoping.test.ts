@@ -106,7 +106,8 @@ describe('Review Queue — source assignment scoping', () => {
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_A]])           // getAuthUser
       .mockResolvedValueOnce([[APOLLO_EVENT_1, APOLLO_EVENT_2]]) // events query
-      .mockResolvedValueOnce([[{ total: 2 }]]);        // count query
+      .mockResolvedValueOnce([[{ total: 2 }]])         // count query
+      .mockResolvedValueOnce([[{ id: 1, name: 'Apollo' }]]); // sources dropdown
 
     const data = await (await getQueue(makeAuthReq('alice@oberlin.edu'))).json();
 
@@ -122,7 +123,8 @@ describe('Review Queue — source assignment scoping', () => {
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_A]])
       .mockResolvedValueOnce([[APOLLO_EVENT_1]])
-      .mockResolvedValueOnce([[{ total: 1 }]]);
+      .mockResolvedValueOnce([[{ total: 1 }]])
+      .mockResolvedValueOnce([[{ id: 1, name: 'Apollo' }]]); // sources dropdown
 
     await getQueue(makeAuthReq('alice@oberlin.edu'));
 
@@ -138,7 +140,8 @@ describe('Review Queue — source assignment scoping', () => {
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_A]])
       .mockResolvedValueOnce([[]])
-      .mockResolvedValueOnce([[{ total: 0 }]]);
+      .mockResolvedValueOnce([[{ total: 0 }]])
+      .mockResolvedValueOnce([[]]); // sources dropdown
 
     await getQueue(makeAuthReq('alice@oberlin.edu'));
 
@@ -151,7 +154,8 @@ describe('Review Queue — source assignment scoping', () => {
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_B]])
       .mockResolvedValueOnce([[OBERLIN_EVENT_1]])
-      .mockResolvedValueOnce([[{ total: 1 }]]);
+      .mockResolvedValueOnce([[{ total: 1 }]])
+      .mockResolvedValueOnce([[{ id: 1, name: 'Apollo' }]]); // sources dropdown
 
     const data = await (await getQueue(makeAuthReq('bob@oberlin.edu'))).json();
 
@@ -170,7 +174,8 @@ describe('Review Queue — unassigned reviewer sees all events', () => {
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_C]])
       .mockResolvedValueOnce([[APOLLO_EVENT_1, OBERLIN_EVENT_1, CITY_EVENT_1]])
-      .mockResolvedValueOnce([[{ total: 3 }]]);
+      .mockResolvedValueOnce([[{ total: 3 }]])
+      .mockResolvedValueOnce([[{ id: 1, name: 'Apollo' }, { id: 2, name: 'Oberlin' }]]); // sources dropdown
 
     const data = await (await getQueue(makeAuthReq('carol@oberlin.edu'))).json();
 
@@ -185,7 +190,8 @@ describe('Review Queue — unassigned reviewer sees all events', () => {
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_C]])
       .mockResolvedValueOnce([[APOLLO_EVENT_1, OBERLIN_EVENT_1, CITY_EVENT_1]])
-      .mockResolvedValueOnce([[{ total: 3 }]]);
+      .mockResolvedValueOnce([[{ total: 3 }]])
+      .mockResolvedValueOnce([[{ id: 1, name: 'Apollo' }, { id: 2, name: 'Oberlin' }]]); // sources dropdown
 
     const data = await (await getQueue(makeAuthReq('carol@oberlin.edu'))).json();
 
@@ -205,7 +211,8 @@ describe('Review Queue — source_id query parameter narrows scope', () => {
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_C]])
       .mockResolvedValueOnce([[APOLLO_EVENT_1]])
-      .mockResolvedValueOnce([[{ total: 1 }]]);
+      .mockResolvedValueOnce([[{ total: 1 }]])
+      .mockResolvedValueOnce([[{ id: 1, name: 'Apollo' }]]); // sources dropdown
 
     await getQueue(makeAuthReq('carol@oberlin.edu', { source_id: '1' }));
 
@@ -221,7 +228,8 @@ describe('Review Queue — source_id query parameter narrows scope', () => {
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_C]])
       .mockResolvedValueOnce([[APOLLO_EVENT_1, APOLLO_EVENT_2]])
-      .mockResolvedValueOnce([[{ total: 2 }]]);
+      .mockResolvedValueOnce([[{ total: 2 }]])
+      .mockResolvedValueOnce([[{ id: 1, name: 'Apollo' }]]); // sources dropdown
 
     const data = await (await getQueue(makeAuthReq('carol@oberlin.edu', { source_id: '1' }))).json();
 
@@ -238,7 +246,8 @@ describe('Review Queue — admin access', () => {
     db.default.query
       .mockResolvedValueOnce([[ADMIN]])
       .mockResolvedValueOnce([[APOLLO_EVENT_1, OBERLIN_EVENT_1, CITY_EVENT_1]])
-      .mockResolvedValueOnce([[{ total: 3 }]]);
+      .mockResolvedValueOnce([[{ total: 3 }]])
+      .mockResolvedValueOnce([[{ id: 1, name: 'Apollo' }, { id: 2, name: 'Oberlin' }]]); // sources dropdown
 
     const data = await (await getQueue(makeAuthReq('admin@oberlin.edu'))).json();
 
@@ -255,7 +264,8 @@ describe('Review Queue — pagination', () => {
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_C]])
       .mockResolvedValueOnce([[APOLLO_EVENT_1]])
-      .mockResolvedValueOnce([[{ total: 50 }]]);
+      .mockResolvedValueOnce([[{ total: 50 }]])
+      .mockResolvedValueOnce([[{ id: 1, name: 'Apollo' }]]); // sources dropdown
 
     const data = await (await getQueue(
       makeAuthReq('carol@oberlin.edu', { page: '0', limit: '20' })
@@ -271,7 +281,8 @@ describe('Review Queue — pagination', () => {
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_C]])
       .mockResolvedValueOnce([[]])
-      .mockResolvedValueOnce([[{ total: 0 }]]);
+      .mockResolvedValueOnce([[{ total: 0 }]])
+      .mockResolvedValueOnce([[]]); // sources dropdown
 
     await getQueue(makeAuthReq('carol@oberlin.edu', { page: '2', limit: '20' }));
 
@@ -460,7 +471,8 @@ describe('Review Queue — empty queue', () => {
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_C]])
       .mockResolvedValueOnce([[]])             // no events
-      .mockResolvedValueOnce([[{ total: 0 }]]);
+      .mockResolvedValueOnce([[{ total: 0 }]])
+      .mockResolvedValueOnce([[]]); // sources dropdown
 
     const data = await (await getQueue(makeAuthReq('carol@oberlin.edu'))).json();
 

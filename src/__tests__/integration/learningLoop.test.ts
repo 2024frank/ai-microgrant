@@ -24,13 +24,19 @@
 // ---------------------------------------------------------------------------
 // Module mocks
 // ---------------------------------------------------------------------------
-const mockAgentCreate   = jest.fn();
-const mockAgentRetrieve = jest.fn();
+const mockSessionsCreate     = jest.fn();
+const mockSessionsEventsSend = jest.fn();
+const mockSessionsEventsList = jest.fn();
 
 jest.mock('@anthropic-ai/sdk', () => ({
   __esModule: true,
   default: jest.fn(() => ({
-    beta: { agents: { runs: { create: mockAgentCreate, retrieve: mockAgentRetrieve } } },
+    beta: {
+      sessions: {
+        create: mockSessionsCreate,
+        events: { send: mockSessionsEventsSend, list: mockSessionsEventsList },
+      },
+    },
   })),
 }));
 
@@ -206,7 +212,7 @@ describe('Stage 1 – Reject action writes a rejection_log row', () => {
     );
 
     const statusUpdate = db.mockConn.query.mock.calls.find(
-      (c: any[]) => typeof c[0] === 'string' && c[0].includes('UPDATE raw_events') && c[0].includes('"rejected"')
+      (c: any[]) => typeof c[0] === 'string' && c[0].includes('UPDATE raw_events') && c[0].includes("'rejected'")
     );
     expect(statusUpdate).toBeDefined();
   });
@@ -358,12 +364,26 @@ describe('Stage 2 – getRejectionHistory builds structured prompt from rejectio
 // Stage 3: Next agent run receives the rejection history in its message
 // ===========================================================================
 describe('Stage 3 – Next agent run injects rejection history into agent message', () => {
+  // Set up sessions API mocks so triggerAgentRun doesn't throw
+  beforeEach(() => {
+    mockSessionsCreate.mockResolvedValue({ id: 'sess_xyz' });
+    mockSessionsEventsSend.mockResolvedValue({});
+    mockSessionsEventsList.mockResolvedValue({
+      data: [
+        { type: 'agent.message', created_at: '2026-01-01T00:00:01Z',
+          content: [{ type: 'text', text: JSON.stringify([{ eventType: 'ot', title: 'Test Event', description: 'Desc', sponsors: [], postTypeId: [], sessions: [], locationType: 'ne' }]) }] },
+        { type: 'session.status_idle', created_at: '2026-01-01T00:00:02Z', stop_reason: { type: 'end_turn' } },
+      ],
+    });
+    process.env.ANTHROPIC_API_KEY = 'test-key';
+  });
+
   beforeEach(() => {
     // Agent returns a clean empty response — we only care about what it receives
     db.mockConn.query.mockReset();
     db.mockConn.query.mockResolvedValue([{ affectedRows: 1 }]);
 
-    mockAgentCreate.mockResolvedValue({
+    mockSessionsCreate.mockResolvedValue({
       id: 'run_next', status: 'completed',
       output_messages: [{ role: 'assistant', content: '[]' }],
     });
@@ -377,9 +397,9 @@ describe('Stage 3 – Next agent run injects rejection history into agent messag
       .mockResolvedValueOnce([REJECTION_LOG_ROWS])       // rejection_log query
       .mockResolvedValueOnce([{ affectedRows: 1 }]);     // UPDATE agent_runs
 
-    await triggerAgentRun(SOURCE_ID);
+    await triggerAgentRun(SOURCE_ID, 100, 'test-key', 'test-env');
 
-    const agentMessage = mockAgentCreate.mock.calls[0][0].messages[0].content as string;
+    const agentMessage = mockSessionsEventsSend.mock.calls[0][1].events[0].content[0].text as string;
     expect(agentMessage).toContain('Rejection history');
     expect(agentMessage).toContain('Faculty Senate Open Meeting');
     expect(agentMessage).toContain('wrong_audience');
@@ -395,9 +415,9 @@ describe('Stage 3 – Next agent run injects rejection history into agent messag
       .mockResolvedValueOnce([REJECTION_LOG_ROWS])
       .mockResolvedValueOnce([{ affectedRows: 1 }]);
 
-    await triggerAgentRun(SOURCE_ID);
+    await triggerAgentRun(SOURCE_ID, 100, 'test-key', 'test-env');
 
-    const agentMessage = mockAgentCreate.mock.calls[0][0].messages[0].content as string;
+    const agentMessage = mockSessionsEventsSend.mock.calls[0][1].events[0].content[0].text as string;
     expect(agentMessage).toContain('faculty members only');
     expect(agentMessage).toContain('ticket price info');
   });
@@ -410,9 +430,9 @@ describe('Stage 3 – Next agent run injects rejection history into agent messag
       .mockResolvedValueOnce([[]])              // empty rejection_log
       .mockResolvedValueOnce([{ affectedRows: 1 }]);
 
-    await triggerAgentRun(SOURCE_ID);
+    await triggerAgentRun(SOURCE_ID, 100, 'test-key', 'test-env');
 
-    const agentMessage = mockAgentCreate.mock.calls[0][0].messages[0].content as string;
+    const agentMessage = mockSessionsEventsSend.mock.calls[0][1].events[0].content[0].text as string;
     expect(agentMessage).toBe('Run extraction now. Return only the JSON array of events.');
   });
 
@@ -424,7 +444,7 @@ describe('Stage 3 – Next agent run injects rejection history into agent messag
       .mockResolvedValueOnce([[]])
       .mockResolvedValueOnce([{ affectedRows: 1 }]);
 
-    await triggerAgentRun(SOURCE_ID);
+    await triggerAgentRun(SOURCE_ID, 100, 'test-key', 'test-env');
 
     // The rejection_log query must have been called with the correct source_id
     const rejectionQuery = db.default.query.mock.calls.find(
@@ -461,7 +481,7 @@ describe('Stage 3 – Next agent run injects rejection history into agent messag
       .mockResolvedValueOnce([{ affectedRows: 1 }]);
 
     await triggerAgentRun(1, 99, 'test-key', 'test-env');
-    const msg1 = mockAgentCreate.mock.calls[0][0].messages[0].content as string;
+    const msg1 = mockSessionsEventsSend.mock.calls[0][1].events[0].content[0].text as string;
 
     // Run source 2
     db.default.query
@@ -471,7 +491,7 @@ describe('Stage 3 – Next agent run injects rejection history into agent messag
       .mockResolvedValueOnce([{ affectedRows: 1 }]);
 
     await triggerAgentRun(2, 99, 'test-key', 'test-env');
-    const msg2 = mockAgentCreate.mock.calls[1][0].messages[0].content as string;
+    const msg2 = mockSessionsCreate.mock.calls[1][0].messages[0].content as string;
 
     // Source 1's agent sees its own history
     expect(msg1).toContain('Oberlin Staff Meeting');
@@ -487,6 +507,19 @@ describe('Stage 3 – Next agent run injects rejection history into agent messag
 // Stage 4: Full cycle verified end-to-end (reject → history → next run)
 // ===========================================================================
 describe('Stage 4 – Complete cycle: Reject → History built → Agent learns', () => {
+  beforeEach(() => {
+    mockSessionsCreate.mockResolvedValue({ id: 'sess_xyz' });
+    mockSessionsEventsSend.mockResolvedValue({});
+    mockSessionsEventsList.mockResolvedValue({
+      data: [
+        { type: 'agent.message', created_at: '2026-01-01T00:00:01Z',
+          content: [{ type: 'text', text: JSON.stringify([{ eventType: 'ot', title: 'Test', description: 'D', sponsors: [], postTypeId: [], sessions: [], locationType: 'ne' }]) }] },
+        { type: 'session.status_idle', created_at: '2026-01-01T00:00:02Z', stop_reason: { type: 'end_turn' } },
+      ],
+    });
+    process.env.ANTHROPIC_API_KEY = 'test-key';
+  });
+
   it('event rejected by reviewer appears as a learning example in next agent run', async () => {
     // Step A: Simulate the rejection being in the DB (what Stage 1 wrote)
     const rejectionInDb = [{
@@ -517,14 +550,14 @@ describe('Stage 4 – Complete cycle: Reject → History built → Agent learns'
       .mockResolvedValueOnce([rejectionInDb])   // rejection_log query
       .mockResolvedValueOnce([{ affectedRows: 1 }]);
 
-    mockAgentCreate.mockResolvedValue({
+    mockSessionsCreate.mockResolvedValue({
       id: 'run_after_learning', status: 'completed',
       output_messages: [{ role: 'assistant', content: '[]' }],
     });
 
-    await triggerAgentRun(SOURCE_ID);
+    await triggerAgentRun(SOURCE_ID, 100, 'test-key', 'test-env');
 
-    const injectedMessage = mockAgentCreate.mock.calls[0][0].messages[0].content as string;
+    const injectedMessage = mockSessionsEventsSend.mock.calls[0][1].events[0].content[0].text as string;
 
     // The agent's next prompt contains the feedback from the reviewer
     expect(injectedMessage).toContain('Rejection history');
