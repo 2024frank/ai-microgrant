@@ -66,9 +66,11 @@ export default function Sidebar({ role, name, email, token }: SidebarProps) {
       setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, read_at: new Date().toISOString() } : x));
       setUnreadCount(c => Math.max(0, c - 1));
     }
+    setNotifOpen(false);
     if (n.raw_event_id) {
-      setNotifOpen(false);
       router.push(`/events/${n.raw_event_id}`);
+    } else if (n.type === 'new_events') {
+      router.push('/reviewer/queue');
     }
   }
 
@@ -207,8 +209,8 @@ export default function Sidebar({ role, name, email, token }: SidebarProps) {
               <div style={{ maxHeight: 320, overflowY: 'auto' }}>
                 {notifications.map(n => (
                   <div key={n.id} onClick={() => markRead(n)}
-                    style={{ padding: '0.65rem 1rem', borderBottom: '1px solid #f5f5f5', cursor: n.raw_event_id ? 'pointer' : 'default', background: n.read_at ? 'white' : '#f0f7f0', display: 'flex', gap: 10, alignItems: 'flex-start' }}
-                    onMouseEnter={e => { if (n.raw_event_id) e.currentTarget.style.background = '#e8f5e9'; }}
+                    style={{ padding: '0.65rem 1rem', borderBottom: '1px solid #f5f5f5', cursor: (n.raw_event_id || n.type === 'new_events') ? 'pointer' : 'default', background: n.read_at ? 'white' : '#f0f7f0', display: 'flex', gap: 10, alignItems: 'flex-start' }}
+                    onMouseEnter={e => { if (n.raw_event_id || n.type === 'new_events') e.currentTarget.style.background = '#e8f5e9'; }}
                     onMouseLeave={e => { e.currentTarget.style.background = n.read_at ? 'white' : '#f0f7f0'; }}
                   >
                     {!n.read_at && <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#3a8c3f', flexShrink: 0, marginTop: 4 }}/>}

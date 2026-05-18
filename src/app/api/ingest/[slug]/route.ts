@@ -188,6 +188,27 @@ export async function POST(
     [source.id, runId]
   );
 
+  // Notify all active reviewers and admins about new events (skip fixed-events source,
+  // which has its own per-reviewer notification flow)
+  if (inserted > 0 && source.slug !== 'fixed-events') {
+    const [[{ pending }]] = await pool.query(
+      `SELECT COUNT(*) AS pending FROM raw_events WHERE status IN ('pending','pending_fix')`
+    ) as any;
+    const [reviewers] = await pool.query(
+      `SELECT id FROM users WHERE active = 1`
+    ) as any;
+    if ((reviewers as any[]).length > 0) {
+      const notifTitle   = `${inserted} new event${inserted !== 1 ? 's' : ''} from ${source.name}`;
+      const notifMessage = `${pending} event${pending !== 1 ? 's' : ''} total waiting for review`;
+      const values = (reviewers as any[]).map((u: any) =>
+        `(${u.id}, 'new_events', ${pool.escape(notifTitle)}, ${pool.escape(notifMessage)}, NULL)`
+      ).join(', ');
+      await pool.query(
+        `INSERT INTO notifications (user_id, type, title, message, raw_event_id) VALUES ${values}`
+      );
+    }
+  }
+
   console.log(`[ingest] source=${source.name} slug=${slug} run=${runId} inserted=${inserted}`);
 
   return Response.json({
