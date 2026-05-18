@@ -25,7 +25,9 @@ export default function Sidebar({ role, name, email, token }: SidebarProps) {
   const [notifications, setNotifications]         = useState<any[]>([]);
   const [unreadCount, setUnreadCount]             = useState(0);
   const [notifOpen, setNotifOpen]                 = useState(false);
-  const notifRef = useRef<HTMLDivElement>(null);
+  const notifRef    = useRef<HTMLDivElement>(null);
+  const bellBtnRef  = useRef<HTMLButtonElement>(null);
+  const [notifPos, setNotifPos] = useState<{ bottom: number; left: number } | null>(null);
   const isActive = (href: string) => path === href || path.startsWith(href + '/');
   const effectiveRole = role === 'admin' && previewAsReviewer ? 'reviewer' : role;
 
@@ -181,9 +183,16 @@ export default function Sidebar({ role, name, email, token }: SidebarProps) {
       )}
 
       {/* Notification bell */}
-      <div ref={notifRef} style={{ position: 'relative', padding: collapsed ? '0.5rem 0' : '0.5rem 0.625rem', borderTop: '1px solid #f5f5f5', flexShrink: 0, display: 'flex', justifyContent: collapsed ? 'center' : 'flex-start' }}>
+      <div ref={notifRef} style={{ padding: collapsed ? '0.5rem 0' : '0.5rem 0.625rem', borderTop: '1px solid #f5f5f5', flexShrink: 0, display: 'flex', justifyContent: collapsed ? 'center' : 'flex-start' }}>
         <button
-          onClick={() => setNotifOpen(o => !o)}
+          ref={bellBtnRef}
+          onClick={() => {
+            if (!notifOpen && bellBtnRef.current) {
+              const r = bellBtnRef.current.getBoundingClientRect();
+              setNotifPos({ bottom: window.innerHeight - r.top + 8, left: r.left });
+            }
+            setNotifOpen(o => !o);
+          }}
           title="Notifications"
           style={{ position: 'relative', background: 'none', border: 'none', cursor: 'pointer', color: notifOpen ? '#3a8c3f' : '#bbb', padding: '0.35rem', borderRadius: 6, display: 'flex', alignItems: 'center', gap: 6 }}
           onMouseEnter={e => { e.currentTarget.style.color = '#3a8c3f'; e.currentTarget.style.background = '#f0f0f0'; }}
@@ -198,20 +207,20 @@ export default function Sidebar({ role, name, email, token }: SidebarProps) {
           {!collapsed && <span style={{ fontSize: 12, color: '#888' }}>Notifications{unreadCount > 0 ? ` (${unreadCount})` : ''}</span>}
         </button>
 
-        {notifOpen && (
-          <div style={{ position: 'absolute', bottom: '100%', left: collapsed ? '110%' : 0, width: 300, background: 'white', border: '1px solid #e0e0e0', borderRadius: 10, boxShadow: '0 4px 20px rgba(0,0,0,0.12)', zIndex: 999, overflow: 'hidden' }}>
+        {notifOpen && notifPos && (
+          <div style={{ position: 'fixed', bottom: notifPos.bottom, left: notifPos.left, width: 320, background: 'white', border: '1px solid #e0e0e0', borderRadius: 10, boxShadow: '0 4px 24px rgba(0,0,0,0.14)', zIndex: 9999, overflow: 'hidden' }}>
             <div style={{ padding: '0.75rem 1rem', borderBottom: '1px solid #f0f0f0', fontSize: 12, fontWeight: 700, color: '#555' }}>Notifications</div>
             {notifications.length === 0 ? (
               <div style={{ padding: '1.5rem 1rem', fontSize: 12, color: '#aaa', textAlign: 'center' }}>No notifications yet</div>
             ) : (
-              <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+              <div style={{ maxHeight: 360, overflowY: 'auto' }}>
                 {notifications.map(n => (
                   <div key={n.id} onClick={() => markRead(n)}
                     style={{ padding: '0.65rem 1rem', borderBottom: '1px solid #f5f5f5', cursor: n.raw_event_id ? 'pointer' : 'default', background: n.read_at ? 'white' : '#f0f7f0', display: 'flex', gap: 10, alignItems: 'flex-start' }}
                     onMouseEnter={e => { if (n.raw_event_id) e.currentTarget.style.background = '#e8f5e9'; }}
                     onMouseLeave={e => { e.currentTarget.style.background = n.read_at ? 'white' : '#f0f7f0'; }}
                   >
-                    {!n.read_at && <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#3a8c3f', flexShrink: 0, marginTop: 4 }}/>}
+                    {!n.read_at && <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#3a8c3f', flexShrink: 0, marginTop: 5 }}/>}
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 12, fontWeight: n.read_at ? 400 : 700, color: '#333', marginBottom: 2 }}>{n.title}</div>
                       <div style={{ fontSize: 11, color: '#888', lineHeight: 1.4 }}>{n.message}</div>

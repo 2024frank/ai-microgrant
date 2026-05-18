@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/hooks/useAuth';
-import { UserPlus, Shield, Eye } from 'lucide-react';
+import { UserPlus, Shield, Eye, Trash2 } from 'lucide-react';
 
 export default function UsersPage() {
   const { user, token, ready } = useAuth('admin');
@@ -40,6 +40,12 @@ export default function UsersPage() {
       method:'PATCH', headers:{'Content-Type':'application/json', Authorization:`Bearer ${token}`},
       body: JSON.stringify({ active: u.active?0:1 }),
     });
+    load();
+  }
+
+  async function deleteUser(u: any) {
+    if (!confirm(`Delete ${u.full_name} (${u.email})? This cannot be undone.`)) return;
+    await fetch(`/api/users/${u.id}`, { method:'DELETE', headers:{ Authorization:`Bearer ${token}` } });
     load();
   }
 
@@ -101,10 +107,17 @@ export default function UsersPage() {
                       </td>
                       <td style={{ padding:'0.875rem 1rem' }}>
                         {!isYou && (
-                          <button onClick={()=>toggleActive(u)}
-                            style={{ background:'none', border:'1.5px solid #ddd', borderRadius:6, padding:'0.25rem 0.6rem', fontSize:11, cursor:'pointer', color:'#666' }}>
-                            {u.active?'Disable':'Enable'}
-                          </button>
+                          <div style={{ display:'flex', gap:6 }}>
+                            <button onClick={()=>toggleActive(u)}
+                              style={{ background:'none', border:'1.5px solid #ddd', borderRadius:6, padding:'0.25rem 0.6rem', fontSize:11, cursor:'pointer', color:'#666' }}>
+                              {u.active?'Disable':'Enable'}
+                            </button>
+                            <button onClick={()=>deleteUser(u)}
+                              title="Delete user"
+                              style={{ background:'none', border:'1.5px solid #fca5a5', borderRadius:6, padding:'0.25rem 0.5rem', fontSize:11, cursor:'pointer', color:'#c0392b', display:'flex', alignItems:'center' }}>
+                              <Trash2 size={12}/>
+                            </button>
+                          </div>
                         )}
                       </td>
                     </tr>

@@ -29,3 +29,26 @@ export async function PATCH(
   const [[updated]] = await pool.query('SELECT id, email, full_name, role, active FROM users WHERE id = ?', [id]) as any;
   return Response.json(updated);
 }
+
+export async function DELETE(
+  req: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  const user = await getAuthUser(req);
+  if (!user) return unauthorized();
+  if (user.role !== 'admin') return forbidden();
+  const { id } = await context.params;
+
+  // Prevent self-deletion
+  const [[target]] = await pool.query('SELECT id, email FROM users WHERE id = ?', [id]) as any;
+  if (!target) return Response.json({ error: 'Not found' }, { status: 404 });
+
+  const [[self]] = await pool.query('SELECT id FROM users WHERE firebase_uid = ?', [user.uid]) as any;
+  if (self?.id === target.id) return Response.json({ error: 'Cannot delete your own account' }, { status: 400 });
+
+  await pool.query('DELETE FROM reviewer_sources WHERE reviewer_id = ?', [id]);
+  await pool.query('DELETE FROM notifications   WHERE user_id = ?',      [id]);
+  await pool.query('DELETE FROM users           WHERE id = ?',            [id]);
+
+  return Response.json({ ok: true });
+}
