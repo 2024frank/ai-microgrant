@@ -93,6 +93,6 @@ describe('POST /api/agent/trigger/:source_id', () => {
       (c: any[]) => typeof c[0] === 'string' && c[0].includes('INSERT INTO agent_runs')
     );
     expect(insertCall).toBeDefined();
-    expect(insertCall[0]).toContain('"running"');
+    expect(insertCall[0]).toContain("'running'");
   });
 });

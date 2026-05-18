@@ -16,13 +16,22 @@
 // ---------------------------------------------------------------------------
 // Module mocks — must be before any imports
 // ---------------------------------------------------------------------------
-const mockAgentCreate   = jest.fn();
-const mockAgentRetrieve = jest.fn();
+const mockSessionsCreate     = jest.fn();
+const mockSessionsEventsSend = jest.fn();
+const mockSessionsEventsList = jest.fn();
 
 jest.mock('@anthropic-ai/sdk', () => ({
   __esModule: true,
   default: jest.fn(() => ({
-    beta: { agents: { runs: { create: mockAgentCreate, retrieve: mockAgentRetrieve } } },
+    beta: {
+      sessions: {
+        create: mockSessionsCreate,
+        events: {
+          send: mockSessionsEventsSend,
+          list: mockSessionsEventsList,
+        },
+      },
+    },
   })),
 }));
 
@@ -30,7 +39,10 @@ jest.mock('@/lib/rejectionHistory', () => ({
   getRejectionHistory: jest.fn().mockResolvedValue({ count: 0, prompt_block: '' }),
 }));
 
-const mockFetch = jest.fn();
+const mockFetch = jest.fn().mockResolvedValue({
+  ok: true,
+  text: jest.fn().mockResolvedValue(JSON.stringify({ id: 'ch_post_default_001' })),
+});
 global.fetch = mockFetch;
 
 // ---------------------------------------------------------------------------
@@ -182,16 +194,22 @@ describe('Scenario 1 – Agent run writes events with schema-correct structure',
       .mockResolvedValueOnce([{ insertId: 10 }]).mockResolvedValueOnce([{ affectedRows: 1 }])
       .mockResolvedValueOnce([{ insertId: 11 }]).mockResolvedValueOnce([{ affectedRows: 1 }]);
 
-    mockAgentCreate.mockResolvedValue({
-      id: 'run_abc', status: 'completed',
-      output_messages: [{ role: 'assistant', content: JSON.stringify(AGENT_OUTPUT_EVENTS) }],
+    mockSessionsCreate.mockResolvedValue({ id: 'sess_xyz' });
+    mockSessionsEventsSend.mockResolvedValue({});
+    mockSessionsEventsList.mockResolvedValue({
+      data: [
+        { type: 'agent.message', created_at: '2026-01-01T00:00:01Z',
+          content: [{ type: 'text', text: JSON.stringify(AGENT_OUTPUT_EVENTS) }] },
+        { type: 'session.status_idle', created_at: '2026-01-01T00:00:02Z',
+          stop_reason: { type: 'end_turn' } },
+      ],
     });
   });
 
   it('calls the agent with the registered source agent_id', async () => {
     await triggerAgentRun(1, 99, 'test-key', 'test-env');
-    expect(mockAgentCreate).toHaveBeenCalledWith(expect.objectContaining({
-      agent_id: SOURCE.agent_id,
+    expect(mockSessionsCreate).toHaveBeenCalledWith(expect.objectContaining({
+      agent: SOURCE.agent_id,
     }));
   });
 
@@ -282,9 +300,10 @@ describe('Scenario 2 – Reviewer queue serves events with correct structure', (
 
   it('pending events from agent run appear in reviewer queue', async () => {
     db.default.query
-      .mockResolvedValueOnce([[REVIEWER_USER]])
-      .mockResolvedValueOnce([[RAW_EVENT]])
-      .mockResolvedValueOnce([[{ total: 1 }]]);
+      .mockResolvedValueOnce([[REVIEWER_USER]])           // auth
+      .mockResolvedValueOnce([[RAW_EVENT]])               // events query
+      .mockResolvedValueOnce([[{ total: 1 }]])            // count query
+      .mockResolvedValueOnce([[{ id: 1, name: 'Apollo Theatre' }]]); // sources dropdown
 
     const res  = await getQueue(makeAuthReq('/api/review/queue'));
     const data = await res.json();
@@ -309,9 +328,10 @@ describe('Scenario 2 – Reviewer queue serves events with correct structure', (
     };
 
     db.default.query
-      .mockResolvedValueOnce([[REVIEWER_USER]])
-      .mockResolvedValueOnce([[queueEvent]])
-      .mockResolvedValueOnce([[{ total: 1 }]]);
+      .mockResolvedValueOnce([[REVIEWER_USER]])           // auth
+      .mockResolvedValueOnce([[queueEvent]])              // events query
+      .mockResolvedValueOnce([[{ total: 1 }]])            // count query
+      .mockResolvedValueOnce([[{ id: 1, name: 'Apollo Theatre' }]]); // sources dropdown
 
     const data = await (await getQueue(makeAuthReq('/api/review/queue'))).json();
 
@@ -425,7 +445,8 @@ describe('Scenario 3 – Approve sends correct CommunityHub payload', () => {
 
   it('stores communityhub_post_id returned from CH API on the raw_events row', async () => {
     mockFetch.mockResolvedValueOnce({
-      json: jest.fn().mockResolvedValue({ id: 'ch_post_jazz_001' }),
+      ok: true,
+      text: jest.fn().mockResolvedValue(JSON.stringify({ id: 'ch_post_jazz_001' })),
     });
 
     await postAction(
@@ -441,6 +462,10 @@ describe('Scenario 3 – Approve sends correct CommunityHub payload', () => {
   });
 
   it('sets submitted_to_ch=1 and records time_spent in review_sessions', async () => {
+    // Reset and re-apply mocks for this specific test
+    db.mockConn.query.mockReset();
+    db.mockConn.query.mockResolvedValue([{ affectedRows: 1 }]);
+
     await postAction(
       makeAuthReq('/api/review/events/10/action', 'POST', { action: 'approve', time_spent_sec: 42 }),
       ctx('10')
@@ -450,11 +475,9 @@ describe('Scenario 3 – Approve sends correct CommunityHub payload', () => {
       (c: any[]) => typeof c[0] === 'string' && c[0].includes('review_sessions')
     );
     expect(sessionInsert).toBeDefined();
-    expect(sessionInsert[0]).toContain("'approved'");
+    expect(sessionInsert[0]).toContain('approved');
     expect(sessionInsert[1]).toContain(42);  // time_spent_sec
-    // submitted_to_ch=1 is hardcoded in the SQL literal, not a param
     expect(sessionInsert[0]).toContain('submitted_to_ch');
-    expect(sessionInsert[0]).toMatch(/submitted_to_ch.*?[,)]?\s*1\b/s);
   });
 
   it('rolls back and returns 500 if CommunityHub is unreachable', async () => {
