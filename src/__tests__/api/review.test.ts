@@ -17,6 +17,11 @@ const PENDING = {
   ingested_post_url: 'http://localhost/events/10', screen_ids: '[]', buttons: '[]', extended_description: null,
 };
 
+// Helper — wraps id in a resolved Promise as Next.js 16 requires
+function ctx(id: string) {
+  return { params: Promise.resolve({ id }) };
+}
+
 function makeReq(path: string, body?: any) {
   return new NextRequest(`http://localhost${path}`, {
     method: body ? 'POST' : 'GET',
@@ -63,8 +68,12 @@ describe('POST /api/review/events/:id/action', () => {
       .mockResolvedValueOnce([[{ id: 1 }]]);
 
     const res = await POST(
-      makeReq('/api/review/events/10/action', { action: 'reject', edits: { reason_codes: ['wrong_audience'] }, time_spent_sec: 30 }),
-      { params: { id: '10' } }
+      makeReq('/api/review/events/10/action', {
+        action: 'reject',
+        edits: { reason_codes: ['wrong_audience'] },
+        time_spent_sec: 30,
+      }),
+      ctx('10')
     );
     expect(res.status).toBe(200);
     expect((await res.json()).ok).toBe(true);
@@ -78,7 +87,7 @@ describe('POST /api/review/events/:id/action', () => {
 
     const res = await POST(
       makeReq('/api/review/events/10/action', { action: 'reject', edits: { reason_codes: [] } }),
-      { params: { id: '10' } }
+      ctx('10')
     );
     expect(res.status).toBe(400);
   });
@@ -91,7 +100,7 @@ describe('POST /api/review/events/:id/action', () => {
 
     const res = await POST(
       makeReq('/api/review/events/10/action', { action: 'reject', edits: { reason_codes: ['other'] } }),
-      { params: { id: '10' } }
+      ctx('10')
     );
     expect(res.status).toBe(409);
   });
@@ -99,12 +108,12 @@ describe('POST /api/review/events/:id/action', () => {
   it('returns 404 when event not found', async () => {
     db.default.query
       .mockResolvedValueOnce([[ADMIN]])
-      .mockResolvedValueOnce([[]])            // no event
+      .mockResolvedValueOnce([[]])
       .mockResolvedValueOnce([[{ id: 1 }]]);
 
     const res = await POST(
       makeReq('/api/review/events/999/action', { action: 'reject', edits: { reason_codes: ['other'] } }),
-      { params: { id: '999' } }
+      ctx('999')
     );
     expect(res.status).toBe(404);
   });

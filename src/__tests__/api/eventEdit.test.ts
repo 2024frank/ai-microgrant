@@ -4,6 +4,7 @@ import { adminAuth } from '@/lib/firebase-admin';
 
 const db         = require('@/lib/db');
 const mockVerify = adminAuth.verifyIdToken as jest.Mock;
+function ctx(id: string) { return { params: Promise.resolve({ id }) }; }
 
 const ADMIN = { id: 1, email: 'admin@oberlin.edu', role: 'admin', full_name: 'Admin', active: 1, firebase_uid: 'uid-admin' };
 const MOCK_EVENT = {
@@ -44,7 +45,7 @@ describe('POST /api/events/:id/edit', () => {
 
     const res  = await POST(
       makeReq('10', { edits: { title: 'New Title', description: 'Updated desc' } }),
-      { params: Promise.resolve({ id: '10' }) }
+      ctx('10')
     );
     const data = await res.json();
 
@@ -64,7 +65,7 @@ describe('POST /api/events/:id/edit', () => {
 
     const res  = await POST(
       makeReq('10', { edits: { title: 'Original Title' } }),  // same value
-      { params: Promise.resolve({ id: '10' }) }
+      ctx('10')
     );
     const data = await res.json();
 
@@ -81,7 +82,7 @@ describe('POST /api/events/:id/edit', () => {
 
     await POST(
       makeReq('10', { edits: { title: 'Fixed Title' }, note: 'Agent extracted wrong title' }),
-      { params: Promise.resolve({ id: '10' }) }
+      ctx('10')
     );
 
     // Should have inserted into rejection_log (conn.query call with 'field_correction')
@@ -101,7 +102,7 @@ describe('POST /api/events/:id/edit', () => {
 
     const res = await POST(
       makeReq('999', { edits: { title: 'X' } }),
-      { params: Promise.resolve({ id: '999' }) }
+      ctx('999')
     );
     expect(res.status).toBe(404);
   });
@@ -110,7 +111,7 @@ describe('POST /api/events/:id/edit', () => {
     mockVerify.mockRejectedValueOnce(new Error('invalid'));
     const res = await POST(
       new NextRequest('http://localhost/api/events/10/edit', { method: 'POST', body: '{}' }),
-      { params: Promise.resolve({ id: '10' }) }
+      ctx('10')
     );
     expect(res.status).toBe(401);
   });
