@@ -347,7 +347,7 @@ export default function SourcesPage() {
               </div>
             )}
 
-            <label style={labelStyle}>Agent ID <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0, color: '#aaa' }}>(optional — for reference)</span></label>
+            <label style={labelStyle}>Agent ID</label>
             <input
               value={form.agent_id}
               onChange={e => setForm(f => ({ ...f, agent_id: e.target.value }))}
@@ -369,7 +369,7 @@ export default function SourcesPage() {
 
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
               <button onClick={() => { setShowAdd(false); setAddError(''); }} className="btn-ghost" style={{ fontSize: 14 }}>Cancel</button>
-              <button onClick={addSource} disabled={!form.name.trim() || adding} className="btn-primary" style={{ fontSize: 14, minWidth: 100 }}>
+              <button onClick={addSource} disabled={!form.name.trim() || !form.agent_id.trim() || adding} className="btn-primary" style={{ fontSize: 14, minWidth: 100 }}>
                 {adding ? 'Adding…' : 'Add source'}
               </button>
             </div>
