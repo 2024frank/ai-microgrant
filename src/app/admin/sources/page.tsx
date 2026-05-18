@@ -13,7 +13,7 @@ const SCHEDULE_OPTIONS = [
 ];
 
 export default function SourcesPage() {
-  const { user, token, ready } = useAuth('admin');
+  const { user, token, ready, getFreshToken } = useAuth('admin');
   const [sources, setSources]       = useState<any[]>([]);
   const [runs, setRuns]             = useState<any[]>([]);
   const [loading, setLoading]       = useState(true);
@@ -64,11 +64,12 @@ export default function SourcesPage() {
     setAdding(true); setError('');
     let res: Response;
     try {
+      const freshToken = await getFreshToken();
       const controller = new AbortController();
       const tid = setTimeout(() => controller.abort(), 8000);
       res = await fetch('/api/sources', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...h() },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
         body: JSON.stringify(form),
         signal: controller.signal,
       });
