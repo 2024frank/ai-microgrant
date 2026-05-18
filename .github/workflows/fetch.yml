@@ -1,0 +1,65 @@
+name: Fetch Events
+
+on:
+  schedule:
+    # Runs daily at 6am UTC — adjust as needed
+    - cron: '0 6 * * *'
+  # Also allow manual trigger from GitHub Actions UI
+  workflow_dispatch:
+    inputs:
+      source_id:
+        description: 'Specific source ID to run (leave empty to run all)'
+        required: false
+        default: ''
+
+jobs:
+  fetch:
+    name: Run agent fetchers
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Trigger fetch via app API
+        env:
+          APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          SOURCE_ID: ${{ github.event.inputs.source_id }}
+        run: |
+          if [ -n "$SOURCE_ID" ]; then
+            echo "Triggering fetch for source $SOURCE_ID..."
+            curl -f -X POST \
+              "$APP_URL/api/agent/trigger/$SOURCE_ID" \
+              -H "Authorization: Bearer $CRON_SECRET" \
+              -H "Content-Type: application/json" \
+              | tee response.json
+          else
+            echo "Triggering fetch for all sources..."
+            curl -f -X GET \
+              "$APP_URL/api/agent/schedule" \
+              -H "Authorization: Bearer $CRON_SECRET" \
+              | tee response.json
+          fi
+          echo ""
+          echo "Response:"
+          cat response.json
+
+      - name: Check for errors
+        run: |
+          # Fail the workflow if any source had an error
+          if cat response.json | grep -q '"status":"error"'; then
+            echo "⚠️ One or more sources failed — check logs above"
+            exit 1
+          fi
+          echo "✅ All sources fetched successfully"
