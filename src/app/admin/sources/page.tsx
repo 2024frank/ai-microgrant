@@ -180,24 +180,20 @@ export default function SourcesPage() {
           </button>
         </div>
 
-        {/* Live run banner */}
+        {/* Live run banner — one pill per active run */}
         {activeRuns.length > 0 && (
-          <div style={{ background: '#e8f5e9', border: '1px solid #c8e6c9', borderRadius: 8, padding: '0.875rem 1rem', marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Loader size={16} color="#3a8c3f" style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }}/>
-            <div style={{ flex: 1 }}>
-              {activeRuns.map(r => (
-                <div key={r.id} style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <strong>{r.source_name}</strong> is fetching…
-                  <span style={{ color: '#2a6b2e' }}>{r.events_extracted} extracted · {r.elapsed_sec}s</span>
-                  <button onClick={() => stopRun(r.id)}
-                    title="Stop this run"
-                    style={{ background: 'none', border: '1.5px solid #c0392b', borderRadius: 5, padding: '1px 8px', cursor: 'pointer', color: '#c0392b', fontSize: 11, display: 'flex', alignItems: 'center', gap: 3, marginLeft: 4 }}>
-                    <Square size={10} fill="#c0392b"/> Stop
-                  </button>
-                </div>
-              ))}
-            </div>
-            <span style={{ fontSize: 11, color: '#888' }}>Live · updates every 2s</span>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: '1.25rem' }}>
+            {activeRuns.map(r => (
+              <div key={r.id} style={{ background: '#e8f5e9', border: '1px solid #c8e6c9', borderRadius: 20, padding: '0.4rem 0.875rem', display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+                <Loader size={13} color="#3a8c3f" style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }}/>
+                <strong style={{ color: '#2a6b2e' }}>{r.source_name}</strong>
+                <span style={{ color: '#3a8c3f' }}>{r.events_extracted} extracted · {r.elapsed_sec}s</span>
+                <button onClick={() => stopRun(r.id)}
+                  style={{ background: '#c0392b', border: 'none', borderRadius: 10, padding: '2px 8px', cursor: 'pointer', color: 'white', fontSize: 11, display: 'flex', alignItems: 'center', gap: 3, marginLeft: 2 }}>
+                  <Square size={9} fill="white"/> Stop
+                </button>
+              </div>
+            ))}
           </div>
         )}
 
