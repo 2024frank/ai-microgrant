@@ -99,9 +99,20 @@ export default function SourcesPage() {
 
   async function triggerRun(sourceId: number) {
     setTriggering(sourceId);
-    await fetch(`/api/agent/trigger/${sourceId}`, { method: 'POST', headers: h() });
-    setTriggering(null);
-    setTimeout(loadRuns, 500);
+    try {
+      const res  = await fetch(`/api/agent/trigger/${sourceId}`, { method: 'POST', headers: h() });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(`Error: ${data.error || 'Failed to start run'}`);
+      } else {
+        showToast(`Agent started for ${data.source} — fetching events…`);
+        setTimeout(loadRuns, 1000);
+      }
+    } catch (err: any) {
+      showToast(`Error: ${err.message}`);
+    } finally {
+      setTriggering(null);
+    }
   }
 
   async function toggleActive(source: any) {
