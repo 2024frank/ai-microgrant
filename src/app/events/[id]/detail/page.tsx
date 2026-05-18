@@ -196,40 +196,45 @@ export default function EventDetailPage() {
                 disabled={!canEdit} maxLength={1000} rows={4} style={{ ...inputStyle, resize: 'vertical' }}/>
             </Field>
 
-            {/* Date & time — controlled inputs using local datetime strings */}
+            {/* Date & time — always show at least one row */}
             <Field label={`Date & time${tzLabel ? ` · ${tzLabel}` : ''}`}>
-              {sessions.map((s: any, i: number) => {
+              {(() => {
                 const curSessions = edits.sessions ? pj(edits.sessions) : sessions;
-                const cur = curSessions[i] || s;
-                return (
-                  <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginBottom: 8 }}>
-                    <div style={{ flex: 1 }}>
-                      <label style={subLabel}>Start</label>
-                      <input type="datetime-local"
-                        value={toLocal(cur.startTime)}
-                        disabled={!canEdit}
-                        onChange={e => {
-                          const updated = [...pj(edits.sessions || event.sessions)];
-                          updated[i] = { ...updated[i], startTime: fromLocal(e.target.value) };
-                          set('sessions', updated);
-                        }}
-                        style={inputStyle}/>
+                const rows = curSessions.length > 0 ? curSessions : [{ startTime: Math.floor(Date.now()/1000), endTime: Math.floor(Date.now()/1000) + 7200 }];
+                return rows.map((s: any, i: number) => {
+                  // handle both camelCase (startTime) and snake_case (start) field names
+                  const startTs = s.startTime ?? s.start ?? 0;
+                  const endTs   = s.endTime   ?? s.end   ?? 0;
+                  return (
+                    <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginBottom: 8 }}>
+                      <div style={{ flex: 1 }}>
+                        <label style={subLabel}>Start</label>
+                        <input type="datetime-local"
+                          value={startTs ? toLocal(startTs) : ''}
+                          disabled={!canEdit}
+                          onChange={e => {
+                            const updated = [...rows];
+                            updated[i] = { ...updated[i], startTime: fromLocal(e.target.value) };
+                            set('sessions', updated);
+                          }}
+                          style={inputStyle}/>
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <label style={subLabel}>End</label>
+                        <input type="datetime-local"
+                          value={endTs ? toLocal(endTs) : ''}
+                          disabled={!canEdit}
+                          onChange={e => {
+                            const updated = [...rows];
+                            updated[i] = { ...updated[i], endTime: fromLocal(e.target.value) };
+                            set('sessions', updated);
+                          }}
+                          style={inputStyle}/>
+                      </div>
                     </div>
-                    <div style={{ flex: 1 }}>
-                      <label style={subLabel}>End</label>
-                      <input type="datetime-local"
-                        value={toLocal(cur.endTime)}
-                        disabled={!canEdit}
-                        onChange={e => {
-                          const updated = [...pj(edits.sessions || event.sessions)];
-                          updated[i] = { ...updated[i], endTime: fromLocal(e.target.value) };
-                          set('sessions', updated);
-                        }}
-                        style={inputStyle}/>
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                });
+              })()}
             </Field>
 
             {/* Location type — instant save on click */}
