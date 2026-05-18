@@ -34,7 +34,8 @@ export async function DELETE(
 
   await pool.query('DELETE FROM agent_runs WHERE source_id = ?', [id]);
   await pool.query('DELETE FROM reviewer_sources WHERE source_id = ?', [id]);
-  await pool.query('DELETE FROM raw_events WHERE source_id = ?', [id]);
+  // Orphan events — keep them but detach from source
+  await pool.query('UPDATE raw_events SET source_id = NULL WHERE source_id = ?', [id]);
   await pool.query('DELETE FROM sources WHERE id = ?', [id]);
 
   return Response.json({ ok: true });

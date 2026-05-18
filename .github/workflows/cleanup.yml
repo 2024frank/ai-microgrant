@@ -1,0 +1,17 @@
+name: Daily Cleanup
+
+on:
+  schedule:
+    - cron: '0 7 * * *'   # 7am UTC daily (3am Oberlin time)
+  workflow_dispatch:        # manual trigger
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete past events
+        run: |
+          curl -s -X POST "${{ secrets.NEXT_PUBLIC_APP_URL }}/api/cleanup" \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            -H "Content-Type: application/json" | tee /tmp/result.json
+          cat /tmp/result.json
