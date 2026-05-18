@@ -192,8 +192,9 @@ export default function ReviewerQueuePage() {
           <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
             {events.map(ev => {
               const [bg,fg] = (GEO_COLORS[ev.geo_scope]||'#f0f0f0|#555').split('|');
-              const isPendingFix = !!ev.sent_for_correction;
-              const isFixed      = !!ev.corrected_from_id;
+              const isPendingFix  = !!ev.sent_for_correction;
+              const isFixed       = !!ev.corrected_from_id;
+              const isFixedSource = ev.source_slug === 'fixed-events';
               return (
                 <div key={ev.id}
                   className="card"

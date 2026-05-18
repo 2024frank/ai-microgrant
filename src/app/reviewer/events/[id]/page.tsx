@@ -217,10 +217,12 @@ export default function ReviewEventPage() {
               style={{ fontSize:13, display:'flex', alignItems:'center', gap:5, opacity: hasEdits ? 1 : 0.4 }}>
               <Save size={14}/> {saving ? 'Saving…' : 'Save edits'}
             </button>
-            <button onClick={() => { setShowSendBack(true); setCorrectionNotes(''); }} disabled={submitting} className="btn-ghost"
-              style={{ fontSize:13, display:'flex', alignItems:'center', gap:5, borderColor:'#c05e00', color:'#c05e00' }}>
-              <RotateCcw size={14}/> Send for fix
-            </button>
+            {event?.source_slug !== 'fixed-events' && (
+              <button onClick={() => { setShowSendBack(true); setCorrectionNotes(''); }} disabled={submitting} className="btn-ghost"
+                style={{ fontSize:13, display:'flex', alignItems:'center', gap:5, borderColor:'#c05e00', color:'#c05e00' }}>
+                <RotateCcw size={14}/> Send for fix
+              </button>
+            )}
             <button onClick={() => setShowReject(true)} disabled={submitting} className="btn-ghost"
               style={{ fontSize:13, display:'flex', alignItems:'center', gap:5, borderColor:'#c0392b', color:'#c0392b' }}>
               <X size={14}/> Reject

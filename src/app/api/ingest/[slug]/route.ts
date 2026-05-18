@@ -128,9 +128,11 @@ export async function POST(
         [ingestedPostUrl, eventId]
       );
 
-      // If this resolves a fix request: remove from needs_fix and notify the sender
+      // If this resolves a fix request: remove original pending_fix event, clean needs_fix, notify sender
       if (fixedFromId && fixEntry) {
         await conn.query('DELETE FROM needs_fix WHERE raw_event_id = ?', [fixedFromId]);
+        // Remove the original pending_fix event so only the corrected version stays in the queue
+        await conn.query('DELETE FROM raw_events WHERE id = ? AND status = ?', [fixedFromId, 'pending_fix']);
         if (fixEntry.sent_by_user_id) {
           await conn.query(
             `INSERT INTO notifications (user_id, type, title, message, raw_event_id)

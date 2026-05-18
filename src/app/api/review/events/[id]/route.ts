@@ -10,7 +10,7 @@ export async function GET(
   if (!user) return unauthorized();
   const { id } = await context.params;
   const [[event]] = await pool.query(
-    `SELECT re.*, s.name AS source_name, s.calendar_source_name
+    `SELECT re.*, s.name AS source_name, s.slug AS source_slug, s.calendar_source_name
      FROM raw_events re JOIN sources s ON re.source_id = s.id WHERE re.id = ?`, [id]
   ) as any;
   if (!event) return Response.json({ error: 'Not found' }, { status: 404 });
