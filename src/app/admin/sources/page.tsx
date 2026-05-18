@@ -2,7 +2,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import Sidebar from '@/components/layout/Sidebar';
-import { Plus, Play, Square, ToggleLeft, ToggleRight, CheckCircle, XCircle, Loader, Copy, Check, Pencil } from 'lucide-react';
+import { Plus, Play, Square, Trash2, ToggleLeft, ToggleRight, CheckCircle, XCircle, Loader, Copy, Check, Pencil } from 'lucide-react';
 
 const SCHEDULE_OPTIONS = [
   { label: 'Every hour',    value: '0 * * * *'   },
@@ -132,6 +132,17 @@ export default function SourcesPage() {
     loadRuns();
   }
 
+  async function deleteSource(source: any) {
+    if (!confirm(`Delete "${source.name}"?\n\nThis will permanently delete the source and ALL its events and runs from the database.`)) return;
+    const freshToken = await getFreshToken();
+    const res = await fetch(`/api/sources/${source.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${freshToken}` },
+    });
+    if (res.ok) { showToast(`✓ ${source.name} deleted`); loadSources(); }
+    else showToast('Failed to delete source');
+  }
+
   async function toggleActive(source: any) {
     const freshToken = await getFreshToken();
     await fetch(`/api/sources/${source.id}`, {
@@ -198,7 +209,7 @@ export default function SourcesPage() {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead>
                   <tr style={{ background: '#f8f9fa', borderBottom: '1px solid #eee' }}>
-                    {['Source', 'Ingest endpoint', 'Schedule', 'Last run', 'Events', 'Active', ''].map(h => (
+                    {['Source', 'Ingest endpoint', 'Schedule', 'Last run', 'Events', 'Active', '', ''].map(h => (
                       <th key={h} style={{ padding: '0.75rem 1rem', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#888', textTransform: 'uppercase', letterSpacing: 0.5 }}>{h}</th>
                     ))}
                   </tr>
@@ -286,6 +297,15 @@ export default function SourcesPage() {
                             style={{ background: 'none', border: `1.5px solid ${isRunning ? '#ddd' : '#3a8c3f'}`, borderRadius: 6, padding: '0.3rem 0.65rem', cursor: isRunning ? 'default' : 'pointer', color: isRunning ? '#ccc' : '#3a8c3f', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
                             {isRunning || triggering === s.id ? <Loader size={11} style={{ animation: 'spin 1s linear infinite' }}/> : <Play size={11}/>}
                             {isRunning ? 'Running' : 'Run now'}
+                          </button>
+                        </td>
+                        <td style={{ padding: '0.875rem 0.5rem' }}>
+                          <button onClick={() => deleteSource(s)}
+                            title="Delete source"
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ddd', padding: 0 }}
+                            onMouseEnter={e => (e.currentTarget.style.color = '#c0392b')}
+                            onMouseLeave={e => (e.currentTarget.style.color = '#ddd')}>
+                            <Trash2 size={15}/>
                           </button>
                         </td>
                       </tr>

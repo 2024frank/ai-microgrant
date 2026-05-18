@@ -25,7 +25,7 @@ export async function POST(
 
   // Look up source by slug
   const [[source]] = await pool.query(
-    'SELECT * FROM sources WHERE slug = ? AND active = 1', [slug]
+    'SELECT * FROM sources WHERE slug = ?', [slug]
   ) as any;
 
   if (!source) {

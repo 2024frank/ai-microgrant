@@ -31,6 +31,11 @@ export async function DELETE(
   if (!user) return unauthorized();
   if (user.role !== 'admin') return forbidden();
   const { id } = await context.params;
-  await pool.query('UPDATE sources SET active = 0 WHERE id = ?', [id]);
+
+  await pool.query('DELETE FROM agent_runs WHERE source_id = ?', [id]);
+  await pool.query('DELETE FROM reviewer_sources WHERE source_id = ?', [id]);
+  await pool.query('DELETE FROM raw_events WHERE source_id = ?', [id]);
+  await pool.query('DELETE FROM sources WHERE id = ?', [id]);
+
   return Response.json({ ok: true });
 }
