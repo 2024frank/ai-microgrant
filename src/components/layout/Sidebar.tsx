@@ -214,7 +214,7 @@ export default function Sidebar({ role, name, email, token }: SidebarProps) {
                     {!n.read_at && <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#3a8c3f', flexShrink: 0, marginTop: 4 }}/>}
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 12, fontWeight: n.read_at ? 400 : 700, color: '#333', marginBottom: 2 }}>{n.title}</div>
-                      <div style={{ fontSize: 11, color: '#888', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n.message}</div>
+                      <div style={{ fontSize: 11, color: '#888', lineHeight: 1.4 }}>{n.message}</div>
                       <div style={{ fontSize: 10, color: '#bbb', marginTop: 3 }}>{new Date(n.created_at).toLocaleDateString()}</div>
                     </div>
                   </div>

@@ -73,7 +73,7 @@ export async function POST(
       ``,
       `Event title: ${event.title}`,
       `raw_event_id: ${eventId}`,
-      `Correction notes: ${correction_notes.trim()}`,
+      `Correction notes from reviewer: ${correction_notes.trim()}`,
       ...(event.calendar_source_url ? [`Original source URL: ${event.calendar_source_url}`] : []),
       ``,
       `Fetch the full event details from: ${appUrl}/api/fix-queue`,
@@ -82,6 +82,10 @@ export async function POST(
       `  "fixedFromEventId": "${eventId}"`,
       `This exact value (${eventId}) links the fix back to the original event so the reviewer gets notified.`,
       `Do NOT use any other ID — use only ${eventId} as the fixedFromEventId.`,
+      ``,
+      `Also include a "fixSummary" field in the event payload — one short sentence describing what you changed`,
+      `to address the reviewer's correction notes. Example: "Added phone number 440-775-8000 from source page."`,
+      `This summary will appear in the reviewer's bell notification so they know what was done.`,
     ].join('\n');
 
     import('@/lib/agentRunner').then(({ triggerAgentRun }) => {

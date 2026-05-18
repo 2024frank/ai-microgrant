@@ -146,15 +146,15 @@ export async function POST(
         // Remove the original pending_fix event so only the corrected version stays in the queue
         await conn.query('DELETE FROM raw_events WHERE id = ? AND status = ?', [fixedFromId, 'pending_fix']);
         if (fixEntry.sent_by_user_id) {
+          const notifTitle = `Fixed: ${ev.title || 'Event'}`;
+          const parts: string[] = [];
+          if (fixEntry.correction_notes) parts.push(`You asked: ${fixEntry.correction_notes}`);
+          if (ev.fixSummary) parts.push(`Fixed: ${ev.fixSummary}`);
+          if (!parts.length) parts.push('The corrected event is ready to review.');
           await conn.query(
             `INSERT INTO notifications (user_id, type, title, message, raw_event_id)
              VALUES (?, 'event_fixed', ?, ?, ?)`,
-            [
-              fixEntry.sent_by_user_id,
-              'Your correction is ready for review',
-              `The event you sent back for correction has been fixed and is ready to review.`,
-              eventId,
-            ]
+            [fixEntry.sent_by_user_id, notifTitle, parts.join(' · '), eventId]
           );
         }
       }
