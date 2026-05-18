@@ -23,6 +23,7 @@ export async function triggerAgentRun(
   runId: number,
   anthropicKey: string,
   environmentId: string,
+  overrideUserMessage?: string,
 ) {
   const [[source]] = await pool.query(
     'SELECT * FROM sources WHERE id = ? AND active = 1', [sourceId]
@@ -35,9 +36,11 @@ export async function triggerAgentRun(
 
     // Trigger the agent via Anthropic's managed-agents Sessions API.
     // Each source has its own agent_id; environment and vault are shared.
-    const userMessage = prompt_block
-      ? `Run extraction now.\n\n${prompt_block}\n\nReturn only the JSON array of events.`
-      : 'Run extraction now. Return only the JSON array of events.';
+    const userMessage = overrideUserMessage ?? (
+      prompt_block
+        ? `Run extraction now.\n\n${prompt_block}\n\nReturn only the JSON array of events.`
+        : 'Run extraction now. Return only the JSON array of events.'
+    );
 
     const client = getClient(anthropicKey);
 

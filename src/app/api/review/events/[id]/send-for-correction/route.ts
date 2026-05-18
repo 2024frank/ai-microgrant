@@ -19,7 +19,7 @@ export async function POST(
   }
 
   const [[event]] = await pool.query(
-    'SELECT id, source_id, title, status FROM raw_events WHERE id = ?', [eventId]
+    'SELECT id, source_id, title, status, calendar_source_url FROM raw_events WHERE id = ?', [eventId]
   ) as any;
   if (!event) return Response.json({ error: 'Not found' }, { status: 404 });
 
@@ -67,8 +67,25 @@ export async function POST(
     ) as any;
     const runId = runResult.insertId;
 
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://ai-microgrant-research-oberlin.vercel.app';
+    const fixMessage = [
+      `A reviewer has sent an event back for correction. Fix it now.`,
+      ``,
+      `Event title: ${event.title}`,
+      `raw_event_id: ${eventId}`,
+      `Correction notes: ${correction_notes.trim()}`,
+      ...(event.calendar_source_url ? [`Original source URL: ${event.calendar_source_url}`] : []),
+      ``,
+      `Fetch the full event details from: ${appUrl}/api/fix-queue`,
+      ``,
+      `CRITICAL: When you POST the fixed event to ${appUrl}/api/ingest/fixed-events, you MUST include:`,
+      `  "fixedFromEventId": "${eventId}"`,
+      `This exact value (${eventId}) links the fix back to the original event so the reviewer gets notified.`,
+      `Do NOT use any other ID — use only ${eventId} as the fixedFromEventId.`,
+    ].join('\n');
+
     import('@/lib/agentRunner').then(({ triggerAgentRun }) => {
-      triggerAgentRun(FIX_AGENT_SOURCE_ID, runId, anthropicKey, environmentId).catch((err: Error) => {
+      triggerAgentRun(FIX_AGENT_SOURCE_ID, runId, anthropicKey, environmentId, fixMessage).catch((err: Error) => {
         console.error(`Fix agent run ${runId} failed:`, err.message);
         pool.query(
           "UPDATE agent_runs SET status='failed', finished_at=NOW(), error_log=? WHERE id=?",

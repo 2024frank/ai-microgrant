@@ -70,12 +70,24 @@ export async function POST(
     await (conn as any).beginTransaction();
 
     for (const ev of events) {
-      // O(1) dedup check: if this event was previously sent for correction, resolve it
+      // If this event resolves a correction request, find the matching needs_fix entry.
+      // Primary lookup: by raw_event_id (exact match from fix-queue response).
+      // Fallback: by calendar_source_url, in case the agent submitted the wrong ID.
       const fixedFromId: number | null = ev.fixedFromEventId ? parseInt(ev.fixedFromEventId) : null;
       let fixEntry: any = null;
       if (fixedFromId) {
         const [[row]] = await conn.query(
           'SELECT * FROM needs_fix WHERE raw_event_id = ?', [fixedFromId]
+        ) as any;
+        fixEntry = row || null;
+      }
+      if (!fixEntry && ev.calendarSourceUrl) {
+        const [[row]] = await conn.query(
+          `SELECT nf.* FROM needs_fix nf
+           JOIN raw_events re ON re.id = nf.raw_event_id
+           WHERE re.calendar_source_url = ?
+           LIMIT 1`,
+          [ev.calendarSourceUrl]
         ) as any;
         fixEntry = row || null;
       }
