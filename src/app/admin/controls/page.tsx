@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/hooks/useAuth';
-import { UserPlus, Shield, Eye, Check, X } from 'lucide-react';
+import { UserPlus, Shield, Eye, Check, X, Trash2 } from 'lucide-react';
 
 export default function AdminControlsPage() {
   const { user, token, ready } = useAuth('admin');
@@ -42,6 +42,13 @@ export default function AdminControlsPage() {
     if (res.ok) { load(); showToast('User updated'); }
     else showToast('Update failed');
     setSavingId(null);
+  }
+
+  async function deleteUser(u: any) {
+    if (!confirm(`Delete ${u.full_name} (${u.email})? This cannot be undone.`)) return;
+    await fetch(`/api/users/${u.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+    load();
+    showToast(`${u.full_name} deleted`);
   }
 
   async function invite() {
@@ -162,11 +169,19 @@ export default function AdminControlsPage() {
 
                       <td style={{ padding: '0.875rem 1rem' }}>
                         {!isYou && (
-                          <button onClick={() => updateUser(u.id, { active: u.active ? 0 : 1 })}
-                            disabled={isSaving}
-                            style={{ background: 'none', border: '1.5px solid #ddd', borderRadius: 6, padding: '0.25rem 0.6rem', fontSize: 11, cursor: 'pointer', color: '#666', display: 'flex', alignItems: 'center', gap: 4 }}>
-                            {isSaving ? '…' : u.active ? <><X size={10}/> Disable</> : <><Check size={10}/> Enable</>}
-                          </button>
+                          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                            <button onClick={() => updateUser(u.id, { active: u.active ? 0 : 1 })}
+                              disabled={isSaving}
+                              style={{ background: 'none', border: '1.5px solid #ddd', borderRadius: 6, padding: '0.3rem 0.75rem', fontSize: 12, cursor: 'pointer', color: '#666', display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+                              {isSaving ? '…' : u.active ? <><X size={10}/> Disable</> : <><Check size={10}/> Enable</>}
+                            </button>
+                            <button onClick={() => deleteUser(u)}
+                              style={{ background: '#fef2f2', border: '1.5px solid #fca5a5', borderRadius: 6, padding: '0.3rem 0.6rem', fontSize: 12, cursor: 'pointer', color: '#c0392b', display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}
+                              onMouseEnter={e => { e.currentTarget.style.background = '#fdecea'; e.currentTarget.style.borderColor = '#c0392b'; }}
+                              onMouseLeave={e => { e.currentTarget.style.background = '#fef2f2'; e.currentTarget.style.borderColor = '#fca5a5'; }}>
+                              <Trash2 size={13}/> Delete
+                            </button>
+                          </div>
                         )}
                       </td>
                     </tr>
