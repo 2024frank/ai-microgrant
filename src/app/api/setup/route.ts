@@ -2,6 +2,11 @@ import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
 
 export async function GET(req: NextRequest) {
+  // Setup is disabled after initial bootstrap — re-enable only by deploying
+  // with SETUP_ENABLED=1 explicitly set in the environment.
+  if (process.env.SETUP_ENABLED !== '1') {
+    return Response.json({ error: 'Not found' }, { status: 404 });
+  }
   const secret = new URL(req.url).searchParams.get('secret');
   if (!secret || secret !== process.env.SETUP_SECRET) {
     return Response.json({ error: 'Forbidden' }, { status: 403 });

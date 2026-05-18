@@ -1,11 +1,7 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
 
-const CORS = {
-  'Access-Control-Allow-Origin':  '*',
-  'Access-Control-Allow-Methods': 'GET, OPTIONS',
-  'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=120',
-};
+const CACHE = { 'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=120' };
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -73,11 +69,11 @@ export async function GET(req: NextRequest) {
       has_prev: page > 0,
     },
     filters: { status, source_id, source_slug, event_type, geo_scope, from, to, q, order },
-  }, { headers: CORS });
+  }, { headers: CACHE });
 }
 
 export async function OPTIONS() {
-  return new Response(null, { headers: CORS });
+  return new Response(null, { status: 204 });
 }
 
 // Parse all JSON fields so consumers always get proper arrays/objects

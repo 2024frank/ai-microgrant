@@ -79,6 +79,7 @@ export async function POST(
       `Fetch the full event details from: ${appUrl}/api/fix-queue`,
       ``,
       `CRITICAL: When you POST the fixed event to ${appUrl}/api/ingest/fixed-events, you MUST include:`,
+      `  Header: x-ingest-secret: ${process.env.INGEST_SECRET}`,
       `  "fixedFromEventId": "${eventId}"`,
       `This exact value (${eventId}) links the fix back to the original event so the reviewer gets notified.`,
       `Do NOT use any other ID — use only ${eventId} as the fixedFromEventId.`,

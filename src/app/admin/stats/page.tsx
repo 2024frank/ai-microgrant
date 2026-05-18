@@ -73,8 +73,8 @@ export default function AdminStatsPage() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
                   <span style={{ fontWeight: 600 }}>{s.name}</span>
                   <span style={{ color: '#888' }}>
-                    {s.approved||0}/{(s.approved||0)+(s.rejected||0)} reviewed
-                    {s.approval_rate !== null && s.approval_rate !== undefined ? ` · ${s.approval_rate}%` : ' · —'}
+                    {s.approved||0}/{s.total||0} approved
+                    {s.approval_rate !== null && s.approval_rate !== undefined ? ` · ${s.approval_rate}%` : ''}
                   </span>
                 </div>
                 <div style={{ background: '#eee', borderRadius: 4, height: 6 }}>

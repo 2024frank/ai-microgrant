@@ -2,39 +2,40 @@ import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
 import { sendReviewNotification } from '@/lib/email';
 
+const MAX_EVENTS_PER_INGEST = 200;
+
+// Sanitise a string field: strip NUL bytes, truncate to maxLen
+function san(v: unknown, maxLen: number): string | null {
+  if (v == null) return null;
+  const s = String(v).replace(/\0/g, '').trim();
+  return s.length > 0 ? s.slice(0, maxLen) : null;
+}
+
 /**
  * POST /api/ingest/:slug
  *
- * Public endpoint — no auth, no secret.
- * The slug IS the identifier. Agents POST their extracted events here.
+ * Requires x-ingest-secret header matching INGEST_SECRET env var.
  *
- * Body:
- * {
- *   events: Event[],          // array of extracted events (camelCase)
- *   source_name?: string,     // optional — for logging
- *   count?: number            // optional — agent's own count for verification
- * }
- *
- * Response:
- * { ok: true, run_id: number, inserted: number, pending_review: number }
+ * Body: { events: Event[], count?: number }
+ * Response: { ok: true, run_id: number, inserted: number }
  */
 export async function POST(
   req: NextRequest,
   context: { params: Promise<{ slug: string }> }
 ) {
+  // ── auth ──────────────────────────────────────────────────────────
+  const secret = req.headers.get('x-ingest-secret');
+  if (!secret || secret !== process.env.INGEST_SECRET) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   const { slug } = await context.params;
 
-  // Look up source by slug
+  // Look up source by slug — don't reveal which slug failed
   const [[source]] = await pool.query(
-    'SELECT * FROM sources WHERE slug = ?', [slug]
+    'SELECT * FROM sources WHERE slug = ? AND active = 1', [slug]
   ) as any;
-
-  if (!source) {
-    return Response.json(
-      { error: `No active source found for slug: ${slug}` },
-      { status: 404 }
-    );
-  }
+  if (!source) return Response.json({ error: 'Not found' }, { status: 404 });
 
   let body: any;
   try {
@@ -43,8 +44,16 @@ export async function POST(
     return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const events: any[] = body.events || [];
+  const events: any[] = Array.isArray(body.events) ? body.events : [];
   const agentCount: number = body.count ?? events.length;
+
+  // ── payload size guard ────────────────────────────────────────────
+  if (events.length > MAX_EVENTS_PER_INGEST) {
+    return Response.json(
+      { error: `Too many events — max ${MAX_EVENTS_PER_INGEST} per request` },
+      { status: 422 }
+    );
+  }
 
   if (!Array.isArray(events) || events.length === 0) {
     // Agent called in but found nothing — still record the run
@@ -105,33 +114,33 @@ export async function POST(
         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')`,
         [
           source.id, runId,
-          ev.eventType       || 'ot',
-          ev.title           || 'Untitled',
-          ev.description     || '',
-          ev.extendedDescription  || null,
-          JSON.stringify(ev.sponsors     || []),
-          JSON.stringify(ev.postTypeId   || []),
-          JSON.stringify(ev.sessions     || []),
-          ev.locationType    || 'ne',
-          ev.location        || null,
-          ev.placeId         || null,
-          ev.placeName       || null,
-          ev.roomNum         || null,
-          ev.urlLink         || null,
-          ev.display         || 'all',
-          JSON.stringify(ev.screensIds   || []),
-          JSON.stringify(ev.buttons      || []),
-          ev.contactEmail    || null,
-          ev.email           || 'fkusiapp@Oberlin.edu',
-          ev.phone           || null,
-          ev.website         || null,
-          ev.image_cdn_url   || null,
-          ev.calendarSourceName || source.calendar_source_name || source.name,
-          ev.calendarSourceUrl  || null,
-          ev.geo_scope       || null,
+          ['ot','ev','cl','ex','vt','sp','pe','wk','ms','ws'].includes(ev.eventType) ? ev.eventType : 'ot',
+          san(ev.title, 200)           || 'Untitled',
+          san(ev.description, 2000)    || '',
+          san(ev.extendedDescription, 5000),
+          JSON.stringify(Array.isArray(ev.sponsors)   ? ev.sponsors.slice(0,20)   : []),
+          JSON.stringify(Array.isArray(ev.postTypeId) ? ev.postTypeId.slice(0,20) : []),
+          JSON.stringify(Array.isArray(ev.sessions)   ? ev.sessions.slice(0,50)   : []),
+          ['ph','on','bo','ne'].includes(ev.locationType) ? ev.locationType : 'ne',
+          san(ev.location, 300),
+          san(ev.placeId,  100),
+          san(ev.placeName,200),
+          san(ev.roomNum,  50),
+          san(ev.urlLink,  500),
+          ['all','screen','none'].includes(ev.display) ? ev.display : 'all',
+          JSON.stringify(Array.isArray(ev.screensIds) ? ev.screensIds.slice(0,20) : []),
+          JSON.stringify(Array.isArray(ev.buttons)    ? ev.buttons.slice(0,10)    : []),
+          san(ev.contactEmail, 150),
+          san(ev.email, 150)           || 'fkusiapp@Oberlin.edu',
+          san(ev.phone,   30),
+          san(ev.website, 500),
+          san(ev.image_cdn_url, 500),
+          san(ev.calendarSourceName || source.calendar_source_name || source.name, 200),
+          san(ev.calendarSourceUrl, 500),
+          ['local','hyper_local','regional','national'].includes(ev.geo_scope) ? ev.geo_scope : null,
           ev.geo ? JSON.stringify(ev.geo) : null,
           fixedFromId,
-          fixEntry?.sent_by_email || null,
+          san(fixEntry?.sent_by_email, 150),
         ]
       ) as any;
 
