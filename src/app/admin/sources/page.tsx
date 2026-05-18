@@ -69,12 +69,17 @@ export default function SourcesPage() {
     });
     const data = await res.json();
     if (!res.ok) { setError(data.error || 'Failed to add source'); setAdding(false); return; }
+    const sourceId = data.id;
     setShowAdd(false);
     setForm({ name: '', agent_id: '', schedule_cron: '0 6 * * *' });
-    showToast(`${form.name} added — first fetch starting…`);
     setAdding(false);
     loadSources();
-    setTimeout(loadRuns, 1500);
+    showToast(`${data.name} added — starting first fetch…`);
+    // Trigger first fetch from frontend — avoids Vercel timeout in API route
+    setTimeout(async () => {
+      await fetch(`/api/agent/trigger/${sourceId}`, { method: 'POST', headers: h() });
+      setTimeout(loadRuns, 500);
+    }, 500);
   }
 
   async function triggerRun(sourceId: number) {

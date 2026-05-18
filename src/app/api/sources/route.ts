@@ -6,25 +6,17 @@ export async function GET(req: NextRequest) {
   const user = await getAuthUser(req);
   if (!user) return unauthorized();
 
-  // Simple query — no subqueries that could fail on missing data
-  const [rows] = await pool.query(
-    'SELECT * FROM sources ORDER BY name ASC'
-  ) as any;
+  const [rows] = await pool.query('SELECT * FROM sources ORDER BY name ASC') as any;
 
-  // Enrich with stats separately so one failure doesn't break the whole list
   const enriched = await Promise.all(rows.map(async (s: any) => {
     try {
       const [[counts]] = await pool.query(
-        `SELECT
-           COUNT(*) AS total_events,
-           SUM(status='approved') AS total_approved
-         FROM raw_events WHERE source_id = ?`,
-        [s.id]
+        `SELECT COUNT(*) AS total_events, SUM(status='approved') AS total_approved
+         FROM raw_events WHERE source_id = ?`, [s.id]
       ) as any;
       const [[lastRun]] = await pool.query(
         `SELECT status, finished_at FROM agent_runs
-         WHERE source_id = ? ORDER BY started_at DESC LIMIT 1`,
-        [s.id]
+         WHERE source_id = ? ORDER BY started_at DESC LIMIT 1`, [s.id]
       ) as any;
       return { ...s, ...counts, last_run_status: lastRun?.status || null, last_run_at: lastRun?.finished_at || null };
     } catch {
@@ -67,13 +59,6 @@ export async function POST(req: NextRequest) {
   const sourceId = result.insertId;
   const [[created]] = await pool.query('SELECT * FROM sources WHERE id = ?', [sourceId]) as any;
 
-  // Fire first fetch — truly non-blocking
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || '';
-  const token  = req.headers.get('authorization') || '';
-  fetch(`${appUrl}/api/agent/trigger/${sourceId}`, {
-    method: 'POST',
-    headers: { Authorization: token },
-  }).catch(() => {});
-
-  return Response.json({ ...created, initial_fetch: 'triggered' }, { status: 201 });
+  // Return immediately — frontend triggers the first fetch separately
+  return Response.json({ ...created, initial_fetch: 'pending' }, { status: 201 });
 }
