@@ -1,9 +1,7 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
 import { getAuthUser, unauthorized, forbidden } from '@/lib/auth';
-import { triggerAgentRun } from '@/lib/agentRunner';
 
-// GET /api/sources
 export async function GET(req: NextRequest) {
   const user = await getAuthUser(req);
   if (!user) return unauthorized();
@@ -21,38 +19,21 @@ export async function GET(req: NextRequest) {
   return Response.json(rows);
 }
 
-// POST /api/sources
-// Fields:
-//   name         — org display name (e.g. "Apollo Theatre")
-//   agent_id     — unique Claude agent ID from Anthropic console
-//   schedule_cron — how often to fetch (default: daily 6am)
-//
-// Environment, vault, API key are all shared via env vars.
-// Agent already has its internal instructions — trigger just kicks it off.
-// First fetch fires immediately in background after creation.
 export async function POST(req: NextRequest) {
   const user = await getAuthUser(req);
   if (!user) return unauthorized();
   if (user.role !== 'admin') return forbidden();
 
-  const {
-    name,
-    agent_id,
-    schedule_cron = '0 6 * * *',
-  } = await req.json();
+  const { name, agent_id, schedule_cron = '0 6 * * *' } = await req.json();
 
   if (!name?.trim())     return Response.json({ error: 'name is required' },     { status: 400 });
   if (!agent_id?.trim()) return Response.json({ error: 'agent_id is required' }, { status: 400 });
 
-  // agent_id is the unique identifier — enforce uniqueness
   const [[agentExists]] = await pool.query(
     'SELECT id FROM sources WHERE agent_id = ?', [agent_id.trim()]
   ) as any;
   if (agentExists) {
-    return Response.json(
-      { error: 'This agent ID is already assigned to another source' },
-      { status: 409 }
-    );
+    return Response.json({ error: 'This agent ID is already assigned to another source' }, { status: 409 });
   }
 
   const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
@@ -70,10 +51,14 @@ export async function POST(req: NextRequest) {
   const sourceId = result.insertId;
   const [[created]] = await pool.query('SELECT * FROM sources WHERE id = ?', [sourceId]) as any;
 
-  // Fire first fetch immediately — non-blocking
-  triggerAgentRun(sourceId).catch((err: Error) =>
-    console.error(`Initial fetch failed for source ${sourceId} (${name}):`, err.message)
-  );
+  // Kick off first fetch via a separate HTTP call — truly non-blocking on Vercel
+  // We don't await this — the source is already saved, return immediately
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || '';
+  const token  = req.headers.get('authorization') || '';
+  fetch(`${appUrl}/api/agent/trigger/${sourceId}`, {
+    method: 'POST',
+    headers: { Authorization: token },
+  }).catch(() => {}); // fire and forget
 
   return Response.json({ ...created, initial_fetch: 'triggered' }, { status: 201 });
 }
