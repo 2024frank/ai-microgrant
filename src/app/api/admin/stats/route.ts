@@ -21,7 +21,7 @@ export async function GET(req: NextRequest) {
          SUM(re.status='approved')                            AS approved,
          SUM(re.status='rejected')                            AS rejected,
          SUM(re.status='pending')                             AS pending,
-         ROUND(SUM(re.status='approved')/NULLIF(COUNT(re.id),0)*100,1) AS approval_rate,
+         ROUND(SUM(re.status='approved')/NULLIF(SUM(re.status IN ('approved','rejected')),0)*100,1) AS approval_rate,
          MAX(ar.finished_at)                                  AS last_run_at,
          lr.status                                            AS last_run_status
        FROM sources s
@@ -142,7 +142,7 @@ export async function GET(req: NextRequest) {
        SUM(status='approved') AS total_approved,
        SUM(status='rejected') AS total_rejected,
        SUM(status='pending')  AS total_pending,
-       ROUND(SUM(status='approved')/NULLIF(COUNT(*),0)*100,1) AS approval_rate
+       ROUND(SUM(status='approved')/NULLIF(SUM(status IN ('approved','rejected')),0)*100,1) AS approval_rate
      FROM raw_events WHERE created_at >= NOW() - INTERVAL ? DAY`,
     [days]
   ) as any;

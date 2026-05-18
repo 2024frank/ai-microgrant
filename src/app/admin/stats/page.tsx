@@ -61,7 +61,7 @@ export default function AdminStatsPage() {
             <StatCard label="Extracted"    value={stats.total_extracted || 0} icon={<TrendingUp size={18} color="#3a8c3f"/>} />
             <StatCard label="Approved"     value={stats.total_approved  || 0} icon={<CheckCircle size={18} color="#3a8c3f"/>} color="#e8f5e9" />
             <StatCard label="Rejected"     value={stats.total_rejected  || 0} icon={<XCircle size={18} color="#c0392b"/>}    color="#fdecea" />
-            <StatCard label="Approval rate" value={`${stats.approval_rate || 0}%`} icon={<Activity size={18} color="#3a8c3f"/>} color="#e8f5e9" />
+            <StatCard label="Approval rate" value={stats.approval_rate !== null && stats.approval_rate !== undefined ? `${stats.approval_rate}%` : '—'} icon={<Activity size={18} color="#3a8c3f"/>} color="#e8f5e9" />
           </div>
         )}
 
@@ -72,7 +72,10 @@ export default function AdminStatsPage() {
               <div key={s.id} style={{ marginBottom: '0.75rem' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
                   <span style={{ fontWeight: 600 }}>{s.name}</span>
-                  <span style={{ color: '#888' }}>{s.approved||0}/{s.total||0} ({s.approval_rate||0}%)</span>
+                  <span style={{ color: '#888' }}>
+                    {s.approved||0}/{(s.approved||0)+(s.rejected||0)} reviewed
+                    {s.approval_rate !== null && s.approval_rate !== undefined ? ` · ${s.approval_rate}%` : ' · —'}
+                  </span>
                 </div>
                 <div style={{ background: '#eee', borderRadius: 4, height: 6 }}>
                   <div style={{ background: '#3a8c3f', borderRadius: 4, height: 6, width: `${s.approval_rate||0}%`, transition: 'width 0.5s' }}/>
