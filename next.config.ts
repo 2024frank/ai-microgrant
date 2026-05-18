@@ -20,11 +20,10 @@ const securityHeaders = [
       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
       "font-src 'self' https://fonts.gstatic.com",
       "img-src 'self' data: blob: https:",
-      "connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com wss://*.firebaseio.com",
-      "frame-src 'none'",
+      "connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://accounts.google.com wss://*.firebaseio.com",
+      "frame-src https://accounts.google.com https://*.firebaseapp.com",
       "object-src 'none'",
       "base-uri 'self'",
-      "form-action 'self'",
     ].join('; '),
   },
 ];
