@@ -28,28 +28,31 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const user = await getAuthUser(req);
-  if (!user) return unauthorized();
-  if (user.role !== 'admin') return forbidden();
+  console.log('[sources POST] start');
 
+  const user = await getAuthUser(req);
+  if (!user) { console.log('[sources POST] unauthorized'); return unauthorized(); }
+  if (user.role !== 'admin') { console.log('[sources POST] forbidden'); return forbidden(); }
+
+  console.log('[sources POST] parsing body');
   const { name, agent_id, schedule_cron = '0 6 * * *' } = await req.json();
 
   if (!name?.trim())     return Response.json({ error: 'name is required' },     { status: 400 });
   if (!agent_id?.trim()) return Response.json({ error: 'agent_id is required' }, { status: 400 });
 
+  console.log('[sources POST] checking agent uniqueness');
   const [[agentExists]] = await pool.query(
     'SELECT id FROM sources WHERE agent_id = ?', [agent_id.trim()]
   ) as any;
-  if (agentExists) {
-    return Response.json({ error: 'This agent ID is already assigned to another source' }, { status: 409 });
-  }
+  if (agentExists) return Response.json({ error: 'This agent ID is already assigned to another source' }, { status: 409 });
 
   const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-  const [[slugExists]] = await pool.query('SELECT id FROM sources WHERE slug = ?', [slug]) as any;
-  if (slugExists) {
-    return Response.json({ error: `A source named "${name}" already exists` }, { status: 409 });
-  }
 
+  console.log('[sources POST] checking slug uniqueness');
+  const [[slugExists]] = await pool.query('SELECT id FROM sources WHERE slug = ?', [slug]) as any;
+  if (slugExists) return Response.json({ error: `A source named "${name}" already exists` }, { status: 409 });
+
+  console.log('[sources POST] inserting');
   const [result] = await pool.query(
     `INSERT INTO sources (name, slug, agent_id, schedule_cron, calendar_source_name, active)
      VALUES (?, ?, ?, ?, ?, 1)`,
@@ -57,8 +60,10 @@ export async function POST(req: NextRequest) {
   ) as any;
 
   const sourceId = result.insertId;
+  console.log('[sources POST] inserted, id:', sourceId);
+
   const [[created]] = await pool.query('SELECT * FROM sources WHERE id = ?', [sourceId]) as any;
 
-  // Return immediately — frontend triggers the first fetch separately
+  console.log('[sources POST] returning 201');
   return Response.json({ ...created, initial_fetch: 'pending' }, { status: 201 });
 }

@@ -62,11 +62,22 @@ export default function SourcesPage() {
 
   async function addSource() {
     setAdding(true); setError('');
-    const res  = await fetch('/api/sources', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...h() },
-      body: JSON.stringify(form),
-    });
+    let res: Response;
+    try {
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 8000);
+      res = await fetch('/api/sources', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...h() },
+        body: JSON.stringify(form),
+        signal: controller.signal,
+      });
+      clearTimeout(tid);
+    } catch (err: any) {
+      setError(err.name === 'AbortError' ? 'Request timed out — check Vercel logs' : `Error: ${err.message}`);
+      setAdding(false);
+      return;
+    }
     const data = await res.json();
     if (!res.ok) { setError(data.error || 'Failed to add source'); setAdding(false); return; }
     const sourceId = data.id;
