@@ -99,7 +99,17 @@ export async function triggerAgentRun(
     const outputText = outputChunks.join('');
 
     const jsonMatch = outputText.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) throw new Error('Agent returned no JSON array');
+
+    // Some agents (e.g. fix agent) submit events directly via the ingest HTTP endpoint
+    // rather than returning a JSON array — treat no-JSON as a successful direct-post run.
+    if (!jsonMatch) {
+      await pool.query(
+        `UPDATE agent_runs SET status='completed', finished_at=NOW(),
+         events_found=0, events_extracted=0 WHERE id=?`,
+        [runId]
+      );
+      return { run_id: runId, inserted: 0, events: [] };
+    }
 
     const events: any[] = JSON.parse(jsonMatch[0]);
 

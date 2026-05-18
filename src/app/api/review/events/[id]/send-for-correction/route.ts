@@ -2,6 +2,8 @@ import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
 import { getAuthUser, unauthorized } from '@/lib/auth';
 
+const FIX_AGENT_SOURCE_ID = 6; // "Fixed Events" source
+
 export async function POST(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
@@ -55,7 +57,27 @@ export async function POST(
     );
 
     await (conn as any).commit();
-    return Response.json({ ok: true });
+
+    // Fire fix agent in background — don't block the response
+    const anthropicKey   = process.env.ANTHROPIC_API_KEY   ?? '';
+    const environmentId  = process.env.SOURCE_BUILDER_ENVIRONMENT_ID ?? '';
+    const [runResult] = await pool.query(
+      "INSERT INTO agent_runs (source_id, status) VALUES (?, 'running')",
+      [FIX_AGENT_SOURCE_ID]
+    ) as any;
+    const runId = runResult.insertId;
+
+    import('@/lib/agentRunner').then(({ triggerAgentRun }) => {
+      triggerAgentRun(FIX_AGENT_SOURCE_ID, runId, anthropicKey, environmentId).catch((err: Error) => {
+        console.error(`Fix agent run ${runId} failed:`, err.message);
+        pool.query(
+          "UPDATE agent_runs SET status='failed', finished_at=NOW(), error_log=? WHERE id=?",
+          [JSON.stringify([err.message]), runId]
+        );
+      });
+    });
+
+    return Response.json({ ok: true, fix_run_id: runId });
   } catch (err: any) {
     await (conn as any).rollback();
     return Response.json({ error: err.message }, { status: 500 });
