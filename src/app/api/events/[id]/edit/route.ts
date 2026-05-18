@@ -78,8 +78,21 @@ export async function POST(
       );
     }
 
-    // If a note was provided, store it as a teaching signal tied to the agent
-    if (note.trim() && changedFields.length > 0) {
+    // Always log field corrections to rejection_log — this is the agent's primary
+    // teaching signal. Include old → new values so the agent learns exactly what
+    // was wrong, not just which fields changed.
+    if (changedFields.length > 0) {
+      const correctionLines = changedFields.map(f => {
+        const oldV = String(event[f] ?? '').slice(0, 300);
+        const newV = (typeof edits[f] === 'object'
+          ? JSON.stringify(edits[f])
+          : String(edits[f] ?? '')).slice(0, 300);
+        return `${f}: was "${oldV}" → corrected to "${newV}"`;
+      });
+      const fullNote = note.trim()
+        ? `${note.trim()} | ${correctionLines.join(' | ')}`
+        : `Human correction: ${correctionLines.join(' | ')}`;
+
       await conn.query(
         `INSERT INTO rejection_log
            (raw_event_id, source_id, reviewer_id, reason_codes, reviewer_note, event_title, event_snapshot)
@@ -87,7 +100,7 @@ export async function POST(
         [
           id, event.source_id, reviewerId,
           JSON.stringify(['field_correction']),
-          `Fields corrected: ${changedFields.join(', ')}. Note: ${note}`,
+          fullNote,
           event.title,
           JSON.stringify(event),
         ]

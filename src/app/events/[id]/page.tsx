@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Image from 'next/image';
-import { ExternalLink, Pencil, Check, X } from 'lucide-react';
+import { ExternalLink, Pencil, Check, X, BookOpen, Send } from 'lucide-react';
 import { formatSessionRange, getTimezoneLabel } from '@/lib/timezone';
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import firebaseApp from '@/lib/firebase';
@@ -19,41 +19,37 @@ const GEO_LABELS: Record<string,string> = {
 
 export default function EventDeepLinkPage() {
   const { id } = useParams();
-  const [event, setEvent]       = useState<any>(null);
-  const [loading, setLoading]   = useState(true);
-  const [error, setError]       = useState('');
-  const [tzLabel]               = useState(getTimezoneLabel);
+  const [event, setEvent]     = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState('');
+  const [tzLabel]             = useState(getTimezoneLabel);
 
-  // Auth state
+  // Auth
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [userRole,  setUserRole]  = useState<string | null>(null);
 
   // Edit state
-  const [editing,     setEditing]     = useState(false);
-  const [edits,       setEdits]       = useState<Record<string,string>>({});
-  const [saving,      setSaving]      = useState(false);
-  const [saveMsg,     setSaveMsg]     = useState('');
-  const [resubmitting, setResubmitting] = useState(false);
+  const [editing,       setEditing]       = useState(false);
+  const [edits,         setEdits]         = useState<Record<string,string>>({});
+  const [note,          setNote]          = useState('');
+  const [saving,        setSaving]        = useState(false);
+  const [lastSaveResult, setLastSaveResult] = useState<{fields: string[]; corrections: {field:string;from:string;to:string}[]} | null>(null);
 
-  // Load Firebase auth
+  // Resubmit state
+  const [resubmitting,  setResubmitting]  = useState(false);
+  const [resubmitMsg,   setResubmitMsg]   = useState('');
+
   useEffect(() => {
     const auth = getAuth(firebaseApp);
     return onAuthStateChanged(auth, async (u) => {
       if (u) {
         const token = await u.getIdToken();
         setAuthToken(token);
-        // Get role from our users API
         try {
           const res = await fetch('/api/users/me', { headers: { Authorization: `Bearer ${token}` } });
-          if (res.ok) {
-            const me = await res.json();
-            setUserRole(me.role);
-          }
-        } catch { /* no role info */ }
-      } else {
-        setAuthToken(null);
-        setUserRole(null);
-      }
+          if (res.ok) { const me = await res.json(); setUserRole(me.role); }
+        } catch { /* no role */ }
+      } else { setAuthToken(null); setUserRole(null); }
     });
   }, []);
 
@@ -69,37 +65,48 @@ export default function EventDeepLinkPage() {
 
   function startEdit() {
     setEdits({
-      title:       event.title       || '',
-      description: event.description || '',
+      title:                event.title                || '',
+      description:          event.description          || '',
       extended_description: event.extended_description || '',
-      location:    event.location    || '',
-      place_name:  event.place_name  || '',
-      room_num:    event.room_num    || '',
-      contact_email: event.contact_email || '',
-      phone:       event.phone       || '',
-      website:     event.website     || '',
+      location:             event.location             || '',
+      place_name:           event.place_name           || '',
+      room_num:             event.room_num             || '',
+      contact_email:        event.contact_email        || '',
+      phone:                event.phone                || '',
+      website:              event.website              || '',
     });
-    setSaveMsg('');
+    setNote('');
+    setLastSaveResult(null);
+    setResubmitMsg('');
     setEditing(true);
   }
 
   async function saveEdits() {
     if (!authToken) return;
     setSaving(true);
-    setSaveMsg('');
     try {
       const res = await fetch(`/api/events/${id}/edit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-        body: JSON.stringify({ edits }),
+        body: JSON.stringify({ edits, note }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Save failed');
+
+      // Build per-field correction summary for the UI
+      const corrections = (data.changed_fields || []).map((f: string) => ({
+        field: f,
+        from: String((event as any)[f] ?? '').slice(0, 120),
+        to:   String((edits as any)[f] ?? '').slice(0, 120),
+      }));
+
       setEvent(data.event);
       setEditing(false);
-      setSaveMsg(`Saved ${data.changed_fields?.length || 0} field(s)`);
+      setNote('');
+      setLastSaveResult({ fields: data.changed_fields || [], corrections });
+      setResubmitMsg('');
     } catch (err: any) {
-      setSaveMsg(`Error: ${err.message}`);
+      alert(`Save failed: ${err.message}`);
     } finally {
       setSaving(false);
     }
@@ -107,9 +114,8 @@ export default function EventDeepLinkPage() {
 
   async function resubmit() {
     if (!authToken) return;
-    if (!confirm('Resubmit this event to CommunityHub?')) return;
     setResubmitting(true);
-    setSaveMsg('');
+    setResubmitMsg('');
     try {
       const res = await fetch(`/api/review/events/${id}/action`, {
         method: 'POST',
@@ -118,12 +124,13 @@ export default function EventDeepLinkPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Resubmit failed');
-      setSaveMsg(`✅ Submitted to CommunityHub (post #${data.communityhub?.id || '?'})`);
-      // Refresh event status
+      const postId = data.communityhub?.id || data.communityhub?.postId || '?';
+      setResubmitMsg(`✅ Sent to CommunityHub — post #${postId}`);
+      setLastSaveResult(null);
       const r2 = await fetch(`/api/events/${id}`);
       if (r2.ok) setEvent(await r2.json());
     } catch (err: any) {
-      setSaveMsg(`Error: ${err.message}`);
+      setResubmitMsg(`❌ ${err.message}`);
     } finally {
       setResubmitting(false);
     }
@@ -134,13 +141,11 @@ export default function EventDeepLinkPage() {
       <div style={{ color:'#888', fontSize:14 }}>Loading…</div>
     </div>
   );
-
   if (error) return (
     <div style={{ minHeight:'100vh', background:'#f0f7f0', display:'flex', alignItems:'center', justifyContent:'center' }}>
       <div style={{ textAlign:'center' }}>
         <div style={{ fontSize:36, marginBottom:12 }}>🔍</div>
         <div style={{ fontSize:18, fontWeight:700 }}>Event not found</div>
-        <div style={{ fontSize:13, color:'#888', marginTop:4 }}>This link may be invalid or the event was removed.</div>
       </div>
     </div>
   );
@@ -148,11 +153,12 @@ export default function EventDeepLinkPage() {
   const sessions = Array.isArray(event.sessions) ? event.sessions : [];
   const sponsors = Array.isArray(event.sponsors)  ? event.sponsors  : [];
   const buttons  = Array.isArray(event.buttons)   ? event.buttons   : [];
-  const status   = STATUS_STYLES[event.status] || STATUS_STYLES.pending;
+  const status   = STATUS_STYLES[event.status]    || STATUS_STYLES.pending;
 
   return (
     <div style={{ minHeight:'100vh', background:'#f0f7f0', padding:'2rem 1rem' }}>
       <div style={{ maxWidth:640, margin:'0 auto' }}>
+
         {/* Header */}
         <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:'1.5rem' }}>
           <Image src="/logo.png" alt="AI Events Aggregator" width={32} height={32}/>
@@ -166,7 +172,8 @@ export default function EventDeepLinkPage() {
           )}
 
           <div style={{ padding:'1.5rem' }}>
-            {/* Status + edit button row */}
+
+            {/* Status row */}
             <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:'0.75rem', flexWrap:'wrap' }}>
               <span style={{ background:status.bg, color:status.color, fontSize:11, fontWeight:700, padding:'2px 10px', borderRadius:20 }}>
                 {status.label}
@@ -185,31 +192,47 @@ export default function EventDeepLinkPage() {
               )}
             </div>
 
-            {/* Edit form */}
+            {/* ── EDIT MODE ── */}
             {editing ? (
-              <div style={{ marginBottom:'1.25rem' }}>
-                <EditField label="Title" value={edits.title} onChange={v => setEdits(e=>({...e,title:v}))}/>
-                <EditField label="Description" value={edits.description} onChange={v => setEdits(e=>({...e,description:v}))} multiline/>
+              <div>
+                <EditField label="Title"                value={edits.title}                onChange={v => setEdits(e=>({...e,title:v}))}/>
+                <EditField label="Description"          value={edits.description}          onChange={v => setEdits(e=>({...e,description:v}))}          multiline/>
                 <EditField label="Extended description" value={edits.extended_description} onChange={v => setEdits(e=>({...e,extended_description:v}))} multiline/>
-                <EditField label="Location" value={edits.location} onChange={v => setEdits(e=>({...e,location:v}))}/>
-                <EditField label="Venue name" value={edits.place_name} onChange={v => setEdits(e=>({...e,place_name:v}))}/>
-                <EditField label="Room / floor" value={edits.room_num} onChange={v => setEdits(e=>({...e,room_num:v}))}/>
-                <EditField label="Contact email" value={edits.contact_email} onChange={v => setEdits(e=>({...e,contact_email:v}))}/>
-                <EditField label="Phone" value={edits.phone} onChange={v => setEdits(e=>({...e,phone:v}))}/>
-                <EditField label="Website" value={edits.website} onChange={v => setEdits(e=>({...e,website:v}))}/>
+                <EditField label="Location"             value={edits.location}             onChange={v => setEdits(e=>({...e,location:v}))}/>
+                <EditField label="Venue name"           value={edits.place_name}           onChange={v => setEdits(e=>({...e,place_name:v}))}/>
+                <EditField label="Room / floor"         value={edits.room_num}             onChange={v => setEdits(e=>({...e,room_num:v}))}/>
+                <EditField label="Contact email"        value={edits.contact_email}        onChange={v => setEdits(e=>({...e,contact_email:v}))}/>
+                <EditField label="Phone"                value={edits.phone}                onChange={v => setEdits(e=>({...e,phone:v}))}/>
+                <EditField label="Website"              value={edits.website}              onChange={v => setEdits(e=>({...e,website:v}))}/>
 
-                <div style={{ display:'flex', gap:8, marginTop:'1rem' }}>
+                {/* Reason field — feeds directly into agent learning */}
+                <div style={{ marginTop:4, marginBottom:16 }}>
+                  <label style={{ fontSize:11, fontWeight:700, color:'#3a8c3f', textTransform:'uppercase', letterSpacing:0.5, display:'flex', alignItems:'center', gap:4 }}>
+                    <BookOpen size={11}/> Why are you making this correction? (AI will learn from this)
+                  </label>
+                  <textarea
+                    value={note}
+                    onChange={e => setNote(e.target.value)}
+                    placeholder="e.g. Wrong location — this is an online event not in-person"
+                    rows={2}
+                    style={{ width:'100%', border:'1px solid #c8e6c9', borderRadius:6, padding:'7px 10px', fontSize:13, fontFamily:'inherit', color:'#333', background:'#f0f7f0', boxSizing:'border-box', marginTop:4, resize:'vertical' }}
+                  />
+                </div>
+
+                <div style={{ display:'flex', gap:8 }}>
                   <button onClick={saveEdits} disabled={saving}
                     style={{ display:'flex', alignItems:'center', gap:4, background:'#3a8c3f', color:'white', border:'none', borderRadius:7, padding:'8px 18px', fontSize:13, fontWeight:700, cursor:saving?'wait':'pointer', opacity:saving?0.7:1 }}>
                     <Check size={14}/> {saving ? 'Saving…' : 'Save changes'}
                   </button>
-                  <button onClick={() => setEditing(false)}
+                  <button onClick={() => { setEditing(false); setNote(''); }}
                     style={{ display:'flex', alignItems:'center', gap:4, background:'#f5f5f5', color:'#666', border:'1px solid #ddd', borderRadius:7, padding:'8px 14px', fontSize:13, cursor:'pointer' }}>
                     <X size={14}/> Cancel
                   </button>
                 </div>
               </div>
+
             ) : (
+              /* ── READ MODE ── */
               <>
                 <h1 style={{ fontSize:22, fontWeight:800, marginBottom:'0.5rem', lineHeight:1.3 }}>{event.title}</h1>
                 <p style={{ fontSize:14, color:'#555', lineHeight:1.6, marginBottom:'1rem' }}>{event.description}</p>
@@ -227,7 +250,6 @@ export default function EventDeepLinkPage() {
                       ))}
                     </Detail>
                   )}
-
                   {event.location && (
                     <Detail icon="📍" label="Location">
                       <span style={{ fontSize:13 }}>
@@ -236,7 +258,6 @@ export default function EventDeepLinkPage() {
                       </span>
                     </Detail>
                   )}
-
                   {event.url_link && (
                     <Detail icon="🌐" label="Online">
                       <a href={event.url_link} target="_blank" rel="noreferrer"
@@ -245,13 +266,11 @@ export default function EventDeepLinkPage() {
                       </a>
                     </Detail>
                   )}
-
                   {sponsors.length > 0 && (
                     <Detail icon="🏛" label="Organized by">
                       <span style={{ fontSize:13 }}>{sponsors.join(', ')}</span>
                     </Detail>
                   )}
-
                   {event.contact_email && (
                     <Detail icon="✉️" label="Contact">
                       <a href={`mailto:${event.contact_email}`} style={{ fontSize:13, color:'#3a8c3f', textDecoration:'none' }}>{event.contact_email}</a>
@@ -280,25 +299,56 @@ export default function EventDeepLinkPage() {
               </>
             )}
 
-            {/* Save message */}
-            {saveMsg && (
-              <div style={{ marginTop:'0.75rem', padding:'8px 12px', background: saveMsg.startsWith('Error') ? '#fdecea' : '#e8f5e9', borderRadius:6, fontSize:12, color: saveMsg.startsWith('Error') ? '#c0392b' : '#2a6b2e', fontWeight:600 }}>
-                {saveMsg}
+            {/* ── AI LEARNED banner — shown after a save ── */}
+            {lastSaveResult && lastSaveResult.fields.length > 0 && (
+              <div style={{ marginTop:'1.25rem', padding:'12px 14px', background:'#f0f7f0', border:'1px solid #c8e6c9', borderRadius:8 }}>
+                <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:8 }}>
+                  <BookOpen size={13} color="#3a8c3f"/>
+                  <span style={{ fontSize:12, fontWeight:700, color:'#3a8c3f' }}>AI will learn from these corrections next run</span>
+                </div>
+                <div style={{ display:'flex', flexDirection:'column', gap:5 }}>
+                  {lastSaveResult.corrections.map((c, i) => (
+                    <div key={i} style={{ fontSize:11, color:'#555', fontFamily:'monospace', background:'white', borderRadius:4, padding:'4px 8px' }}>
+                      <span style={{ color:'#888' }}>{c.field}:</span>{' '}
+                      <span style={{ color:'#c0392b', textDecoration:'line-through' }}>{c.from || '(empty)'}</span>
+                      {' → '}
+                      <span style={{ color:'#2a6b2e', fontWeight:600 }}>{c.to || '(empty)'}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
-            {/* Resubmit button — shown to logged-in reviewers/admins on rejected events */}
-            {canEdit && event.status === 'rejected' && !editing && (
-              <div style={{ marginTop:'1.25rem', paddingTop:'1.25rem', borderTop:'1px solid #f0f0f0' }}>
-                <p style={{ fontSize:12, color:'#888', marginBottom:8 }}>
-                  Fix the fields above, save, then resubmit to CommunityHub.
-                </p>
+            {/* ── RESUBMIT section — shown after save (for logged-in reviewers/admins) ── */}
+            {canEdit && lastSaveResult && lastSaveResult.fields.length > 0 && !editing && (
+              <div style={{ marginTop:'1rem', paddingTop:'1rem', borderTop:'1px solid #f0f0f0' }}>
                 <button onClick={resubmit} disabled={resubmitting}
-                  style={{ background:'#1565c0', color:'white', border:'none', borderRadius:7, padding:'9px 20px', fontSize:13, fontWeight:700, cursor:resubmitting?'wait':'pointer', opacity:resubmitting?0.7:1 }}>
-                  {resubmitting ? 'Submitting…' : '🔄 Resubmit to CommunityHub'}
+                  style={{ display:'flex', alignItems:'center', gap:6, background:'#1565c0', color:'white', border:'none', borderRadius:7, padding:'10px 20px', fontSize:13, fontWeight:700, cursor:resubmitting?'wait':'pointer', opacity:resubmitting?0.7:1, width:'100%', justifyContent:'center' }}>
+                  <Send size={14}/> {resubmitting ? 'Sending to CommunityHub…' : 'Send updated event to CommunityHub'}
                 </button>
               </div>
             )}
+
+            {/* Resubmit result message */}
+            {resubmitMsg && (
+              <div style={{ marginTop:'0.75rem', padding:'8px 12px', background: resubmitMsg.startsWith('✅') ? '#e8f5e9' : '#fdecea', borderRadius:6, fontSize:13, color: resubmitMsg.startsWith('✅') ? '#2a6b2e' : '#c0392b', fontWeight:600 }}>
+                {resubmitMsg}
+              </div>
+            )}
+
+            {/* Also show resubmit for rejected events even before editing */}
+            {canEdit && event.status === 'rejected' && !lastSaveResult && !editing && (
+              <div style={{ marginTop:'1.25rem', paddingTop:'1.25rem', borderTop:'1px solid #f0f0f0' }}>
+                <p style={{ fontSize:12, color:'#888', marginBottom:8 }}>
+                  Edit the fields above and save, then send to CommunityHub.
+                </p>
+                <button onClick={resubmit} disabled={resubmitting}
+                  style={{ display:'flex', alignItems:'center', gap:6, background:'#1565c0', color:'white', border:'none', borderRadius:7, padding:'10px 20px', fontSize:13, fontWeight:700, cursor:resubmitting?'wait':'pointer', opacity:resubmitting?0.7:1 }}>
+                  <Send size={14}/> {resubmitting ? 'Sending…' : 'Send to CommunityHub as-is'}
+                </button>
+              </div>
+            )}
+
           </div>
         </div>
 
@@ -323,25 +373,19 @@ function Detail({ icon, label, children }: { icon:string; label:string; children
 }
 
 function EditField({ label, value, onChange, multiline = false }: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  multiline?: boolean;
+  label: string; value: string; onChange: (v: string) => void; multiline?: boolean;
 }) {
   const base: React.CSSProperties = {
-    width: '100%', border: '1px solid #ddd', borderRadius: 6,
-    padding: '7px 10px', fontSize: 13, fontFamily: 'inherit',
-    color: '#333', background: '#fafafa', boxSizing: 'border-box',
-    marginTop: 4, marginBottom: 12,
+    width:'100%', border:'1px solid #ddd', borderRadius:6, padding:'7px 10px',
+    fontSize:13, fontFamily:'inherit', color:'#333', background:'#fafafa',
+    boxSizing:'border-box', marginTop:4, marginBottom:12,
   };
   return (
     <div>
-      <label style={{ fontSize: 11, fontWeight: 700, color: '#888', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-        {label}
-      </label>
+      <label style={{ fontSize:11, fontWeight:700, color:'#888', textTransform:'uppercase', letterSpacing:0.5 }}>{label}</label>
       {multiline
-        ? <textarea value={value} onChange={e => onChange(e.target.value)} rows={3} style={{ ...base, resize: 'vertical' }}/>
-        : <input  value={value} onChange={e => onChange(e.target.value)} style={base}/>
+        ? <textarea value={value} onChange={e => onChange(e.target.value)} rows={3} style={{ ...base, resize:'vertical' }}/>
+        : <input    value={value} onChange={e => onChange(e.target.value)} style={base}/>
       }
     </div>
   );
