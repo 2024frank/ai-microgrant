@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/hooks/useAuth';
 import { Clock, Globe, Calendar, ArrowUpDown, Filter, RotateCcw, X, Wrench } from 'lucide-react';
+
 import { formatDateTime } from '@/lib/timezone';
 
 const GEO_COLORS: Record<string,string> = {
@@ -191,7 +192,7 @@ export default function ReviewerQueuePage() {
           <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
             {events.map(ev => {
               const [bg,fg] = (GEO_COLORS[ev.geo_scope]||'#f0f0f0|#555').split('|');
-              const isPendingFix = ev.sent_for_correction;
+              const isPendingFix = !!ev.sent_for_correction;
               const isFixed      = !!ev.corrected_from_id;
               return (
                 <div key={ev.id}
@@ -235,18 +236,6 @@ export default function ReviewerQueuePage() {
                     </div>
                   </div>
 
-                  {/* Send Back button — only on non-pending-fix events */}
-                  {!isPendingFix && (
-                    <button
-                      onClick={e => { e.stopPropagation(); setSendBackModal({ eventId: ev.id, title: ev.title }); setCorrectionNotes(''); }}
-                      title="Send back for correction"
-                      style={{ flexShrink:0, display:'flex', alignItems:'center', gap:4, background:'none', border:'1px solid #e0e0e0', color:'#888', borderRadius:6, padding:'5px 10px', fontSize:11, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}
-                      onMouseEnter={e=>{ e.currentTarget.style.borderColor='#c05e00'; e.currentTarget.style.color='#c05e00'; e.currentTarget.style.background='#fff3e0'; }}
-                      onMouseLeave={e=>{ e.currentTarget.style.borderColor='#e0e0e0'; e.currentTarget.style.color='#888'; e.currentTarget.style.background='none'; }}
-                    >
-                      <RotateCcw size={11}/> Fix
-                    </button>
-                  )}
                   <div style={{ fontSize:11, color:'#bbb' }} onClick={() => router.push(`/reviewer/events/${ev.id}`)}>→</div>
                 </div>
               );
