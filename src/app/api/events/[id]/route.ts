@@ -44,7 +44,7 @@ export async function PATCH(
   const [[dbUser]] = await pool.query('SELECT id FROM users WHERE firebase_uid = ?', [user.uid]) as any;
   const editableFields = ['title','description','extended_description','sessions','location_type',
     'location','place_name','room_num','url_link','sponsors','post_type_ids','geo_scope',
-    'contact_email','phone','website','image_cdn_url','buttons','display'];
+    'contact_email','email','phone','website','image_cdn_url','buttons','display'];
 
   const conn = await pool.getConnection();
   try {

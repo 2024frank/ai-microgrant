@@ -49,7 +49,7 @@ export async function GET(req: NextRequest) {
        re.id, re.event_type, re.title, re.description, re.extended_description,
        re.sponsors, re.post_type_ids, re.sessions, re.location_type,
        re.location, re.place_name, re.room_num, re.url_link, re.display,
-       re.buttons, re.contact_email, re.phone, re.website, re.image_cdn_url,
+       re.buttons, re.contact_email, re.email, re.phone, re.website, re.image_cdn_url,
        re.calendar_source_name, re.calendar_source_url, re.ingested_post_url,
        re.geo_scope, re.status, re.communityhub_post_id,
        re.created_at, re.updated_at,

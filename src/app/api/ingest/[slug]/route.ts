@@ -98,11 +98,11 @@ export async function POST(
           source_id, agent_run_id, event_type, title, description,
           extended_description, sponsors, post_type_ids, sessions,
           location_type, location, place_id, place_name, room_num,
-          url_link, display, screen_ids, buttons, contact_email,
+          url_link, display, screen_ids, buttons, contact_email, email,
           phone, website, image_cdn_url, calendar_source_name,
           calendar_source_url, geo_scope, geo_json,
           corrected_from_id, sent_for_fix_by, status
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')`,
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')`,
         [
           source.id, runId,
           ev.eventType       || 'ot',
@@ -122,6 +122,7 @@ export async function POST(
           JSON.stringify(ev.screensIds   || []),
           JSON.stringify(ev.buttons      || []),
           ev.contactEmail    || null,
+          ev.email           || 'fkusiapp@Oberlin.edu',
           ev.phone           || null,
           ev.website         || null,
           ev.image_cdn_url   || null,

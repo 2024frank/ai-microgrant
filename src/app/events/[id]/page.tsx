@@ -78,6 +78,7 @@ export default function EventDeepLinkPage() {
       location:             event.location             || '',
       place_name:           event.place_name           || '',
       room_num:             event.room_num             || '',
+      email:                event.email                || '',
       contact_email:        event.contact_email        || '',
       phone:                event.phone                || '',
       website:              event.website              || '',
@@ -239,6 +240,7 @@ export default function EventDeepLinkPage() {
                 <EditField label="Location"             value={edits.location}             onChange={v => setEdits(e=>({...e,location:v}))}/>
                 <EditField label="Venue name"           value={edits.place_name}           onChange={v => setEdits(e=>({...e,place_name:v}))}/>
                 <EditField label="Room / floor"         value={edits.room_num}             onChange={v => setEdits(e=>({...e,room_num:v}))}/>
+                <EditField label="Email"                value={edits.email}                onChange={v => setEdits(e=>({...e,email:v}))}/>
                 <EditField label="Contact email"        value={edits.contact_email}        onChange={v => setEdits(e=>({...e,contact_email:v}))}/>
                 <EditField label="Phone"                value={edits.phone}                onChange={v => setEdits(e=>({...e,phone:v}))}/>
                 <EditField label="Website"              value={edits.website}              onChange={v => setEdits(e=>({...e,website:v}))}/>

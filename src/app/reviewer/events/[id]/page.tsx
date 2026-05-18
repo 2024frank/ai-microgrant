@@ -386,9 +386,14 @@ export default function ReviewEventPage() {
         {/* Contact & Media */}
         <SectionCard title="Contact & Media">
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'1rem' }}>
+            <Field label="Email">
+              <input value={field('email')||''} onChange={e=>set('email',e.target.value)} style={inputStyle}/>
+            </Field>
             <Field label="Contact email">
               <input value={field('contact_email')||''} onChange={e=>set('contact_email',e.target.value)} style={inputStyle}/>
             </Field>
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'1rem' }}>
             <Field label="Phone">
               <input value={field('phone')||''} onChange={e=>set('phone',e.target.value)} style={inputStyle}/>
             </Field>

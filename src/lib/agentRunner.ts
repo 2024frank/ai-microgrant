@@ -151,10 +151,10 @@ async function writeEvents(events: any[], sourceId: number, runId: number, calen
           source_id, agent_run_id, event_type, title, description,
           extended_description, sponsors, post_type_ids, sessions,
           location_type, location, place_id, place_name, room_num,
-          url_link, display, screen_ids, buttons, contact_email,
+          url_link, display, screen_ids, buttons, contact_email, email,
           phone, website, image_cdn_url, calendar_source_name,
           calendar_source_url, geo_scope, geo_json, status
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')`,
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')`,
         [
           sourceId, runId,
           ev.eventType        || 'ot',
@@ -174,6 +174,7 @@ async function writeEvents(events: any[], sourceId: number, runId: number, calen
           JSON.stringify(ev.screensIds   || []),
           JSON.stringify(ev.buttons      || []),
           ev.contactEmail     || null,
+          ev.email            || 'fkusiapp@Oberlin.edu',
           ev.phone            || null,
           ev.website          || null,
           ev.image_cdn_url    || null,
