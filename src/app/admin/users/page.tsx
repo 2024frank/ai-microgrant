@@ -107,15 +107,17 @@ export default function UsersPage() {
                       </td>
                       <td style={{ padding:'0.875rem 1rem' }}>
                         {!isYou && (
-                          <div style={{ display:'flex', gap:6 }}>
+                          <div style={{ display:'flex', gap:6, alignItems:'center' }}>
                             <button onClick={()=>toggleActive(u)}
-                              style={{ background:'none', border:'1.5px solid #ddd', borderRadius:6, padding:'0.25rem 0.6rem', fontSize:11, cursor:'pointer', color:'#666' }}>
+                              style={{ background:'none', border:'1.5px solid #ddd', borderRadius:6, padding:'0.3rem 0.75rem', fontSize:12, cursor:'pointer', color:'#666', whiteSpace:'nowrap' }}>
                               {u.active?'Disable':'Enable'}
                             </button>
                             <button onClick={()=>deleteUser(u)}
                               title="Delete user"
-                              style={{ background:'none', border:'1.5px solid #fca5a5', borderRadius:6, padding:'0.25rem 0.5rem', fontSize:11, cursor:'pointer', color:'#c0392b', display:'flex', alignItems:'center' }}>
-                              <Trash2 size={12}/>
+                              style={{ background:'#fef2f2', border:'1.5px solid #fca5a5', borderRadius:6, padding:'0.3rem 0.6rem', fontSize:12, cursor:'pointer', color:'#c0392b', display:'flex', alignItems:'center', gap:4, whiteSpace:'nowrap' }}
+                              onMouseEnter={e=>{ e.currentTarget.style.background='#fdecea'; e.currentTarget.style.borderColor='#c0392b'; }}
+                              onMouseLeave={e=>{ e.currentTarget.style.background='#fef2f2'; e.currentTarget.style.borderColor='#fca5a5'; }}>
+                              <Trash2 size={13}/> Delete
                             </button>
                           </div>
                         )}
