@@ -152,18 +152,29 @@ export default function AdminStatsPage() {
           <div className="card">
             <h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: 6 }}><Activity size={14}/> Live activity</h3>
             <div style={{ maxHeight: 200, overflowY: 'auto' }}>
-              {(activity?.recent_actions||[]).slice(0,12).map((a:any,i:number) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0.4rem 0', borderBottom: '1px solid #f5f5f5', fontSize: 12 }}>
-                  <span style={{ fontSize: 13 }}>{a.action==='approved'?'✓':'✗'}</span>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <span style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>{a.event_title}</span>
-                    <span style={{ fontSize: 10, color: '#aaa' }}>{a.reviewer_name} · {a.source_name}</span>
+              {(activity?.recent_actions||[]).slice(0,12).map((a:any,i:number) => {
+                const actionMeta: Record<string,{icon:string;label:string;color:string}> = {
+                  approved:            { icon:'✓', label:'Approved',         color:'#3a8c3f' },
+                  rejected:            { icon:'✗', label:'Rejected',         color:'#c0392b' },
+                  sent_for_correction: { icon:'↩', label:'Sent for fix',     color:'#c05e00' },
+                };
+                const meta = actionMeta[a.action] || { icon:'·', label: a.action, color:'#888' };
+                return (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0.4rem 0', borderBottom: '1px solid #f5f5f5', fontSize: 12 }}>
+                    <span style={{ fontSize: 13, color: meta.color, fontWeight: 700, width: 14, textAlign: 'center', flexShrink: 0 }}>{meta.icon}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.event_title}</span>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: meta.color, flexShrink: 0 }}>{meta.label}</span>
+                      </div>
+                      <span style={{ fontSize: 10, color: '#aaa' }}>{a.reviewer_name} · {a.source_name}</span>
+                    </div>
+                    <span style={{ fontSize: 10, color: '#ccc', flexShrink: 0 }}>
+                      {new Date(a.created_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}
+                    </span>
                   </div>
-                  <span style={{ fontSize: 10, color: '#ccc', flexShrink: 0 }}>
-                    {new Date(a.created_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}
-                  </span>
-                </div>
-              ))}
+                );
+              })}
               {!activity?.recent_actions?.length && <p style={{ fontSize: 12, color: '#aaa' }}>No activity yet</p>}
             </div>
           </div>

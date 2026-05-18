@@ -91,18 +91,29 @@ export default function ReviewerDashboardPage() {
                 <h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: '1rem' }}>Recent activity</h3>
                 {recent.length === 0
                   ? <p style={{ fontSize: 13, color: '#aaa' }}>No activity yet</p>
-                  : recent.slice(0, 8).map((r: any, i: number) => (
-                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0.5rem 0', borderBottom: '1px solid #f5f5f5' }}>
-                      {r.action === 'approved' ? <CheckCircle size={14} color="#3a8c3f"/> : <XCircle size={14} color="#c0392b"/>}
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 12, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.title}</div>
-                        <div style={{ fontSize: 11, color: '#aaa' }}>{r.source_name}</div>
+                  : recent.slice(0, 8).map((r: any, i: number) => {
+                    const meta: Record<string,{icon: React.ReactNode; label:string}> = {
+                      approved:            { icon: <CheckCircle size={14} color="#3a8c3f"/>, label: 'Approved'     },
+                      rejected:            { icon: <XCircle size={14} color="#c0392b"/>,    label: 'Rejected'     },
+                      sent_for_correction: { icon: <Clock size={14} color="#c05e00"/>,      label: 'Sent for fix' },
+                    };
+                    const m = meta[r.action] || { icon: <Clock size={14} color="#aaa"/>, label: r.action };
+                    return (
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0.5rem 0', borderBottom: '1px solid #f5f5f5' }}>
+                        {m.icon}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                            <span style={{ fontSize: 12, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.title}</span>
+                            <span style={{ fontSize: 10, fontWeight: 700, color: r.action === 'approved' ? '#3a8c3f' : r.action === 'rejected' ? '#c0392b' : '#c05e00', flexShrink: 0 }}>{m.label}</span>
+                          </div>
+                          <div style={{ fontSize: 11, color: '#aaa' }}>{r.source_name}</div>
+                        </div>
+                        <div style={{ fontSize: 10, color: '#ccc' }}>
+                          {new Date(r.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </div>
                       </div>
-                      <div style={{ fontSize: 10, color: '#ccc' }}>
-                        {new Date(r.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </div>
-                    </div>
-                  ))
+                    );
+                  })
                 }
               </div>
             </div>
