@@ -25,8 +25,11 @@ export async function POST(req: NextRequest) {
     await pool.query('INSERT INTO reviewer_sources (reviewer_id, source_id) VALUES ?', [values]);
   }
 
-  // Send welcome email
-  sendWelcomeEmail({ email, name: full_name, role }).catch(console.error);
+  // Send welcome email with current queue stats
+  const [[{ pendingCount }]] = await pool.query(
+    `SELECT COUNT(*) AS pendingCount FROM raw_events WHERE status IN ('pending','pending_fix')`
+  ) as any;
+  sendWelcomeEmail({ email, name: full_name, role, pendingCount }).catch(console.error);
 
   const [[created]] = await pool.query(
     'SELECT id, email, full_name, role, active FROM users WHERE id = ?', [userId]
