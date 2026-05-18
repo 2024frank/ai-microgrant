@@ -22,17 +22,20 @@ export async function GET(req: NextRequest) {
          SUM(re.status='rejected')                            AS rejected,
          SUM(re.status='pending')                             AS pending,
          ROUND(SUM(re.status='approved')/NULLIF(SUM(re.status IN ('approved','rejected')),0)*100,1) AS approval_rate,
-         MAX(ar.finished_at)                                  AS last_run_at,
+         ar.last_run_at,
          lr.status                                            AS last_run_status
        FROM sources s
        LEFT JOIN raw_events re ON re.source_id=s.id AND re.created_at >= NOW() - INTERVAL ? DAY
-       LEFT JOIN agent_runs ar ON ar.source_id=s.id
+       LEFT JOIN (
+         SELECT source_id, MAX(finished_at) AS last_run_at FROM agent_runs GROUP BY source_id
+       ) ar ON ar.source_id = s.id
        LEFT JOIN (
          SELECT source_id, status
          FROM agent_runs a1
          WHERE started_at = (SELECT MAX(started_at) FROM agent_runs a2 WHERE a2.source_id = a1.source_id)
        ) lr ON lr.source_id = s.id
-       GROUP BY s.id, lr.status ORDER BY s.name ASC`,
+       GROUP BY s.id, s.name, s.slug, s.agent_id, s.active, ar.last_run_at, lr.status
+       ORDER BY s.name ASC`,
       [days]
     ) as any;
     return Response.json(rows);
