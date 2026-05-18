@@ -4,6 +4,14 @@ import { getAuthUser, unauthorized } from '@/lib/auth';
 
 const CH_BASE = 'https://oberlin.communityhub.cloud/api/legacy/calendar';
 
+// mysql2 auto-parses JSON columns into objects/arrays; if the value is
+// already parsed, return it directly — otherwise JSON.parse the string.
+function j(val: any, fallback: any = []): any {
+  if (val === null || val === undefined) return fallback;
+  if (typeof val === 'string') { try { return JSON.parse(val); } catch { return fallback; } }
+  return val; // already an object/array from mysql2
+}
+
 export async function POST(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
@@ -29,7 +37,7 @@ export async function POST(
       const { reason_codes, reviewer_note = '' } = edits;
       if (!reason_codes?.length) return Response.json({ error: 'reason_codes required' }, { status: 400 });
 
-      await conn.query('UPDATE raw_events SET status="rejected" WHERE id=?', [eventId]);
+      await conn.query("UPDATE raw_events SET status='rejected' WHERE id=?", [eventId]);
       await conn.query(
         `INSERT INTO rejection_log (raw_event_id, source_id, reviewer_id, reason_codes, reviewer_note, event_title, event_snapshot)
          VALUES (?,?,?,?,?,?,?)`,
@@ -65,28 +73,35 @@ export async function POST(
     const payload: any = {
       eventType: merged.event_type, email: process.env.COMMUNITYHUB_EMAIL || 'fkusiapp@oberlin.edu',
       subscribe: true, title: merged.title, description: merged.description,
-      sponsors: JSON.parse(merged.sponsors || '[]'), postTypeId: JSON.parse(merged.post_type_ids || '[]'),
-      sessions: JSON.parse(merged.sessions || '[]'), locationType: merged.location_type,
-      display: merged.display || 'all', screensIds: JSON.parse(merged.screen_ids || '[]'),
+      sponsors: j(merged.sponsors), postTypeId: j(merged.post_type_ids),
+      sessions: j(merged.sessions), locationType: merged.location_type,
+      display: merged.display || 'all', screensIds: j(merged.screen_ids),
       public: '1', calendarSourceName: merged.calendar_source_name,
       calendarSourceUrl: merged.calendar_source_url, ingestedPostUrl: merged.ingested_post_url,
     };
+    // CommunityHub requires these as empty string, not null/undefined
+    payload.phone      = merged.phone      || '';
+    payload.website    = merged.website    || '';
+    payload.urlLink    = merged.url_link   || '';
+    // placeId must always be sent as a string (PHP typed setter rejects null)
+    payload.placeId    = merged.place_id   || '';
     if (merged.extended_description) payload.extendedDescription = merged.extended_description;
     if (merged.contact_email) payload.contactEmail = merged.contact_email;
-    if (merged.phone) payload.phone = merged.phone;
-    if (merged.website) payload.website = merged.website;
-    if (merged.image_cdn_url) payload.image_cdn_url = merged.image_cdn_url;
-    if (merged.buttons) payload.buttons = JSON.parse(merged.buttons);
-    if (merged.place_id) payload.placeId = merged.place_id;
+    if (merged.image_cdn_url) payload.imageCdnUrl = merged.image_cdn_url;
+    if (merged.buttons) payload.buttons = j(merged.buttons);
     if (merged.place_name) payload.placeName = merged.place_name;
     if (merged.room_num) payload.roomNum = merged.room_num;
-    if (['ph2','bo'].includes(merged.location_type)) payload.location = merged.location;
-    if (['on','bo'].includes(merged.location_type)) payload.urlLink = merged.url_link;
+    if (['ph2','bo'].includes(merged.location_type)) payload.location = merged.location || '';
+    if (['on','bo'].includes(merged.location_type)) payload.urlLink = merged.url_link   || '';
 
     const chRes  = await fetch(`${CH_BASE}/post/submit`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
     });
-    const chData = await chRes.json();
+    // CommunityHub may return HTML on errors — parse safely
+    const rawText = await chRes.text();
+    let chData: any;
+    try { chData = JSON.parse(rawText); } catch { chData = { raw: rawText.slice(0, 200) }; }
+    if (!chRes.ok) throw new Error(`CommunityHub ${chRes.status}: ${chData.raw ?? JSON.stringify(chData)}`);
 
     await conn.query(`UPDATE raw_events SET status='approved', communityhub_post_id=? WHERE id=?`, [chData?.id || null, eventId]);
     await conn.query(

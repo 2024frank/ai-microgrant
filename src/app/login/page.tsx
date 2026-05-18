@@ -116,7 +116,7 @@ export default function LoginPage() {
         </button>
 
         <p style={{ fontSize: 11, color: '#ccc', marginTop: '1.5rem' }}>
-          Don't have access? Contact your administrator.
+          Don&apos;t have access? Contact your administrator.
         </p>
       </div>
     </div>

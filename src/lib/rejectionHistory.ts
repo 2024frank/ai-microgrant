@@ -11,7 +11,9 @@ export async function getRejectionHistory(sourceId: number, limit = 50) {
   if (!rows.length) return { count: 0, prompt_block: '' };
 
   const lines = rows.slice(0, 20).map((r: any) => {
-    const codes = JSON.parse(r.reason_codes).join(', ');
+    // reason_codes is a JSON column — mysql2 may return it already parsed
+    const parsed = Array.isArray(r.reason_codes) ? r.reason_codes : JSON.parse(r.reason_codes);
+    const codes = parsed.join(', ');
     const note  = r.reviewer_note ? ` — "${r.reviewer_note}"` : '';
     return `- "${r.event_title}" → REJECTED: ${codes}${note}`;
   });

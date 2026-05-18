@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import Sidebar from '@/components/layout/Sidebar';
 import { formatDateTime } from '@/lib/timezone';
-import { ExternalLink, Search, Filter } from 'lucide-react';
+import { ExternalLink, Search } from 'lucide-react';
 
 const GEO_LABELS: Record<string, string> = {
   hyper_local: 'Hyper-local', city_wide: 'City-wide', county: 'County', regional: 'Regional',

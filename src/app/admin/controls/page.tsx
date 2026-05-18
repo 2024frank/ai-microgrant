@@ -187,7 +187,7 @@ export default function AdminControlsPage() {
           <div style={{ background: 'white', borderRadius: 12, padding: '1.75rem', width: '100%', maxWidth: 440 }}>
             <h2 style={{ fontSize: 17, fontWeight: 700, marginBottom: 4 }}>Invite user</h2>
             <p style={{ fontSize: 13, color: '#888', marginBottom: '1.25rem' }}>
-              They'll sign in with their Google account. A welcome email is sent immediately.
+              They&apos;ll sign in with their Google account. A welcome email is sent immediately.
             </p>
             {error && <div style={{ background: '#fdecea', color: '#c0392b', padding: '0.5rem 0.75rem', borderRadius: 6, fontSize: 12, marginBottom: '1rem' }}>{error}</div>}
 

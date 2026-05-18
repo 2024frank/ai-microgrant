@@ -2,105 +2,116 @@ import Anthropic from '@anthropic-ai/sdk';
 import pool from './db';
 import { getRejectionHistory } from './rejectionHistory';
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+function getClient(apiKey: string) {
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set in environment');
+  return new Anthropic({ apiKey });
+}
 
-export async function triggerAgentRun(sourceId: number) {
+/**
+ * Trigger a Claude agent run for a given source.
+ * Uses the Sessions long-poll API — no arbitrary timeout, completes exactly
+ * when the agent fires session.status_idle.
+ *
+ * @param sourceId       DB id of the sources row
+ * @param runId          Pre-created agent_runs row id (from the trigger route)
+ * @param anthropicKey   ANTHROPIC_API_KEY forwarded from the route handler
+ * @param environmentId  SOURCE_BUILDER_ENVIRONMENT_ID forwarded from the route handler
+ */
+export async function triggerAgentRun(
+  sourceId: number,
+  runId: number,
+  anthropicKey: string,
+  environmentId: string,
+) {
   const [[source]] = await pool.query(
     'SELECT * FROM sources WHERE id = ? AND active = 1', [sourceId]
   ) as any;
   if (!source) throw new Error(`Source ${sourceId} not found or inactive`);
 
-  // Find existing running record or create one
-  const [[existingRun]] = await pool.query(
-    `SELECT id FROM agent_runs WHERE source_id = ? AND status = 'running'
-     ORDER BY started_at DESC LIMIT 1`, [sourceId]
-  ) as any;
-
-  let runId: number;
-  if (existingRun) {
-    runId = existingRun.id;
-  } else {
-    const [r] = await pool.query(
-      'INSERT INTO agent_runs (source_id, status) VALUES (?, "running")', [sourceId]
-    ) as any;
-    runId = r.insertId;
-  }
-
   try {
+    // Get rejection history for this source → injected so agent learns from mistakes
     const { prompt_block } = await getRejectionHistory(sourceId, 50);
 
-    const triggerMessage = prompt_block
-      ? `Run the full extraction pipeline and return the JSON array.\n\n${prompt_block}`
-      : 'Run the full extraction pipeline and return the JSON array.';
+    // Trigger the agent via Anthropic's managed-agents Sessions API.
+    // Each source has its own agent_id; environment and vault are shared.
+    const userMessage = prompt_block
+      ? `Run extraction now.\n\n${prompt_block}\n\nReturn only the JSON array of events.`
+      : 'Run extraction now. Return only the JSON array of events.';
 
-    // Create a session for this agent
-    const session = await (client.beta as any).sessions.create({
+    const client = getClient(anthropicKey);
+
+    // 1. Create a session for this agent
+    const session = await client.beta.sessions.create({
       agent:          source.agent_id,
-      environment_id: process.env.SOURCE_BUILDER_ENVIRONMENT_ID,
-      title:          `${source.name} extraction run`,
-    });
+      environment_id: environmentId,
+    } as any);
 
-    // Send message and stream response
-    const fullText: string[] = [];
-    let fetchCount = 0;
+    // 2. Send the user message to trigger the agent
+    await client.beta.sessions.events.send(session.id, {
+      events: [{ type: 'user.message', content: [{ type: 'text', text: userMessage }] }],
+    } as any);
 
-    // Send trigger message in background
-    const sendMsg = (client.beta as any).sessions.events.send(
-      session.id,
-      {
-        events: [{
-          type:    'user.message',
-          content: [{ type: 'text', text: triggerMessage }],
-        }],
-      }
-    );
+    // 3. Long-poll events.list() with created_at[gt] cursor until session.status_idle.
+    //    No arbitrary timeout — completes as soon as the agent is done regardless of
+    //    how long the extraction takes.
+    console.log(`[agentRunner] run=${runId} session=${session.id} polling start`);
+    const outputChunks: string[] = [];
+    let afterCreatedAt: string | undefined;
+    let done = false;
 
-    // Stream events
-    await new Promise<void>((resolve, reject) => {
-      (client.beta as any).sessions.events.stream(session.id)
-        .then(async (stream: any) => {
-          // Send message after stream opens
-          await sendMsg;
+    while (!done) {
+      const page = await client.beta.sessions.events.list(session.id, {
+        ...(afterCreatedAt ? { 'created_at[gt]': afterCreatedAt } : {}),
+        limit: 100,
+        order: 'asc',
+      } as any) as any;
 
-          for await (const event of stream) {
-            if (event.type === 'agent.message') {
-              for (const block of event.content || []) {
-                if (block.text) fullText.push(block.text);
-              }
-            } else if (event.type === 'agent.tool_use') {
-              if (event.name === 'web_fetch') fetchCount++;
-              // Log progress to agent_runs
-              if (fetchCount % 10 === 0 && fetchCount > 0) {
-                await pool.query(
-                  `UPDATE agent_runs SET events_found = ? WHERE id = ?`,
-                  [fetchCount, runId]
-                );
-              }
-            } else if (event.type === 'session.status_idle') {
-              resolve();
-              break;
-            } else if (event.type === 'session.error') {
-              reject(new Error(`Session error: ${JSON.stringify(event)}`));
-              break;
+      const events: any[] = page.data ?? [];
+
+      for (const event of events) {
+        if (event.created_at) afterCreatedAt = event.created_at;
+
+        if (event.type === 'agent.message') {
+          for (const block of (event.content ?? []) as any[]) {
+            if (block.type === 'text' && block.text) {
+              outputChunks.push(block.text);
             }
           }
-          resolve();
-        })
-        .catch(reject);
-    });
+        }
 
-    // Extract JSON from response
-    const responseText = fullText.join('');
-    const match = responseText.match(/\[[\s\S]*\]/);
-    if (!match) throw new Error('Agent returned no JSON array — check agent instructions');
+        if (event.type === 'session.status_idle') {
+          const stopReason = event.stop_reason;
+          if (stopReason?.type !== 'requires_action') {
+            console.log(`[agentRunner] run=${runId} session idle — extraction complete`);
+            done = true;
+            break;
+          }
+        }
+      }
 
-    const events: any[] = JSON.parse(match[0]);
+      // No new events yet — wait before next poll
+      if (!done && events.length === 0) {
+        await new Promise(r => setTimeout(r, 3000));
+      }
+    }
+
+    const outputText = outputChunks.join('');
+
+    const jsonMatch = outputText.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) throw new Error('Agent returned no JSON array');
+
+    const events: any[] = JSON.parse(jsonMatch[0]);
+
+    // Write events to MySQL
     const inserted = await writeEvents(events, sourceId, runId, source.calendar_source_name);
 
+    // Close run with stats
     await pool.query(
-      `UPDATE agent_runs SET status='completed', finished_at=NOW(),
-       events_extracted=?, events_found=? WHERE id=?`,
-      [inserted.length, events.length, runId]
+      `UPDATE agent_runs SET
+         status='completed', finished_at=NOW(),
+         events_found=?, events_extracted=?
+       WHERE id=?`,
+      [events.length, inserted.length, runId]
     );
 
     return { run_id: runId, inserted: inserted.length, events: inserted };
@@ -119,6 +130,7 @@ async function writeEvents(events: any[], sourceId: number, runId: number, calen
   const conn = await pool.getConnection();
   try {
     await (conn as any).beginTransaction();
+
     for (const ev of events) {
       const [res] = await conn.query(
         `INSERT INTO raw_events (
@@ -131,37 +143,45 @@ async function writeEvents(events: any[], sourceId: number, runId: number, calen
         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')`,
         [
           sourceId, runId,
-          ev.eventType       || 'ot',
+          ev.eventType        || 'ot',
           ev.title,
           ev.description,
-          ev.extendedDescription || null,
-          JSON.stringify(ev.sponsors    || []),
-          JSON.stringify(ev.postTypeId  || []),
-          JSON.stringify(ev.sessions    || []),
-          ev.locationType    || 'ne',
-          ev.location        || null,
-          ev.placeId         || null,
-          ev.placeName       || null,
-          ev.roomNum         || null,
-          ev.urlLink         || null,
-          ev.display         || 'all',
-          JSON.stringify(ev.screensIds  || []),
-          JSON.stringify(ev.buttons     || []),
-          ev.contactEmail    || null,
-          ev.phone           || null,
-          ev.website         || null,
-          ev.image_cdn_url   || null,
+          ev.extendedDescription  || null,
+          JSON.stringify(ev.sponsors     || []),
+          JSON.stringify(ev.postTypeId   || []),
+          JSON.stringify(ev.sessions     || []),
+          ev.locationType     || 'ne',
+          ev.location         || null,
+          ev.placeId          || null,
+          ev.placeName        || null,
+          ev.roomNum          || null,
+          ev.urlLink          || null,
+          ev.display          || 'all',
+          JSON.stringify(ev.screensIds   || []),
+          JSON.stringify(ev.buttons      || []),
+          ev.contactEmail     || null,
+          ev.phone            || null,
+          ev.website          || null,
+          ev.image_cdn_url    || null,
           ev.calendarSourceName || calendarSourceName,
           ev.calendarSourceUrl  || null,
-          ev.geo_scope       || null,
+          ev.geo_scope        || null,
           ev.geo ? JSON.stringify(ev.geo) : null,
         ]
       ) as any;
+
       const eventId = res.insertId;
-      const ingestedPostUrl = `${process.env.NEXT_PUBLIC_APP_URL}/events/${eventId}`;
-      await conn.query('UPDATE raw_events SET ingested_post_url = ? WHERE id = ?', [ingestedPostUrl, eventId]);
-      inserted.push({ id: eventId, title: ev.title });
+
+      // Build ingestedPostUrl now that we have the row ID
+      const ingestedPostUrl = `${process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'https://ai-microgrant-research-oberlin.vercel.app'}/events/${eventId}`;
+      await conn.query(
+        'UPDATE raw_events SET ingested_post_url = ? WHERE id = ?',
+        [ingestedPostUrl, eventId]
+      );
+
+      inserted.push({ id: eventId, title: ev.title, ingested_post_url: ingestedPostUrl });
     }
+
     await (conn as any).commit();
     return inserted;
   } catch (e) {

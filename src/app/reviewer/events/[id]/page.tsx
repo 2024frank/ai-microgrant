@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { useParams, useRouter } from 'next/navigation';
 import Sidebar from '@/components/layout/Sidebar';
@@ -28,7 +28,7 @@ export default function ReviewEventPage() {
   const { user, token: authToken, ready } = useAuth();
   const { id }  = useParams();
   const router  = useRouter();
-  const startMs = Date.now();
+  const startMsRef = useRef(0);
 
   const [event, setEvent]           = useState<any>(null);
   const [edits, setEdits]           = useState<Record<string,any>>({});
@@ -37,10 +37,11 @@ export default function ReviewEventPage() {
   const [note, setNote]             = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [toast, setToast]           = useState('');
-  const [tzLabel, setTzLabel]       = useState('');
+  const [tzLabel]                    = useState(getTimezoneLabel);
+
+  useEffect(() => { startMsRef.current = Date.now(); }, []);
 
   useEffect(() => {
-    setTzLabel(getTimezoneLabel());
     if (!ready || !authToken) return;
     fetch(`/api/review/events/${id}`, { headers: { Authorization: `Bearer ${authToken}` } })
       .then(r => r.json()).then(setEvent);
@@ -57,7 +58,7 @@ export default function ReviewEventPage() {
 
   async function approve() {
     setSubmitting(true);
-    const time_spent_sec = Math.round((Date.now() - startMs) / 1000);
+    const time_spent_sec = Math.round((Date.now() - startMsRef.current) / 1000);
     const res = await fetch(`/api/review/events/${id}/action`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
@@ -76,7 +77,7 @@ export default function ReviewEventPage() {
   async function reject() {
     if (!reasons.length) return;
     setSubmitting(true);
-    const time_spent_sec = Math.round((Date.now() - startMs) / 1000);
+    const time_spent_sec = Math.round((Date.now() - startMsRef.current) / 1000);
     await fetch(`/api/review/events/${id}/action`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },

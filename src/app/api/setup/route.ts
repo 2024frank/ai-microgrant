@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
       'SELECT id FROM users WHERE email = ?', [admin.email]
     ) as any;
     if (existing) {
-      await pool.query('UPDATE users SET role="admin", active=1 WHERE email=?', [admin.email]);
+      await pool.query("UPDATE users SET role='admin', active=1 WHERE email=?", [admin.email]);
       results.push({ email: admin.email, status: 'updated' });
     } else {
       await pool.query(

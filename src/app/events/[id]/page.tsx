@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Image from 'next/image';
-import { ExternalLink, MapPin, Globe, Tag, Mail } from 'lucide-react';
+import { ExternalLink } from 'lucide-react';
 import { formatSessionRange, getTimezoneLabel } from '@/lib/timezone';
 
 const STATUS_STYLES: Record<string, { bg:string; color:string; label:string }> = {
@@ -20,10 +20,9 @@ export default function EventDeepLinkPage() {
   const [event, setEvent]     = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState('');
-  const [tzLabel, setTzLabel] = useState('');
+  const [tzLabel] = useState(getTimezoneLabel);
 
   useEffect(() => {
-    setTzLabel(getTimezoneLabel());
     fetch(`/api/events/${id}`)
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then(setEvent)

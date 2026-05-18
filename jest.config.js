@@ -6,8 +6,10 @@ module.exports = {
   transform: { '^.+\\.tsx?$': ['ts-jest', { tsconfig: { jsx: 'react' } }] },
   testMatch: ['**/__tests__/**/*.test.ts', '**/__tests__/**/*.test.tsx'],
   setupFiles: ['<rootDir>/src/__tests__/setup.ts'],
-  // Don't use clearAllMocks — it wipes mockResolvedValue defaults
-  // Tests manage their own mock state
+  // Each test file manages its own mock state via beforeEach resets
   restoreMocks: false,
   clearMocks: false,
+  // Suppress "Force exiting" notice from fire-and-forget async in route handlers
+  openHandlesTimeout: 100,
+  forceExit: true,
 };

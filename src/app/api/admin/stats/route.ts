@@ -43,7 +43,8 @@ export async function GET(req: NextRequest) {
     ) as any;
     const counts: Record<string, number> = {};
     for (const r of rows) {
-      for (const code of JSON.parse(r.reason_codes)) {
+      const rcArr = Array.isArray(r.reason_codes) ? r.reason_codes : JSON.parse(r.reason_codes);
+      for (const code of rcArr) {
         counts[code] = (counts[code] || 0) + r.n;
       }
     }

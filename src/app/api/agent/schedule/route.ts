@@ -17,9 +17,19 @@ export async function GET(req: NextRequest) {
   const results: { source: string; status: string; inserted: number; error?: string }[] = [];
   let totalNew = 0;
 
+  // Capture env vars here (guaranteed in route handler context)
+  const anthropicKey  = process.env.ANTHROPIC_API_KEY  ?? '';
+  const environmentId = process.env.SOURCE_BUILDER_ENVIRONMENT_ID ?? '';
+
   for (const source of sources) {
+    // Pre-create the run record so we have a runId to pass
+    const [runRes] = await pool.query(
+      "INSERT INTO agent_runs (source_id, status) VALUES (?, 'running')", [source.id]
+    ) as any;
+    const runId = runRes.insertId;
+
     try {
-      const result = await triggerAgentRun(source.id);
+      const result = await triggerAgentRun(source.id, runId, anthropicKey, environmentId);
       results.push({ source: source.name, status: 'ok', inserted: result.inserted });
       totalNew += result.inserted;
     } catch (err: any) {

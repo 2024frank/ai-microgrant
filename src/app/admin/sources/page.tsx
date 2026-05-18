@@ -24,6 +24,9 @@ export default function SourcesPage() {
   const [triggering, setTriggering] = useState<number | null>(null);
   const [toast, setToast]           = useState('');
   const pollRef                     = useRef<NodeJS.Timeout | null>(null);
+  // Holds the latest loadRuns so the polling setTimeout can reference it
+  // without a temporal-dead-zone violation inside the useCallback body.
+  const loadRunsRef                 = useRef<() => void>(() => {});
 
   const h = useCallback(() => ({ Authorization: `Bearer ${token}` }), [token]);
 
@@ -43,13 +46,17 @@ export default function SourcesPage() {
       .then(d => {
         setRuns(d.runs || []);
         if (d.has_active) {
-          pollRef.current = setTimeout(loadRuns, 2000);
+          pollRef.current = setTimeout(() => loadRunsRef.current(), 2000);
         } else {
           loadSources();
         }
       })
       .catch(() => {});
   }, [token, h, loadSources]);
+
+  // Keep ref in sync with the latest callback so the polling timeout always
+  // calls the most up-to-date version (avoids stale closure captures).
+  useEffect(() => { loadRunsRef.current = loadRuns; }, [loadRuns]);
 
   useEffect(() => {
     if (!ready || !token) return;

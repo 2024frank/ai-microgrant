@@ -3,6 +3,10 @@ import { GET } from '@/app/api/review/queue/route';
 import { POST } from '@/app/api/review/events/[id]/action/route';
 import { adminAuth } from '@/lib/firebase-admin';
 
+// Mock global fetch for CommunityHub API calls
+const mockFetch = jest.fn();
+global.fetch = mockFetch;
+
 const db         = require('@/lib/db');
 const mockVerify = adminAuth.verifyIdToken as jest.Mock;
 
@@ -38,6 +42,12 @@ beforeEach(() => {
   db.mockConn.commit           = jest.fn().mockResolvedValue(undefined);
   db.mockConn.rollback         = jest.fn().mockResolvedValue(undefined);
   db.mockConn.release          = jest.fn();
+  // Reset fetch call history, then set default CommunityHub response
+  mockFetch.mockReset();
+  mockFetch.mockResolvedValue({
+    json: jest.fn().mockResolvedValue({ id: 'ch_post_abc123' }),
+    ok: true,
+  });
   mockVerify.mockReset();
   mockVerify.mockResolvedValue({ uid: 'uid-admin', email: 'admin@oberlin.edu' });
 });
@@ -116,5 +126,143 @@ describe('POST /api/review/events/:id/action', () => {
       ctx('999')
     );
     expect(res.status).toBe(404);
+  });
+});
+
+describe('POST /api/review/events/:id/action — approve path', () => {
+  it('approves event, calls CommunityHub, stores post_id', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[PENDING]])
+      .mockResolvedValueOnce([[{ id: 1 }]]);   // reviewer db id
+
+    const res  = await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve', time_spent_sec: 55 }),
+      ctx('10')
+    );
+    const data = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(data.ok).toBe(true);
+    expect(data.communityhub).toEqual({ id: 'ch_post_abc123' });
+  });
+
+  it('POSTs correct payload to CommunityHub including ingestedPostUrl', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[PENDING]])
+      .mockResolvedValueOnce([[{ id: 1 }]]);
+
+    await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve' }),
+      ctx('10')
+    );
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [url, opts] = mockFetch.mock.calls[0];
+    expect(url).toContain('communityhub');
+    const body = JSON.parse(opts.body);
+    expect(body.ingestedPostUrl).toBe(PENDING.ingested_post_url);
+    expect(body.calendarSourceName).toBe(PENDING.calendar_source_name);
+  });
+
+  it('logs field edits when reviewer sends modified fields', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[PENDING]])
+      .mockResolvedValueOnce([[{ id: 1 }]]);
+
+    await POST(
+      makeReq('/api/review/events/10/action', {
+        action: 'approve',
+        edits: { title: 'Corrected Title' },
+      }),
+      ctx('10')
+    );
+
+    const editLogInsert = db.mockConn.query.mock.calls.find(
+      (c: any[]) => typeof c[0] === 'string' && c[0].includes('field_edit_log')
+    );
+    expect(editLogInsert).toBeDefined();
+    expect(editLogInsert[1]).toContain('title');
+    expect(editLogInsert[1]).toContain('Corrected Title');
+  });
+
+  it('does not log field edit when value is unchanged', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[PENDING]])
+      .mockResolvedValueOnce([[{ id: 1 }]]);
+
+    await POST(
+      makeReq('/api/review/events/10/action', {
+        action: 'approve',
+        edits: { title: PENDING.title },   // same value — no change
+      }),
+      ctx('10')
+    );
+
+    const editLogInsert = db.mockConn.query.mock.calls.find(
+      (c: any[]) => typeof c[0] === 'string' && c[0].includes('field_edit_log')
+    );
+    expect(editLogInsert).toBeUndefined();
+  });
+
+  it('rolls back and returns 500 when CommunityHub call throws', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[PENDING]])
+      .mockResolvedValueOnce([[{ id: 1 }]]);
+
+    mockFetch.mockRejectedValueOnce(new Error('Network error'));
+
+    const res = await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve' }),
+      ctx('10')
+    );
+    expect(res.status).toBe(500);
+    expect(db.mockConn.rollback).toHaveBeenCalledTimes(1);
+  });
+
+  it('stores communityhub_post_id returned from CH API', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[PENDING]])
+      .mockResolvedValueOnce([[{ id: 1 }]]);
+
+    mockFetch.mockResolvedValueOnce({
+      json: jest.fn().mockResolvedValue({ id: 'post_xyz_999' }),
+    });
+
+    await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve' }),
+      ctx('10')
+    );
+
+    const approveUpdate = db.mockConn.query.mock.calls.find(
+      (c: any[]) => typeof c[0] === 'string' && c[0].includes("status='approved'")
+    );
+    expect(approveUpdate).toBeDefined();
+    expect(approveUpdate[1]).toContain('post_xyz_999');
+  });
+
+  it('sets submitted_to_ch=1 in review_sessions on approval', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[PENDING]])
+      .mockResolvedValueOnce([[{ id: 1 }]]);
+
+    await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve', time_spent_sec: 30 }),
+      ctx('10')
+    );
+
+    const sessionInsert = db.mockConn.query.mock.calls.find(
+      (c: any[]) => typeof c[0] === 'string' && c[0].includes('review_sessions')
+    );
+    expect(sessionInsert).toBeDefined();
+    expect(sessionInsert[0]).toContain("'approved'");
+    // submitted_to_ch = 1
+    expect(sessionInsert[1]).toContain(1);
   });
 });

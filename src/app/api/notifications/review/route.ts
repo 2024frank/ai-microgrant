@@ -34,7 +34,6 @@ export async function POST(req: NextRequest) {
     let sources: { name: string; count: number }[];
 
     if (hasAssignedSources) {
-      const sourceNames = reviewer.source_names.split('|||');
       const [rows] = await pool.query(
         `SELECT s.name, COUNT(re.id) AS count
          FROM raw_events re
