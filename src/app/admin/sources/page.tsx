@@ -2,7 +2,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import Sidebar from '@/components/layout/Sidebar';
-import { Plus, Play, ToggleLeft, ToggleRight, CheckCircle, XCircle, Loader, Copy, Check, Pencil } from 'lucide-react';
+import { Plus, Play, Square, ToggleLeft, ToggleRight, CheckCircle, XCircle, Loader, Copy, Check, Pencil } from 'lucide-react';
 
 const SCHEDULE_OPTIONS = [
   { label: 'Every hour',    value: '0 * * * *'   },
@@ -122,6 +122,13 @@ export default function SourcesPage() {
     finally { setTriggering(null); }
   }
 
+  async function stopRun(runId: number) {
+    const freshToken = await getFreshToken();
+    const res = await fetch(`/api/agent/runs/${runId}/stop`, { method: 'POST', headers: { Authorization: `Bearer ${freshToken}` } });
+    if (res.ok) { showToast('Run stopped'); loadRuns(); }
+    else showToast('Could not stop run');
+  }
+
   async function toggleActive(source: any) {
     const freshToken = await getFreshToken();
     await fetch(`/api/sources/${source.id}`, {
@@ -165,9 +172,14 @@ export default function SourcesPage() {
             <Loader size={16} color="#3a8c3f" style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }}/>
             <div style={{ flex: 1 }}>
               {activeRuns.map(r => (
-                <div key={r.id} style={{ fontSize: 13 }}>
+                <div key={r.id} style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 10 }}>
                   <strong>{r.source_name}</strong> is fetching…
-                  <span style={{ color: '#2a6b2e', marginLeft: 8 }}>{r.events_extracted} extracted · {r.elapsed_sec}s</span>
+                  <span style={{ color: '#2a6b2e' }}>{r.events_extracted} extracted · {r.elapsed_sec}s</span>
+                  <button onClick={() => stopRun(r.id)}
+                    title="Stop this run"
+                    style={{ background: 'none', border: '1.5px solid #c0392b', borderRadius: 5, padding: '1px 8px', cursor: 'pointer', color: '#c0392b', fontSize: 11, display: 'flex', alignItems: 'center', gap: 3, marginLeft: 4 }}>
+                    <Square size={10} fill="#c0392b"/> Stop
+                  </button>
                 </div>
               ))}
             </div>

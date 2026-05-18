@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/hooks/useAuth';
@@ -29,6 +29,9 @@ export default function ReviewerQueuePage() {
   const [page, setPage]        = useState(0);
   const [sort, setSort]        = useState('ingested_asc');
   const [sourceId, setSourceId] = useState('');
+  const [newEventsToast, setNewEventsToast] = useState(false);
+  const lastTotalRef = useRef<number | null>(null);
+  const pollRef      = useRef<NodeJS.Timeout | null>(null);
   const router = useRouter();
 
   const loadQueue = useCallback(() => {
@@ -58,7 +61,32 @@ export default function ReviewerQueuePage() {
   // Reset to page 0 when filters change
   useEffect(() => { setPage(0); }, [sort, sourceId]);
 
+  // Poll for new events every 10s — show toast if count increases
+  useEffect(() => {
+    if (!ready || !token) return;
+    const check = () => {
+      fetch(`/api/review/queue?limit=1`, { headers: { Authorization: `Bearer ${token}` } })
+        .then(r => r.json())
+        .then(d => {
+          const newTotal = d.total || 0;
+          if (lastTotalRef.current !== null && newTotal > lastTotalRef.current) {
+            setNewEventsToast(true);
+          }
+          lastTotalRef.current = newTotal;
+        }).catch(() => {});
+    };
+    check();
+    pollRef.current = setInterval(check, 10000);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [ready, token]); // eslint-disable-line
+
   if (!ready || !user) return null;
+
+  function refreshQueue() {
+    setNewEventsToast(false);
+    lastTotalRef.current = null;
+    loadQueue();
+  }
 
   function formatEventDate(sessions: any) {
     try {
@@ -77,6 +105,12 @@ export default function ReviewerQueuePage() {
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: '#f8f9fa' }}>
       <Sidebar role={user.role} name={user.name} email={user.email} token={token} />
+      {newEventsToast && (
+        <div style={{ position: 'fixed', top: 20, left: '50%', transform: 'translateX(-50%)', background: '#3a8c3f', color: 'white', padding: '0.75rem 1.25rem', borderRadius: 8, fontSize: 13, fontWeight: 600, zIndex: 999, boxShadow: '0 4px 16px rgba(0,0,0,0.2)', display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer' }}
+          onClick={refreshQueue}>
+          🆕 New events arrived — click to refresh
+        </div>
+      )}
       <main style={{ flex: 1, padding: '2rem' }}>
 
         {/* Header */}
