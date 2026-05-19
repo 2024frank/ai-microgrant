@@ -208,6 +208,11 @@ export async function POST(
     const [reviewers] = await pool.query(
       `SELECT id, email, full_name FROM users WHERE active = 1`
     ) as any;
+    // Build event preview from the events we just inserted (first 5 titles)
+    const previewEvents = events.slice(0, 5).map((ev: any) => ({
+      title:  String(ev.title || 'Untitled').slice(0, 80),
+      source: source.name,
+    }));
     for (const u of reviewers as any[]) {
       sendReviewNotification({
         reviewerEmail: u.email,
@@ -215,6 +220,7 @@ export async function POST(
         pendingCount:  pending,
         sources:       [{ name: source.name, count: inserted }],
         oldestDate:    null,
+        previewEvents,
       }).catch((err: Error) => console.error(`[ingest] email failed for ${u.email}:`, err.message));
     }
   }

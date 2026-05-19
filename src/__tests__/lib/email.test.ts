@@ -17,7 +17,7 @@ beforeEach(() => {
 });
 
 describe('Email templates', () => {
-  it('sendReviewNotification sends to correct recipient with count in subject', async () => {
+  it('sendReviewNotification sends to correct recipient with new count in subject', async () => {
     const { sendReviewNotification } = require('@/lib/email');
     await sendReviewNotification({
       reviewerEmail: 'rev@oberlin.edu',
@@ -33,6 +33,17 @@ describe('Email templates', () => {
     }));
   });
 
+  it('review email subject has no emoji and names the source for single source', async () => {
+    const { sendReviewNotification } = require('@/lib/email');
+    await sendReviewNotification({
+      reviewerEmail: 'r@o.edu', reviewerName: 'Jane',
+      pendingCount: 4, sources: [{ name: 'Apollo Theatre', count: 4 }], oldestDate: null,
+    });
+    const call = mockSend.mock.calls[0][0];
+    expect(call.subject).toContain('Apollo Theatre');
+    expect(call.subject).not.toMatch(/[\u{1F300}-\u{1FAFF}]/u); // no emoji
+  });
+
   it('review email subject uses singular for 1 event', async () => {
     const { sendReviewNotification } = require('@/lib/email');
     await sendReviewNotification({
@@ -40,8 +51,8 @@ describe('Email templates', () => {
       pendingCount: 1, sources: [{ name: 'Apollo', count: 1 }], oldestDate: null,
     });
     const call = mockSend.mock.calls[0][0];
-    expect(call.subject).toMatch(/1 event\b/);
-    expect(call.subject).not.toMatch(/1 events/);
+    expect(call.subject).toMatch(/1 new event\b/);
+    expect(call.subject).not.toMatch(/1 new events/);
   });
 
   it('review email HTML contains key content', async () => {
@@ -55,6 +66,38 @@ describe('Email templates', () => {
     expect(html).toContain('Jane');
     expect(html).toContain('Apollo');
     expect(html).toContain('/reviewer/queue');
+  });
+
+  it('review email shows event preview titles when provided', async () => {
+    const { sendReviewNotification } = require('@/lib/email');
+    await sendReviewNotification({
+      reviewerEmail: 'r@o.edu', reviewerName: 'Jane',
+      pendingCount: 3, sources: [{ name: 'Apollo', count: 3 }], oldestDate: null,
+      previewEvents: [
+        { title: 'Jazz Night', source: 'Apollo' },
+        { title: 'Open Mic', source: 'Apollo' },
+        { title: 'Classical Evening', source: 'Apollo' },
+      ],
+    });
+    const html = mockSend.mock.calls[0][0].html;
+    expect(html).toContain('Jazz Night');
+    expect(html).toContain('Open Mic');
+    expect(html).toContain('Classical Evening');
+  });
+
+  it('review email caps preview at 5 events and shows overflow count', async () => {
+    const { sendReviewNotification } = require('@/lib/email');
+    const previewEvents = Array.from({ length: 8 }, (_, i) => ({ title: `Event ${i + 1}`, source: 'Src' }));
+    await sendReviewNotification({
+      reviewerEmail: 'r@o.edu', reviewerName: 'Jane',
+      pendingCount: 8, sources: [{ name: 'Src', count: 8 }], oldestDate: null,
+      previewEvents,
+    });
+    const html = mockSend.mock.calls[0][0].html;
+    expect(html).toContain('Event 1');
+    expect(html).toContain('Event 5');
+    expect(html).not.toContain('Event 6');
+    expect(html).toContain('+ 3 more');
   });
 
   it('sendWelcomeEmail sends to new user with correct role', async () => {

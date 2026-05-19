@@ -11,54 +11,96 @@ const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 const FROM    = 'AI Events Ingestion Software <support@uhurued.com>';
 
 export async function sendReviewNotification(opts: {
-  reviewerEmail: string;
-  reviewerName:  string;
-  pendingCount:  number;
-  sources:       { name: string; count: number }[];
-  oldestDate:    string | null;
+  reviewerEmail:  string;
+  reviewerName:   string;
+  pendingCount:   number;
+  sources:        { name: string; count: number }[];
+  oldestDate:     string | null;
+  previewEvents?: { title: string; source: string }[];
 }) {
-  const { reviewerEmail, reviewerName, pendingCount, sources, oldestDate } = opts;
+  const { reviewerEmail, reviewerName, pendingCount, sources, oldestDate, previewEvents = [] } = opts;
 
+  // Subject: "3 new events from Apollo Theatre need your review"
+  //       or "12 new events from 3 sources need your review"
+  const newCount   = sources.reduce((s, r) => s + r.count, 0);
+  const sourcePart = sources.length === 1
+    ? `from ${sources[0].name}`
+    : `from ${sources.length} sources`;
+  const subject = `${newCount} new event${newCount !== 1 ? 's' : ''} ${sourcePart} need${newCount === 1 ? 's' : ''} your review`;
+
+  // Source breakdown rows
   const sourceRows = sources
     .map(s => `<tr>
-      <td style="padding:8px 12px;border-bottom:1px solid #e8f5e9;font-size:13px;">${s.name}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #e8f5e9;font-size:13px;text-align:right;font-weight:600;color:#3a8c3f;">${s.count}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #f0f0f0;font-size:13px;color:#444;">${s.name}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #f0f0f0;font-size:13px;text-align:right;font-weight:700;color:#3a8c3f;">${s.count} new</td>
     </tr>`).join('');
 
+  // Event preview rows — show up to 5 titles
+  const preview = previewEvents.slice(0, 5);
+  const previewSection = preview.length > 0 ? `
+  <p style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin:0 0 8px;">What came in</p>
+  <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #eee;border-radius:8px;overflow:hidden;margin-bottom:8px;">
+    ${preview.map((e, i) => `<tr style="background:${i % 2 === 0 ? 'white' : '#fafafa'};">
+      <td style="padding:9px 12px;font-size:13px;color:#333;border-bottom:1px solid #f5f5f5;">${e.title}</td>
+      <td style="padding:9px 12px;font-size:11px;color:#aaa;text-align:right;border-bottom:1px solid #f5f5f5;white-space:nowrap;">${e.source}</td>
+    </tr>`).join('')}
+  </table>
+  ${previewEvents.length > 5
+    ? `<p style="font-size:12px;color:#aaa;margin:0 0 20px;text-align:right;">+ ${previewEvents.length - 5} more</p>`
+    : `<div style="margin-bottom:20px;"></div>`
+  }` : '';
+
+  // Oldest pending warning
   const oldestNote = oldestDate
-    ? `<p style="font-size:12px;color:#e67e22;margin:0 0 16px;">⚠️ Oldest pending event received ${oldestDate}</p>`
+    ? `<p style="font-size:12px;color:#c05e00;margin:0 0 16px;background:#fff8f0;padding:8px 12px;border-radius:6px;border-left:3px solid #e67e22;">Oldest pending event received ${oldestDate}</p>`
+    : '';
+
+  // Total pending callout (only show if different from newCount)
+  const totalNote = pendingCount > newCount
+    ? `<p style="font-size:13px;color:#888;margin:0 0 24px;">Total in queue: <strong style="color:#333;">${pendingCount} event${pendingCount !== 1 ? 's' : ''}</strong> awaiting review</p>`
     : '';
 
   const html = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"></head>
-<body style="margin:0;padding:0;background:#f0f7f0;font-family:system-ui,sans-serif;">
-<table width="100%" cellpadding="0" cellspacing="0" style="background:#f0f7f0;padding:32px 16px;">
+<body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f4;padding:32px 16px;">
 <tr><td align="center">
-<table width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:white;border-radius:12px;overflow:hidden;box-shadow:0 2px 16px rgba(58,140,63,0.1);">
-<tr><td style="background:#3a8c3f;padding:28px 32px;text-align:center;">
-  <h1 style="color:white;margin:0 0 4px;font-size:20px;font-weight:800;letter-spacing:0.5px;">AI EVENTS INGESTION SOFTWARE</h1>
-  <p style="color:rgba(255,255,255,0.8);margin:0;font-size:13px;">CommunityHub</p>
-</td></tr>
-<tr><td style="padding:32px;">
-  <p style="margin:0 0 8px;font-size:15px;color:#333;">Hi ${reviewerName},</p>
-  <p style="margin:0 0 24px;font-size:14px;color:#666;line-height:1.6;">New events are ready for your review.</p>
-  <div style="background:#e8f5e9;border-radius:8px;padding:20px;text-align:center;margin-bottom:24px;">
-    <div style="font-size:48px;font-weight:800;color:#3a8c3f;line-height:1;">${pendingCount}</div>
-    <div style="font-size:13px;color:#2a6b2e;font-weight:600;margin-top:4px;">event${pendingCount !== 1 ? 's' : ''} pending review</div>
-  </div>
-  ${oldestNote}
-  ${sources.length > 0 ? `
-  <p style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin:0 0 8px;">By source</p>
-  <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e8f5e9;border-radius:8px;overflow:hidden;margin-bottom:24px;">${sourceRows}</table>` : ''}
-  <div style="text-align:center;margin:28px 0 8px;">
-    <a href="${APP_URL}/reviewer/queue" style="display:inline-block;background:#3a8c3f;color:white;text-decoration:none;padding:13px 32px;border-radius:8px;font-size:15px;font-weight:700;">
-      Review now →
-    </a>
-  </div>
-</td></tr>
-<tr><td style="background:#f8f9fa;padding:16px 32px;border-top:1px solid #eee;">
-  <p style="margin:0;font-size:11px;color:#aaa;text-align:center;">AI Events Ingestion Software · CommunityHub</p>
-</td></tr>
+<table width="100%" cellpadding="0" cellspacing="0" style="max-width:580px;background:white;border-radius:10px;overflow:hidden;box-shadow:0 1px 8px rgba(0,0,0,0.08);">
+
+  <!-- Header -->
+  <tr><td style="background:#1a1a1a;padding:22px 32px;">
+    <p style="margin:0;font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#888;">CommunityHub</p>
+    <h1 style="color:white;margin:4px 0 0;font-size:18px;font-weight:700;">AI Events Ingestion Software</h1>
+  </td></tr>
+
+  <!-- Body -->
+  <tr><td style="padding:28px 32px 8px;">
+    <p style="margin:0 0 6px;font-size:15px;color:#111;font-weight:600;">Hi ${reviewerName},</p>
+    <p style="margin:0 0 24px;font-size:14px;color:#555;line-height:1.6;">
+      ${newCount} new event${newCount !== 1 ? 's' : ''} just arrived ${sourcePart} and ${newCount === 1 ? 'is' : 'are'} waiting for your review.
+    </p>
+
+    ${previewSection}
+
+    ${sources.length > 1 ? `
+    <p style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin:0 0 8px;">By source</p>
+    <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #eee;border-radius:8px;overflow:hidden;margin-bottom:20px;">${sourceRows}</table>` : ''}
+
+    ${totalNote}
+    ${oldestNote}
+
+    <div style="margin:24px 0 20px;">
+      <a href="${APP_URL}/reviewer/queue" style="display:inline-block;background:#3a8c3f;color:white;text-decoration:none;padding:12px 28px;border-radius:7px;font-size:14px;font-weight:700;letter-spacing:0.2px;">
+        Open review queue
+      </a>
+    </div>
+  </td></tr>
+
+  <!-- Footer -->
+  <tr><td style="padding:16px 32px;border-top:1px solid #eee;">
+    <p style="margin:0;font-size:11px;color:#bbb;">AI Events Ingestion Software &middot; CommunityHub &middot; Oberlin, OH</p>
+  </td></tr>
+
 </table>
 </td></tr>
 </table>
@@ -67,7 +109,7 @@ export async function sendReviewNotification(opts: {
   return getResend().emails.send({
     from:    FROM,
     to:      reviewerEmail,
-    subject: `📋 ${pendingCount} event${pendingCount !== 1 ? 's' : ''} ready for review`,
+    subject,
     html,
   });
 }
