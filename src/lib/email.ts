@@ -28,14 +28,17 @@ export async function sendReviewNotification(opts: {
     : `from ${sources.length} sources`;
   const subject = `${newCount} new event${newCount !== 1 ? 's' : ''} ${sourcePart} need${newCount === 1 ? 's' : ''} your review`;
 
-  // Source breakdown rows — show "X new / Y pending total" per source
+  // Source breakdown rows — show "X new" and, if there's a backlog, "+ Y already waiting"
   const sourceRows = sources
-    .map(s => `<tr>
-      <td style="padding:9px 12px;border-bottom:1px solid #f0f0f0;font-size:13px;color:#444;">${s.name}</td>
-      <td style="padding:9px 12px;border-bottom:1px solid #f0f0f0;font-size:13px;text-align:right;">
-        <span style="font-weight:700;color:#3a8c3f;">${s.count} new</span>${s.pending != null ? `<span style="color:#aaa;font-size:12px;margin-left:6px;">${s.pending} pending total</span>` : ''}
-      </td>
-    </tr>`).join('');
+    .map(s => {
+      const alreadyWaiting = s.pending != null ? Math.max(0, s.pending - s.count) : null;
+      return `<tr>
+        <td style="padding:9px 12px;border-bottom:1px solid #f0f0f0;font-size:13px;color:#444;">${s.name}</td>
+        <td style="padding:9px 12px;border-bottom:1px solid #f0f0f0;font-size:13px;text-align:right;">
+          <span style="font-weight:700;color:#3a8c3f;">${s.count} new</span>${alreadyWaiting ? `<span style="color:#bbb;font-size:12px;margin-left:8px;">+ ${alreadyWaiting} already waiting</span>` : ''}
+        </td>
+      </tr>`;
+    }).join('');
 
   // Event preview rows — show up to 5 titles
   const preview = previewEvents.slice(0, 5);

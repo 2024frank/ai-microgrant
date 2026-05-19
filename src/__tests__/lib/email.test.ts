@@ -67,7 +67,7 @@ describe('Email templates', () => {
     expect(html).toContain('/reviewer/queue');
   });
 
-  it('review email shows pending total per source', async () => {
+  it('review email shows already-waiting backlog separate from new count', async () => {
     const { sendReviewNotification } = require('@/lib/email');
     await sendReviewNotification({
       reviewerEmail: 'r@o.edu', reviewerName: 'Jane',
@@ -77,7 +77,21 @@ describe('Email templates', () => {
     });
     const html = mockSend.mock.calls[0][0].html;
     expect(html).toContain('3 new');
-    expect(html).toContain('15 pending total');
+    expect(html).toContain('12 already waiting');
+    expect(html).not.toContain('15 pending total');
+  });
+
+  it('review email omits already-waiting when there is no backlog', async () => {
+    const { sendReviewNotification } = require('@/lib/email');
+    await sendReviewNotification({
+      reviewerEmail: 'r@o.edu', reviewerName: 'Jane',
+      pendingCount: 3,
+      sources: [{ name: 'Apollo Theatre', count: 3, pending: 3 }],
+      oldestDate: null,
+    });
+    const html = mockSend.mock.calls[0][0].html;
+    expect(html).toContain('3 new');
+    expect(html).not.toContain('already waiting');
   });
 
   it('review email shows event preview titles when provided', async () => {
