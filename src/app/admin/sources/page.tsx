@@ -2,7 +2,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import Sidebar from '@/components/layout/Sidebar';
-import { Plus, Play, Square, Trash2, ToggleLeft, ToggleRight, CheckCircle, XCircle, Loader, Copy, Check, Pencil, Wrench } from 'lucide-react';
+import { Plus, Play, Square, Trash2, ToggleLeft, ToggleRight, CheckCircle, XCircle, Loader, Copy, Check, Pencil, Wrench, FileText, X } from 'lucide-react';
 
 const SCHEDULE_OPTIONS = [
   { label: 'Every hour',    value: '0 * * * *'   },
@@ -28,6 +28,14 @@ export default function SourcesPage() {
   const [copiedSlug, setCopiedSlug] = useState<string | null>(null);
   const [editingSchedule, setEditingSchedule] = useState<number | null>(null);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
+
+  // System prompt drawer
+  const [promptSource, setPromptSource]     = useState<any | null>(null);
+  const [promptText, setPromptText]         = useState('');
+  const [promptVersion, setPromptVersion]   = useState(0);
+  const [promptLoading, setPromptLoading]   = useState(false);
+  const [promptSaving, setPromptSaving]     = useState(false);
+  const [promptError, setPromptError]       = useState('');
 
   const h = useCallback(() => ({ Authorization: `Bearer ${token}` }), [token]);
 
@@ -141,6 +149,46 @@ export default function SourcesPage() {
     });
     if (res.ok) { showToast(`✓ ${source.name} deleted`); loadSources(); }
     else showToast('Failed to delete source');
+  }
+
+  async function openPromptDrawer(source: any) {
+    setPromptSource(source);
+    setPromptText('');
+    setPromptVersion(0);
+    setPromptError('');
+    setPromptLoading(true);
+    try {
+      const freshToken = await getFreshToken();
+      const res  = await fetch(`/api/sources/${source.id}/system-prompt`, { headers: { Authorization: `Bearer ${freshToken}` } });
+      const data = await res.json();
+      if (!res.ok) { setPromptError(data.error || 'Failed to load'); setPromptLoading(false); return; }
+      setPromptText(data.system);
+      setPromptVersion(data.version);
+    } catch (err: any) { setPromptError(err.message); }
+    setPromptLoading(false);
+  }
+
+  async function savePrompt() {
+    if (!promptSource) return;
+    setPromptSaving(true); setPromptError('');
+    try {
+      const freshToken = await getFreshToken();
+      const res  = await fetch(`/api/sources/${promptSource.id}/system-prompt`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
+        body: JSON.stringify({ system: promptText, version: promptVersion }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        if (res.status === 409) setPromptError('Version conflict — someone else updated this agent. Reload to get the latest version.');
+        else setPromptError(data.error || 'Save failed');
+        setPromptSaving(false);
+        return;
+      }
+      setPromptVersion(data.version);
+      showToast(`✓ System prompt updated (v${data.version})`);
+    } catch (err: any) { setPromptError(err.message); }
+    setPromptSaving(false);
   }
 
   async function toggleActive(source: any) {
@@ -323,14 +371,23 @@ export default function SourcesPage() {
                             </button>
                           )}
                         </td>
-                        <td style={{ padding: '0.875rem 0.5rem' }}>
-                          <button onClick={() => deleteSource(s)}
-                            title="Delete source"
-                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ddd', padding: 0 }}
-                            onMouseEnter={e => (e.currentTarget.style.color = '#c0392b')}
-                            onMouseLeave={e => (e.currentTarget.style.color = '#ddd')}>
-                            <Trash2 size={15}/>
-                          </button>
+                        <td style={{ padding: '0.875rem 0.5rem', whiteSpace: 'nowrap' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <button onClick={() => openPromptDrawer(s)}
+                              title="View / edit system prompt"
+                              style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#bbb', padding: 0 }}
+                              onMouseEnter={e => (e.currentTarget.style.color = '#3a8c3f')}
+                              onMouseLeave={e => (e.currentTarget.style.color = '#bbb')}>
+                              <FileText size={15}/>
+                            </button>
+                            <button onClick={() => deleteSource(s)}
+                              title="Delete source"
+                              style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ddd', padding: 0 }}
+                              onMouseEnter={e => (e.currentTarget.style.color = '#c0392b')}
+                              onMouseLeave={e => (e.currentTarget.style.color = '#ddd')}>
+                              <Trash2 size={15}/>
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -375,6 +432,81 @@ export default function SourcesPage() {
           </>
         )}
       </main>
+
+      {/* System prompt drawer */}
+      {promptSource && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'stretch', justifyContent: 'flex-end', zIndex: 200 }}
+          onClick={e => { if (e.target === e.currentTarget) setPromptSource(null); }}>
+          <div style={{ width: '100%', maxWidth: 700, background: 'white', display: 'flex', flexDirection: 'column', boxShadow: '-4px 0 32px rgba(0,0,0,0.18)', overflow: 'hidden' }}>
+
+            {/* Header */}
+            <div style={{ padding: '1.25rem 1.5rem', borderBottom: '1px solid #eee', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+              <div>
+                <div style={{ fontSize: 16, fontWeight: 700 }}>{promptSource.name}</div>
+                <div style={{ fontSize: 11, color: '#aaa', fontFamily: 'monospace', marginTop: 2 }}>{promptSource.agent_id}</div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                {promptVersion > 0 && (
+                  <span style={{ fontSize: 11, color: '#aaa', background: '#f5f5f5', padding: '2px 8px', borderRadius: 10 }}>v{promptVersion}</span>
+                )}
+                <button onClick={() => setPromptSource(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#aaa', padding: 4 }}>
+                  <X size={18}/>
+                </button>
+              </div>
+            </div>
+
+            {/* Body */}
+            <div style={{ flex: 1, padding: '1.25rem 1.5rem', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+              {promptError && (
+                <div style={{ background: '#fdecea', color: '#c0392b', padding: '0.6rem 0.875rem', borderRadius: 6, fontSize: 13, marginBottom: '1rem', flexShrink: 0 }}>
+                  {promptError}
+                </div>
+              )}
+
+              {promptLoading ? (
+                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#aaa', gap: 8, fontSize: 13 }}>
+                  <Loader size={16} style={{ animation: 'spin 1s linear infinite' }}/> Loading system prompt…
+                </div>
+              ) : (
+                <>
+                  <label style={{ ...labelStyle, marginBottom: 8 }}>System prompt</label>
+                  <textarea
+                    value={promptText}
+                    onChange={e => setPromptText(e.target.value)}
+                    spellCheck={false}
+                    style={{
+                      flex: 1,
+                      resize: 'none',
+                      border: '1.5px solid #ddd',
+                      borderRadius: 8,
+                      padding: '0.75rem',
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                      lineHeight: 1.6,
+                      outline: 'none',
+                      color: '#333',
+                      overflowY: 'auto',
+                    }}
+                  />
+                  <div style={{ fontSize: 11, color: '#bbb', marginTop: 6, textAlign: 'right', flexShrink: 0 }}>
+                    {promptText.length.toLocaleString()} chars
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Footer */}
+            {!promptLoading && (
+              <div style={{ padding: '1rem 1.5rem', borderTop: '1px solid #eee', display: 'flex', justifyContent: 'flex-end', gap: 10, flexShrink: 0 }}>
+                <button onClick={() => setPromptSource(null)} className="btn-ghost" style={{ fontSize: 14 }}>Close</button>
+                <button onClick={savePrompt} disabled={promptSaving} className="btn-primary" style={{ fontSize: 14, minWidth: 110 }}>
+                  {promptSaving ? <><Loader size={13} style={{ animation: 'spin 1s linear infinite', marginRight: 6 }}/>Saving…</> : 'Save changes'}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Add source modal */}
       {showAdd && (
