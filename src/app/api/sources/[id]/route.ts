@@ -17,6 +17,11 @@ export async function PATCH(
   for (const k of allowed) { if (body[k] !== undefined) updates[k] = body[k]; }
   if (!Object.keys(updates).length) return Response.json({ error: 'No valid fields' }, { status: 400 });
 
+  // The fix agent source must always stay active
+  if (id === '6' && updates.active !== undefined && !updates.active) {
+    return Response.json({ error: 'The fix agent source cannot be deactivated' }, { status: 403 });
+  }
+
   const setClauses = Object.keys(updates).map(k => `${k} = ?`).join(', ');
   await pool.query(`UPDATE sources SET ${setClauses} WHERE id = ?`, [...Object.values(updates), id]);
   const [[updated]] = await pool.query('SELECT * FROM sources WHERE id = ?', [id]) as any;

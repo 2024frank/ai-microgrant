@@ -354,9 +354,13 @@ export default function SourcesPage() {
                         </td>
 
                         <td style={{ padding: '0.875rem 1rem' }}>
-                          <button onClick={() => toggleActive(s)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: s.active ? '#3a8c3f' : '#ccc', padding: 0 }}>
-                            {s.active ? <ToggleRight size={22}/> : <ToggleLeft size={22}/>}
-                          </button>
+                          {isFixAgent ? (
+                            <ToggleRight size={22} color="#3a8c3f" style={{ opacity: 0.45 }}/>
+                          ) : (
+                            <button onClick={() => toggleActive(s)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: s.active ? '#3a8c3f' : '#ccc', padding: 0 }}>
+                              {s.active ? <ToggleRight size={22}/> : <ToggleLeft size={22}/>}
+                            </button>
+                          )}
                         </td>
 
                         <td style={{ padding: '0.875rem 1rem' }}>
