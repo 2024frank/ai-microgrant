@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
-import { canReviewSource, forbidden, getAuthUser, unauthorized } from '@/lib/auth';
+import { getAuthUser, reviewerSourceScope, unauthorized } from '@/lib/auth';
 
 export async function GET(
   req: NextRequest,
@@ -10,19 +10,18 @@ export async function GET(
   if (!user) return unauthorized();
 
   const { id } = await context.params;
+  const { clause: scopeClause, params: scopeParams } = reviewerSourceScope(user, 'rl');
 
   const [[rejection]] = await pool.query(
     `SELECT rl.reason_codes, rl.reviewer_note, rl.created_at, rl.source_id,
             u.full_name AS reviewer_name
      FROM rejection_log rl
      LEFT JOIN users u ON rl.reviewer_id = u.id
-     WHERE rl.raw_event_id = ?
+     WHERE rl.raw_event_id = ? ${scopeClause}
      ORDER BY rl.created_at DESC LIMIT 1`,
-    [id]
+    [id, ...scopeParams]
   ) as any;
 
   if (!rejection) return Response.json(null, { status: 404 });
-  if (!(await canReviewSource(user, rejection.source_id))) return forbidden();
-
   return Response.json(rejection);
 }

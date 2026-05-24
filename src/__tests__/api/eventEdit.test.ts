@@ -112,15 +112,16 @@ describe('POST /api/events/:id/edit', () => {
     mockVerify.mockResolvedValue({ uid: 'uid-reviewer', email: 'reviewer@oberlin.edu' });
     db.default.query
       .mockResolvedValueOnce([[REVIEWER]])
-      .mockResolvedValueOnce([[{ ...MOCK_EVENT, source_id: 2 }]])
-      .mockResolvedValueOnce([[{ assignment_count: 1, matching_count: 0 }]]);
+      .mockResolvedValueOnce([[]]);
 
     const res = await POST(
       makeReq('10', { edits: { title: 'New Title' } }),
       ctx('10')
     );
 
-    expect(res.status).toBe(403);
+    const eventQuery = db.default.query.mock.calls[1][0] as string;
+    expect(eventQuery).toContain('reviewer_sources');
+    expect(res.status).toBe(404);
     expect(db.mockConn.beginTransaction).not.toHaveBeenCalled();
   });
 

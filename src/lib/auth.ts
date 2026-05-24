@@ -48,24 +48,6 @@ export function reviewerSourceScope(user: AuthUser, eventAlias = 're') {
   };
 }
 
-export async function canReviewSource(user: AuthUser, sourceId: number | string | null | undefined) {
-  if (user.role !== 'reviewer') return true;
-  if (sourceId === null || sourceId === undefined) return false;
-
-  const [[scope]] = await pool.query(
-    `SELECT
-       COUNT(*) AS assignment_count,
-       SUM(CASE WHEN source_id = ? THEN 1 ELSE 0 END) AS matching_count
-     FROM reviewer_sources
-     WHERE reviewer_id = ?`,
-    [sourceId, user.id]
-  ) as any;
-
-  const assignmentCount = Number(scope?.assignment_count ?? 0);
-  const matchingCount   = Number(scope?.matching_count ?? 0);
-  return assignmentCount === 0 || matchingCount > 0;
-}
-
 export function unauthorized() {
   return Response.json({ error: 'Unauthorized' }, { status: 401 });
 }
