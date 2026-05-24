@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
-import { getAuthUser, unauthorized } from '@/lib/auth';
+import { getAuthUser, reviewerSourceScope, unauthorized } from '@/lib/auth';
 
 /**
  * POST /api/events/:id/edit
@@ -21,17 +21,15 @@ export async function POST(
 
   const { id } = await context.params;
   const { edits = {}, note = '' } = await req.json();
+  const { clause: scopeClause, params: scopeParams } = reviewerSourceScope(user, 're');
 
   const [[event]] = await pool.query(
     `SELECT re.*, s.agent_id FROM raw_events re
-     JOIN sources s ON re.source_id = s.id WHERE re.id = ?`, [id]
+     JOIN sources s ON re.source_id = s.id WHERE re.id = ? ${scopeClause}`,
+    [id, ...scopeParams]
   ) as any;
   if (!event) return Response.json({ error: 'Not found' }, { status: 404 });
-
-  const [[dbUser]] = await pool.query(
-    'SELECT id FROM users WHERE firebase_uid = ?', [user.uid]
-  ) as any;
-  const reviewerId = dbUser?.id;
+  const reviewerId = user.id;
 
   const editableFields = [
     'title', 'description', 'extended_description', 'sessions',

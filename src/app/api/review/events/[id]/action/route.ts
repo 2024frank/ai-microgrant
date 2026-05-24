@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
-import { getAuthUser, unauthorized } from '@/lib/auth';
+import { getAuthUser, reviewerSourceScope, unauthorized } from '@/lib/auth';
 
 const CH_BASE = 'https://oberlin.communityhub.cloud/api/legacy/calendar';
 
@@ -21,17 +21,21 @@ export async function POST(
 
   const { edits = {}, time_spent_sec = null, action } = await req.json();
   const { id: eventId } = await context.params;
+  const { clause: scopeClause, params: scopeParams } = reviewerSourceScope(user, 're');
 
-  const [[event]] = await pool.query('SELECT * FROM raw_events WHERE id = ?', [eventId]) as any;
+  const [[event]] = await pool.query(
+    `SELECT * FROM raw_events re WHERE re.id = ? ${scopeClause}`,
+    [eventId, ...scopeParams]
+  ) as any;
   if (!event) return Response.json({ error: 'Not found' }, { status: 404 });
+
   // Reject: only allowed on pending events
   // Approve/resubmit: allowed from any status (pending, rejected, or re-editing approved events)
   if (action === 'reject' && event.status !== 'pending') {
     return Response.json({ error: 'Can only reject pending events' }, { status: 409 });
   }
 
-  const [[dbUser]] = await pool.query('SELECT id FROM users WHERE firebase_uid = ?', [user.uid]) as any;
-  const reviewerId = dbUser?.id;
+  const reviewerId = user.id;
 
   const conn = await pool.getConnection();
   try {

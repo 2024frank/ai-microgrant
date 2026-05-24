@@ -7,6 +7,7 @@ const mockVerify = adminAuth.verifyIdToken as jest.Mock;
 function ctx(id: string) { return { params: Promise.resolve({ id }) }; }
 
 const ADMIN = { id: 1, email: 'admin@oberlin.edu', role: 'admin', full_name: 'Admin', active: 1, firebase_uid: 'uid-admin' };
+const REVIEWER = { id: 2, email: 'reviewer@oberlin.edu', role: 'reviewer', full_name: 'Reviewer', active: 1, firebase_uid: 'uid-reviewer' };
 const MOCK_EVENT = {
   id: 10, title: 'Original Title', status: 'pending', event_type: 'ot',
   description: 'Original desc', sessions: '[]', location_type: 'ph2',
@@ -105,6 +106,23 @@ describe('POST /api/events/:id/edit', () => {
       ctx('999')
     );
     expect(res.status).toBe(404);
+  });
+
+  it('forbids reviewers from editing events outside their assigned sources', async () => {
+    mockVerify.mockResolvedValue({ uid: 'uid-reviewer', email: 'reviewer@oberlin.edu' });
+    db.default.query
+      .mockResolvedValueOnce([[REVIEWER]])
+      .mockResolvedValueOnce([[]]);
+
+    const res = await POST(
+      makeReq('10', { edits: { title: 'New Title' } }),
+      ctx('10')
+    );
+
+    const eventQuery = db.default.query.mock.calls[1][0] as string;
+    expect(eventQuery).toContain('reviewer_sources');
+    expect(res.status).toBe(404);
+    expect(db.mockConn.beginTransaction).not.toHaveBeenCalled();
   });
 
   it('returns 401 without auth', async () => {
