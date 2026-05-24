@@ -11,6 +11,7 @@ const db         = require('@/lib/db');
 const mockVerify = adminAuth.verifyIdToken as jest.Mock;
 
 const ADMIN = { id: 1, email: 'admin@oberlin.edu', role: 'admin', full_name: 'Admin', active: 1, firebase_uid: 'uid-admin' };
+const REVIEWER = { id: 2, email: 'reviewer@oberlin.edu', role: 'reviewer', full_name: 'Reviewer', active: 1, firebase_uid: 'uid-reviewer' };
 const PENDING = {
   id: 10, title: 'Jazz Night', status: 'pending', event_type: 'ot',
   description: 'A great jazz show',
@@ -131,6 +132,39 @@ describe('POST /api/review/events/:id/action', () => {
 });
 
 describe('POST /api/review/events/:id/action — approve path', () => {
+  it('forbids reviewers from approving events outside their assigned sources', async () => {
+    mockVerify.mockResolvedValue({ uid: 'uid-reviewer', email: 'reviewer@oberlin.edu' });
+    db.default.query
+      .mockResolvedValueOnce([[REVIEWER]])
+      .mockResolvedValueOnce([[{ ...PENDING, source_id: 2 }]])
+      .mockResolvedValueOnce([[{ assignment_count: 1, matching_count: 0 }]]);
+
+    const res = await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve' }),
+      ctx('10')
+    );
+
+    expect(res.status).toBe(403);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('allows reviewers to approve events from assigned sources', async () => {
+    mockVerify.mockResolvedValue({ uid: 'uid-reviewer', email: 'reviewer@oberlin.edu' });
+    db.default.query
+      .mockResolvedValueOnce([[REVIEWER]])
+      .mockResolvedValueOnce([[PENDING]])
+      .mockResolvedValueOnce([[{ assignment_count: 1, matching_count: 1 }]])
+      .mockResolvedValueOnce([[{ id: REVIEWER.id }]]);
+
+    const res = await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve' }),
+      ctx('10')
+    );
+
+    expect(res.status).toBe(200);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
   it('approves event, calls CommunityHub, stores post_id', async () => {
     db.default.query
       .mockResolvedValueOnce([[ADMIN]])

@@ -135,7 +135,7 @@ describe('Review Queue — source assignment scoping', () => {
     expect(countQuery).toContain('reviewer_sources');
   });
 
-  it('reviewer with assignments has their firebase_uid passed as query param (O(1) lookup)', async () => {
+  it('reviewer with assignments has their user id passed as query param', async () => {
     mockVerify.mockResolvedValue({ uid: 'uid-alice', email: 'alice@oberlin.edu' });
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_A]])
@@ -146,7 +146,7 @@ describe('Review Queue — source assignment scoping', () => {
     await getQueue(makeAuthReq('alice@oberlin.edu'));
 
     const eventsQueryParams = db.default.query.mock.calls[1][1] as any[];
-    expect(eventsQueryParams).toContain('uid-alice');
+    expect(eventsQueryParams).toContain(REVIEWER_A.id);
   });
 
   it('reviewer B sees only Oberlin College events, not Apollo events', async () => {
