@@ -3,10 +3,30 @@ import { adminAuth } from './firebase-admin';
 import pool from './db';
 
 export interface AuthUser {
+  id:    number;
   uid:   string;
   email: string;
   role:  'admin' | 'reviewer';
   name:  string;
+}
+
+export function reviewerSourceScope(user: AuthUser, eventAlias = 're') {
+  if (user.role === 'admin') return { clause: '', params: [] as any[] };
+
+  return {
+    clause: `
+      AND (
+        NOT EXISTS (
+          SELECT 1 FROM reviewer_sources
+          WHERE reviewer_id = ?
+        )
+        OR ${eventAlias}.source_id IN (
+          SELECT source_id FROM reviewer_sources
+          WHERE reviewer_id = ?
+        )
+      )`,
+    params: [user.id, user.id],
+  };
 }
 
 export async function getAuthUser(req: NextRequest): Promise<AuthUser | null> {
@@ -22,7 +42,7 @@ export async function getAuthUser(req: NextRequest): Promise<AuthUser | null> {
     ) as any;
     if (!user) return null;
 
-    return { uid: decoded.uid, email: user.email, role: user.role, name: user.full_name };
+    return { id: user.id, uid: decoded.uid, email: user.email, role: user.role, name: user.full_name };
   } catch {
     return null;
   }

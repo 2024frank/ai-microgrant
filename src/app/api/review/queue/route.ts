@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
-import { getAuthUser, unauthorized } from '@/lib/auth';
+import { getAuthUser, reviewerSourceScope, unauthorized } from '@/lib/auth';
 
 // GET /api/review/queue
 export async function GET(req: NextRequest) {
@@ -30,28 +30,8 @@ export async function GET(req: NextRequest) {
     params.push(source_id);
   }
 
-  // Reviewers are scoped to their assigned sources (if any).
-  // Admins see everything. The subquery always references reviewer_sources so
-  // the clause is present regardless of whether assignments exist.
-  let scopeClause = '';
-  const scopeParams: any[] = [];
-  if (user.role === 'reviewer') {
-    scopeClause = `
-      AND (
-        NOT EXISTS (
-          SELECT 1 FROM reviewer_sources rs2
-          JOIN users u2 ON u2.id = rs2.reviewer_id
-          WHERE u2.firebase_uid = ?
-        )
-        OR re.source_id IN (
-          SELECT rs.source_id FROM reviewer_sources rs
-          JOIN users u ON u.id = rs.reviewer_id
-          WHERE u.firebase_uid = ?
-        )
-      )`;
-    scopeParams.push(user.uid, user.uid);
-  }
-
+  // Reviewers are scoped to assigned sources; unassigned reviewers see all.
+  const { clause: scopeClause, params: scopeParams } = reviewerSourceScope(user, 're');
   const extraClause = clauses.length ? ' AND ' + clauses.join(' AND ') : '';
 
   const [events] = await pool.query(

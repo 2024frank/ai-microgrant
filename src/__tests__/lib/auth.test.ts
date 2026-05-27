@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { getAuthUser } from '@/lib/auth';
+import { getAuthUser, reviewerSourceScope } from '@/lib/auth';
 import { adminAuth } from '@/lib/firebase-admin';
 
 const db = require('@/lib/db');
@@ -47,6 +47,7 @@ describe('getAuthUser', () => {
 
     const result = await getAuthUser(makeReq('valid-token'));
     expect(result).not.toBeNull();
+    expect(result!.id).toBe(1);
     expect(result!.role).toBe('admin');
     expect(result!.email).toBe('admin@oberlin.edu');
   });
@@ -70,5 +71,34 @@ describe('getAuthUser', () => {
     await getAuthUser(makeReq('valid-token'));
     const queryCall = db.default.query.mock.calls[0];
     expect(queryCall[1][0]).toBe('user@oberlin.edu');
+  });
+});
+
+describe('reviewerSourceScope', () => {
+  it('does not scope admins', () => {
+    const scope = reviewerSourceScope({
+      id: 1,
+      uid: 'uid-admin',
+      email: 'admin@oberlin.edu',
+      role: 'admin',
+      name: 'Admin',
+    });
+
+    expect(scope.clause).toBe('');
+    expect(scope.params).toEqual([]);
+  });
+
+  it('scopes reviewers by database user id', () => {
+    const scope = reviewerSourceScope({
+      id: 2,
+      uid: 'firebase-uid-can-change',
+      email: 'reviewer@oberlin.edu',
+      role: 'reviewer',
+      name: 'Reviewer',
+    });
+
+    expect(scope.clause).toContain('reviewer_sources');
+    expect(scope.clause).toContain('re.source_id');
+    expect(scope.params).toEqual([2, 2]);
   });
 });

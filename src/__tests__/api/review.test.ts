@@ -1,6 +1,8 @@
 import { NextRequest } from 'next/server';
 import { GET } from '@/app/api/review/queue/route';
 import { POST } from '@/app/api/review/events/[id]/action/route';
+import { GET as getReviewEvent } from '@/app/api/review/events/[id]/route';
+import { POST as sendForCorrection } from '@/app/api/review/events/[id]/send-for-correction/route';
 import { adminAuth } from '@/lib/firebase-admin';
 
 // Mock global fetch for CommunityHub API calls
@@ -11,6 +13,7 @@ const db         = require('@/lib/db');
 const mockVerify = adminAuth.verifyIdToken as jest.Mock;
 
 const ADMIN = { id: 1, email: 'admin@oberlin.edu', role: 'admin', full_name: 'Admin', active: 1, firebase_uid: 'uid-admin' };
+const REVIEWER = { id: 2, email: 'rev@oberlin.edu', role: 'reviewer', full_name: 'Reviewer', active: 1, firebase_uid: 'uid-rev' };
 const PENDING = {
   id: 10, title: 'Jazz Night', status: 'pending', event_type: 'ot',
   description: 'A great jazz show',
@@ -127,6 +130,60 @@ describe('POST /api/review/events/:id/action', () => {
       ctx('999')
     );
     expect(res.status).toBe(404);
+  });
+
+  it('does not let an assigned reviewer act on an out-of-scope event by id', async () => {
+    mockVerify.mockResolvedValueOnce({ uid: 'uid-rev', email: 'rev@oberlin.edu' });
+    db.default.query
+      .mockResolvedValueOnce([[REVIEWER]])
+      .mockResolvedValueOnce([[]]);
+
+    const res = await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve' }),
+      ctx('10')
+    );
+
+    expect(res.status).toBe(404);
+    const [eventQuery, params] = db.default.query.mock.calls[1];
+    expect(eventQuery).toContain('reviewer_sources');
+    expect(params).toEqual(['10', REVIEWER.id, REVIEWER.id]);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/review/events/:id', () => {
+  it('uses reviewer source scope for direct event detail access', async () => {
+    mockVerify.mockResolvedValueOnce({ uid: 'uid-rev', email: 'rev@oberlin.edu' });
+    db.default.query
+      .mockResolvedValueOnce([[REVIEWER]])
+      .mockResolvedValueOnce([[]]);
+
+    const res = await getReviewEvent(makeReq('/api/review/events/10'), ctx('10'));
+
+    expect(res.status).toBe(404);
+    const [eventQuery, params] = db.default.query.mock.calls[1];
+    expect(eventQuery).toContain('reviewer_sources');
+    expect(params).toEqual(['10', REVIEWER.id, REVIEWER.id]);
+  });
+});
+
+describe('POST /api/review/events/:id/send-for-correction', () => {
+  it('uses reviewer source scope before creating a correction request', async () => {
+    mockVerify.mockResolvedValueOnce({ uid: 'uid-rev', email: 'rev@oberlin.edu' });
+    db.default.query
+      .mockResolvedValueOnce([[REVIEWER]])
+      .mockResolvedValueOnce([[]]);
+
+    const res = await sendForCorrection(
+      makeReq('/api/review/events/10/send-for-correction', { correction_notes: 'Fix the venue' }),
+      ctx('10')
+    );
+
+    expect(res.status).toBe(404);
+    const [eventQuery, params] = db.default.query.mock.calls[1];
+    expect(eventQuery).toContain('reviewer_sources');
+    expect(params).toEqual(['10', REVIEWER.id, REVIEWER.id]);
+    expect(db.mockConn.beginTransaction).not.toHaveBeenCalled();
   });
 });
 

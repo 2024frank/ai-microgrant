@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
-import { getAuthUser } from '@/lib/auth';
+import { getAuthUser, reviewerSourceScope } from '@/lib/auth';
 
 const CH_BASE = 'https://oberlin.communityhub.cloud/api/legacy/calendar';
 
@@ -37,11 +37,14 @@ export async function PATCH(
   const { id } = await context.params;
   const { edits = {} } = await req.json();
 
-  const [[event]] = await pool.query('SELECT * FROM raw_events WHERE id = ?', [id]) as any;
+  const { clause: scopeClause, params: scopeParams } = reviewerSourceScope(user, 're');
+  const [[event]] = await pool.query(
+    `SELECT re.* FROM raw_events re WHERE re.id = ? ${scopeClause}`,
+    [id, ...scopeParams]
+  ) as any;
   if (!event) return Response.json({ error: 'Not found' }, { status: 404 });
   if (!event.communityhub_post_id) return Response.json({ error: 'Not yet submitted' }, { status: 400 });
 
-  const [[dbUser]] = await pool.query('SELECT id FROM users WHERE firebase_uid = ?', [user.uid]) as any;
   const editableFields = ['title','description','extended_description','sessions','location_type',
     'location','place_name','room_num','url_link','sponsors','post_type_ids','geo_scope',
     'contact_email','email','phone','website','image_cdn_url','buttons','display'];
@@ -54,7 +57,7 @@ export async function PATCH(
         await conn.query(
           `INSERT INTO field_edit_log (raw_event_id, source_id, reviewer_id, field_name, old_value, new_value)
            VALUES (?,?,?,?,?,?)`,
-          [id, event.source_id, dbUser?.id, field, String(event[field] ?? ''), String(edits[field])]
+          [id, event.source_id, user.id, field, String(event[field] ?? ''), String(edits[field])]
         );
       }
     }
