@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
-import { getAuthUser, unauthorized } from '@/lib/auth';
+import { getAuthUser, reviewerSourceScope, unauthorized } from '@/lib/auth';
 
 const FIX_AGENT_SOURCE_ID = 6; // "Fixed Events" source
 
@@ -18,14 +18,14 @@ export async function POST(
     return Response.json({ error: 'correction_notes required' }, { status: 400 });
   }
 
+  const { clause: scopeClause, params: scopeParams } = reviewerSourceScope(user, 're');
   const [[event]] = await pool.query(
-    'SELECT id, source_id, title, status, calendar_source_url FROM raw_events WHERE id = ?', [eventId]
+    `SELECT re.id, re.source_id, re.title, re.status, re.calendar_source_url
+     FROM raw_events re
+     WHERE re.id = ? ${scopeClause}`,
+    [eventId, ...scopeParams]
   ) as any;
   if (!event) return Response.json({ error: 'Not found' }, { status: 404 });
-
-  const [[dbUser]] = await pool.query(
-    'SELECT id, email FROM users WHERE firebase_uid = ?', [user.uid]
-  ) as any;
 
   const conn = await pool.getConnection();
   try {
@@ -40,7 +40,7 @@ export async function POST(
          sent_by_user_id  = VALUES(sent_by_user_id),
          sent_by_email    = VALUES(sent_by_email),
          created_at       = CURRENT_TIMESTAMP`,
-      [eventId, event.source_id, correction_notes.trim(), dbUser?.id ?? null, dbUser?.email ?? null]
+      [eventId, event.source_id, correction_notes.trim(), user.id, user.email]
     );
 
     // Mark the event so the queue shows it differently
@@ -53,7 +53,7 @@ export async function POST(
     await conn.query(
       `INSERT INTO review_sessions (raw_event_id, reviewer_id, action, time_spent_sec, submitted_to_ch)
        VALUES (?, ?, 'sent_for_correction', 0, 0)`,
-      [eventId, dbUser?.id ?? null]
+      [eventId, user.id]
     );
 
     await (conn as any).commit();
@@ -102,18 +102,16 @@ export async function POST(
           [JSON.stringify([err.message]), runId]
         );
         // Notify the reviewer who sent it so they know to handle it manually
-        if (dbUser?.id) {
-          pool.query(
-            `INSERT INTO notifications (user_id, type, title, message, raw_event_id)
-             VALUES (?, 'fix_failed', ?, ?, ?)`,
-            [
-              dbUser.id,
-              `Fix agent failed: ${event.title}`,
-              `The AI could not process your correction request ("${(err.message || '').slice(0, 120)}"). The event has been returned to the queue for manual review.`,
-              eventId,
-            ]
-          ).catch(() => {});
-        }
+        pool.query(
+          `INSERT INTO notifications (user_id, type, title, message, raw_event_id)
+           VALUES (?, 'fix_failed', ?, ?, ?)`,
+          [
+            user.id,
+            `Fix agent failed: ${event.title}`,
+            `The AI could not process your correction request ("${(err.message || '').slice(0, 120)}"). The event has been returned to the queue for manual review.`,
+            eventId,
+          ]
+        ).catch(() => {});
       });
     });
 
