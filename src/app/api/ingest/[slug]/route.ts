@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
 import { sendReviewNotification } from '@/lib/email';
+import { verifyFixIngestToken } from '@/lib/fixToken';
 
 const MAX_EVENTS_PER_INGEST = 200;
 
@@ -14,7 +15,8 @@ function san(v: unknown, maxLen: number): string | null {
 /**
  * POST /api/ingest/:slug
  *
- * Requires x-ingest-secret header matching INGEST_SECRET env var.
+ * Requires either x-ingest-secret matching INGEST_SECRET, or a scoped
+ * x-fix-token for corrected fixed-events submissions.
  *
  * Body: { events: Event[], count?: number }
  * Response: { ok: true, run_id: number, inserted: number }
@@ -23,19 +25,15 @@ export async function POST(
   req: NextRequest,
   context: { params: Promise<{ slug: string }> }
 ) {
-  // ── auth ──────────────────────────────────────────────────────────
-  const secret = req.headers.get('x-ingest-secret');
-  if (!secret || secret !== process.env.INGEST_SECRET) {
-    return Response.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
   const { slug } = await context.params;
 
-  // Look up source by slug — don't reveal which slug failed
-  const [[source]] = await pool.query(
-    'SELECT * FROM sources WHERE slug = ? AND active = 1', [slug]
-  ) as any;
-  if (!source) return Response.json({ error: 'Not found' }, { status: 404 });
+  // ── auth ──────────────────────────────────────────────────────────
+  const secret = req.headers.get('x-ingest-secret');
+  const hasIngestSecret = !!secret && secret === process.env.INGEST_SECRET;
+  const fixToken = req.headers.get('x-fix-token');
+  if (!hasIngestSecret && !fixToken) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
 
   let body: any;
   try {
@@ -45,6 +43,22 @@ export async function POST(
   }
 
   const events: any[] = Array.isArray(body.events) ? body.events : [];
+  const hasCorrectionPayload = events.some(ev => ev?.fixedFromEventId !== undefined && ev?.fixedFromEventId !== null && ev?.fixedFromEventId !== '');
+  const hasValidFixToken = verifyFixIngestToken(fixToken, slug, events);
+  if (slug === 'fixed-events' && hasCorrectionPayload) {
+    if (!hasValidFixToken) {
+      return Response.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+  } else if (!hasIngestSecret && !hasValidFixToken) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  // Look up source by slug — don't reveal which slug failed
+  const [[source]] = await pool.query(
+    'SELECT * FROM sources WHERE slug = ? AND active = 1', [slug]
+  ) as any;
+  if (!source) return Response.json({ error: 'Not found' }, { status: 404 });
+
   const agentCount: number = body.count ?? events.length;
 
   // ── payload size guard ────────────────────────────────────────────
@@ -253,7 +267,7 @@ export async function OPTIONS() {
     headers: {
       'Access-Control-Allow-Origin':  '*',
       'Access-Control-Allow-Methods': 'POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Allow-Headers': 'Content-Type, x-ingest-secret, x-fix-token',
     },
   });
 }

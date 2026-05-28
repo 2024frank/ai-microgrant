@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
 import { getAuthUser, unauthorized } from '@/lib/auth';
+import { createFixIngestToken } from '@/lib/fixToken';
 
 const FIX_AGENT_SOURCE_ID = 6; // "Fixed Events" source
 
@@ -68,6 +69,7 @@ export async function POST(
     const runId = runResult.insertId;
 
     const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://ai-microgrant-research-oberlin.vercel.app';
+    const fixToken = createFixIngestToken('fixed-events', eventId);
     const fixMessage = [
       `A reviewer has sent an event back for correction. Fix it now.`,
       ``,
@@ -79,7 +81,7 @@ export async function POST(
       `Fetch the full event details from: ${appUrl}/api/fix-queue`,
       ``,
       `CRITICAL: When you POST the fixed event to ${appUrl}/api/ingest/fixed-events, you MUST include:`,
-      `  Header: x-ingest-secret: ${process.env.INGEST_SECRET}`,
+      `  Header: x-fix-token: ${fixToken}`,
       `  "fixedFromEventId": "${eventId}"`,
       `This exact value (${eventId}) links the fix back to the original event so the reviewer gets notified.`,
       `Do NOT use any other ID — use only ${eventId} as the fixedFromEventId.`,
