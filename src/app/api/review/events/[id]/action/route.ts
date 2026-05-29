@@ -24,6 +24,9 @@ export async function POST(
 
   const [[event]] = await pool.query('SELECT * FROM raw_events WHERE id = ?', [eventId]) as any;
   if (!event) return Response.json({ error: 'Not found' }, { status: 404 });
+  if (event.status === 'pending_fix') {
+    return Response.json({ error: 'Cannot review an event while correction is pending' }, { status: 409 });
+  }
   // Reject: only allowed on pending events
   // Approve/resubmit: allowed from any status (pending, rejected, or re-editing approved events)
   if (action === 'reject' && event.status !== 'pending') {

@@ -46,6 +46,18 @@ async function main() {
   `);
   console.log('✓ notifications table ready');
 
+  await conn.query(`
+    ALTER TABLE raw_events
+    MODIFY status ENUM('pending','approved','rejected','resubmitted','pending_fix') NOT NULL DEFAULT 'pending'
+  `);
+  console.log('✓ raw_events.status supports pending_fix');
+
+  await conn.query(`
+    ALTER TABLE review_sessions
+    MODIFY action ENUM('approved','rejected','sent_for_correction') NOT NULL
+  `);
+  console.log('✓ review_sessions.action supports sent_for_correction');
+
   // Add columns to raw_events (ignore error if already exist)
   for (const sql of [
     "ALTER TABLE raw_events ADD COLUMN sent_for_correction TINYINT(1) NOT NULL DEFAULT 0",
@@ -63,15 +75,27 @@ async function main() {
 
   // Create the "Fixed Events" source if it doesn't exist
   const [[existing]] = await conn.query(
-    "SELECT id FROM sources WHERE slug = 'fixed-events'"
+    "SELECT id, agent_id FROM sources WHERE slug = 'fixed-events'"
   ) as any;
+  const fixAgentId = (process.env.FIX_AGENT_ID || process.env.FIXED_EVENTS_AGENT_ID || '').trim();
   if (!existing) {
+    if (!fixAgentId) {
+      throw new Error('Set FIX_AGENT_ID before creating the fixed-events source');
+    }
     await conn.query(
-      `INSERT INTO sources (name, slug, agent_prompt, active, calendar_source_name)
-       VALUES ('Fixed Events', 'fixed-events', '', 1, 'Fixed Events')`
+      `INSERT INTO sources (name, slug, agent_id, active, calendar_source_name)
+       VALUES ('Fixed Events', 'fixed-events', ?, 1, 'Fixed Events')`,
+      [fixAgentId]
     );
     console.log('✓ "Fixed Events" source created');
   } else {
+    if (!existing.agent_id && fixAgentId) {
+      await conn.query(
+        "UPDATE sources SET agent_id = ? WHERE slug = 'fixed-events'",
+        [fixAgentId]
+      );
+      console.log('✓ "Fixed Events" agent_id updated');
+    }
     console.log('  "Fixed Events" source already exists');
   }
 

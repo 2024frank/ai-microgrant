@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
 import { sendReviewNotification } from '@/lib/email';
+import { isValidFixToken } from '@/lib/fixToken';
 
 const MAX_EVENTS_PER_INGEST = 200;
 
@@ -9,6 +10,17 @@ function san(v: unknown, maxLen: number): string | null {
   if (v == null) return null;
   const s = String(v).replace(/\0/g, '').trim();
   return s.length > 0 ? s.slice(0, maxLen) : null;
+}
+
+function parsePositiveInt(v: unknown): number | null {
+  const n = typeof v === 'number' ? v : parseInt(String(v ?? ''), 10);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+function conflict(message: string): Error {
+  const err = new Error(message) as Error & { statusCode?: number };
+  err.statusCode = 409;
+  return err;
 }
 
 /**
@@ -23,12 +35,6 @@ export async function POST(
   req: NextRequest,
   context: { params: Promise<{ slug: string }> }
 ) {
-  // ── auth ──────────────────────────────────────────────────────────
-  const secret = req.headers.get('x-ingest-secret');
-  if (!secret || secret !== process.env.INGEST_SECRET) {
-    return Response.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
   const { slug } = await context.params;
 
   // Look up source by slug — don't reveal which slug failed
@@ -46,11 +52,30 @@ export async function POST(
 
   const events: any[] = Array.isArray(body.events) ? body.events : [];
   const agentCount: number = body.count ?? events.length;
+  const isFixedSource = source.slug === 'fixed-events';
+
+  // ── auth ──────────────────────────────────────────────────────────
+  const ingestSecret = process.env.INGEST_SECRET?.trim();
+  const hasIngestSecret = !!ingestSecret && req.headers.get('x-ingest-secret') === ingestSecret;
+  if (!hasIngestSecret) {
+    const fixedFromId = events.length === 1 ? parsePositiveInt(events[0]?.fixedFromEventId) : null;
+    const fixToken = req.headers.get('x-fix-token');
+    if (!isFixedSource || !fixedFromId || !isValidFixToken(fixedFromId, fixToken)) {
+      return Response.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+  }
 
   // ── payload size guard ────────────────────────────────────────────
   if (events.length > MAX_EVENTS_PER_INGEST) {
     return Response.json(
       { error: `Too many events — max ${MAX_EVENTS_PER_INGEST} per request` },
+      { status: 422 }
+    );
+  }
+
+  if (isFixedSource && events.some(ev => !parsePositiveInt(ev.fixedFromEventId))) {
+    return Response.json(
+      { error: 'fixed-events ingest requires fixedFromEventId on every event' },
       { status: 422 }
     );
   }
@@ -80,26 +105,23 @@ export async function POST(
     await (conn as any).beginTransaction();
 
     for (const ev of events) {
-      // If this event resolves a correction request, find the matching needs_fix entry.
-      // Primary lookup: by raw_event_id (exact match from fix-queue response).
-      // Fallback: by calendar_source_url, in case the agent submitted the wrong ID.
-      const fixedFromId: number | null = ev.fixedFromEventId ? parseInt(ev.fixedFromEventId) : null;
+      // The dedicated fixed-events source must resolve exactly one queued correction by id.
+      const fixedFromId: number | null = isFixedSource ? parsePositiveInt(ev.fixedFromEventId) : null;
       let fixEntry: any = null;
-      if (fixedFromId) {
+      if (isFixedSource) {
         const [[row]] = await conn.query(
-          'SELECT * FROM needs_fix WHERE raw_event_id = ?', [fixedFromId]
-        ) as any;
-        fixEntry = row || null;
-      }
-      if (!fixEntry && ev.calendarSourceUrl) {
-        const [[row]] = await conn.query(
-          `SELECT nf.* FROM needs_fix nf
+          `SELECT nf.*, re.status AS raw_status
+           FROM needs_fix nf
            JOIN raw_events re ON re.id = nf.raw_event_id
-           WHERE re.calendar_source_url = ?
-           LIMIT 1`,
-          [ev.calendarSourceUrl]
+           WHERE nf.raw_event_id = ?
+           FOR UPDATE`,
+          [fixedFromId]
         ) as any;
         fixEntry = row || null;
+        if (!fixEntry) throw conflict('No pending correction exists for fixedFromEventId');
+        if (fixEntry.raw_status !== 'pending_fix') {
+          throw conflict('Original event is no longer pending correction');
+        }
       }
 
       const [res] = await conn.query(
@@ -152,10 +174,16 @@ export async function POST(
       );
 
       // If this resolves a fix request: remove original pending_fix event, clean needs_fix, notify sender
-      if (fixedFromId && fixEntry) {
+      if (isFixedSource && fixedFromId && fixEntry) {
         await conn.query('DELETE FROM needs_fix WHERE raw_event_id = ?', [fixedFromId]);
         // Remove the original pending_fix event so only the corrected version stays in the queue
-        await conn.query('DELETE FROM raw_events WHERE id = ? AND status = ?', [fixedFromId, 'pending_fix']);
+        const [deleteRes] = await conn.query(
+          'DELETE FROM raw_events WHERE id = ? AND status = ?',
+          [fixedFromId, 'pending_fix']
+        ) as any;
+        if (deleteRes.affectedRows !== 1) {
+          throw conflict('Original event is no longer pending correction');
+        }
         if (fixEntry.sent_by_user_id) {
           const notifTitle = `Fixed: ${ev.title || 'Event'}`;
           const parts: string[] = [];
@@ -180,7 +208,11 @@ export async function POST(
       `UPDATE agent_runs SET status='failed', finished_at=NOW(), error_log=? WHERE id=?`,
       [JSON.stringify([err.message]), runId]
     );
-    return Response.json({ error: `DB error: ${err.message}` }, { status: 500 });
+    const status = err.statusCode ?? 500;
+    return Response.json(
+      { error: status === 500 ? `DB error: ${err.message}` : err.message },
+      { status }
+    );
   } finally {
     (conn as any).release();
   }
@@ -253,7 +285,7 @@ export async function OPTIONS() {
     headers: {
       'Access-Control-Allow-Origin':  '*',
       'Access-Control-Allow-Methods': 'POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Allow-Headers': 'Content-Type, x-ingest-secret, x-fix-token',
     },
   });
 }
