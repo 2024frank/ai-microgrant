@@ -6,6 +6,8 @@ SET FOREIGN_KEY_CHECKS = 0;
 SET NAMES utf8mb4;
 
 DROP TABLE IF EXISTS review_sessions;
+DROP TABLE IF EXISTS notifications;
+DROP TABLE IF EXISTS needs_fix;
 DROP TABLE IF EXISTS field_edit_log;
 DROP TABLE IF EXISTS rejection_log;
 DROP TABLE IF EXISTS raw_events;
@@ -102,7 +104,10 @@ CREATE TABLE raw_events (
   ingested_post_url     TEXT                              NULL,
   geo_scope             ENUM('hyper_local','city_wide','county','regional') NULL,
   geo_json              JSON                              NULL,
-  status                ENUM('pending','approved','rejected','resubmitted') NOT NULL DEFAULT 'pending',
+  sent_for_correction   TINYINT(1)                        NOT NULL DEFAULT 0,
+  corrected_from_id     INT UNSIGNED                      NULL,
+  sent_for_fix_by       VARCHAR(255)                      NULL,
+  status                ENUM('pending','approved','rejected','resubmitted','pending_fix') NOT NULL DEFAULT 'pending',
   communityhub_post_id  VARCHAR(80)                       NULL,
   created_at            DATETIME                          NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at            DATETIME                          NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -154,7 +159,7 @@ CREATE TABLE review_sessions (
   id              INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   raw_event_id    INT UNSIGNED    NOT NULL,
   reviewer_id     INT UNSIGNED    NULL,
-  action          ENUM('approved','rejected') NOT NULL,
+  action          ENUM('approved','rejected','sent_for_correction') NOT NULL,
   time_spent_sec  INT UNSIGNED    NULL,
   submitted_to_ch TINYINT(1)     NOT NULL DEFAULT 0,
   ch_response     JSON            NULL,
@@ -164,5 +169,36 @@ CREATE TABLE review_sessions (
 
 CREATE INDEX idx_rsess_action  ON review_sessions(action);
 CREATE INDEX idx_rsess_created ON review_sessions(created_at);
+
+-- 9. CORRECTION QUEUE
+CREATE TABLE needs_fix (
+  id                INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  raw_event_id      INT UNSIGNED NOT NULL,
+  source_id         INT UNSIGNED NOT NULL,
+  correction_notes  TEXT         NOT NULL,
+  sent_by_user_id   INT UNSIGNED NULL,
+  sent_by_email     VARCHAR(255) NULL,
+  created_at        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_needs_fix_event (raw_event_id),
+  CONSTRAINT fk_fix_raw    FOREIGN KEY (raw_event_id)    REFERENCES raw_events(id) ON DELETE CASCADE,
+  CONSTRAINT fk_fix_source FOREIGN KEY (source_id)       REFERENCES sources(id)    ON DELETE CASCADE,
+  CONSTRAINT fk_fix_user   FOREIGN KEY (sent_by_user_id) REFERENCES users(id)      ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 10. NOTIFICATIONS
+CREATE TABLE notifications (
+  id           INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  user_id      INT UNSIGNED NOT NULL,
+  type         VARCHAR(50)  NOT NULL DEFAULT 'event_fixed',
+  title        VARCHAR(255) NULL,
+  message      TEXT         NULL,
+  raw_event_id INT UNSIGNED NULL,
+  read_at      DATETIME     NULL,
+  created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_notif_user FOREIGN KEY (user_id)      REFERENCES users(id)      ON DELETE CASCADE,
+  CONSTRAINT fk_notif_raw  FOREIGN KEY (raw_event_id) REFERENCES raw_events(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE INDEX idx_notif_user_unread ON notifications(user_id, read_at);
 
 SET FOREIGN_KEY_CHECKS = 1;

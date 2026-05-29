@@ -1,8 +1,7 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
 import { getAuthUser, unauthorized } from '@/lib/auth';
-
-const FIX_AGENT_SOURCE_ID = 6; // "Fixed Events" source
+import { createFixToken } from '@/lib/fixToken';
 
 export async function POST(
   req: NextRequest,
@@ -23,9 +22,42 @@ export async function POST(
   ) as any;
   if (!event) return Response.json({ error: 'Not found' }, { status: 404 });
 
+  if (event.status !== 'pending') {
+    return Response.json({ error: 'Can only send pending events for correction' }, { status: 409 });
+  }
+
   const [[dbUser]] = await pool.query(
-    'SELECT id, email FROM users WHERE firebase_uid = ?', [user.uid]
+    'SELECT id, email FROM users WHERE email = ? AND active = 1', [user.email]
   ) as any;
+  if (!dbUser) return unauthorized();
+
+  if (user.role === 'reviewer') {
+    const [[scope]] = await pool.query(
+      `SELECT COUNT(*) AS assignments,
+              SUM(source_id = ?) AS matching_assignments
+       FROM reviewer_sources
+       WHERE reviewer_id = ?`,
+      [event.source_id, dbUser.id]
+    ) as any;
+
+    if (Number(scope?.assignments || 0) > 0 && Number(scope?.matching_assignments || 0) === 0) {
+      return Response.json({ error: 'Forbidden' }, { status: 403 });
+    }
+  }
+
+  const [[fixSource]] = await pool.query(
+    "SELECT id, agent_id FROM sources WHERE slug = 'fixed-events' AND active = 1"
+  ) as any;
+  if (!fixSource?.id || !fixSource?.agent_id) {
+    return Response.json({ error: 'Fixed Events source is not configured' }, { status: 500 });
+  }
+
+  let fixToken: string;
+  try {
+    fixToken = createFixToken(eventId);
+  } catch (err: any) {
+    return Response.json({ error: err.message }, { status: 500 });
+  }
 
   const conn = await pool.getConnection();
   try {
@@ -56,16 +88,17 @@ export async function POST(
       [eventId, dbUser?.id ?? null]
     );
 
+    const [runResult] = await conn.query(
+      "INSERT INTO agent_runs (source_id, status) VALUES (?, 'running')",
+      [fixSource.id]
+    ) as any;
+    const runId = runResult.insertId;
+
     await (conn as any).commit();
 
     // Fire fix agent in background — don't block the response
     const anthropicKey   = process.env.ANTHROPIC_API_KEY   ?? '';
     const environmentId  = process.env.SOURCE_BUILDER_ENVIRONMENT_ID ?? '';
-    const [runResult] = await pool.query(
-      "INSERT INTO agent_runs (source_id, status) VALUES (?, 'running')",
-      [FIX_AGENT_SOURCE_ID]
-    ) as any;
-    const runId = runResult.insertId;
 
     const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://ai-microgrant-research-oberlin.vercel.app';
     const fixMessage = [
@@ -79,7 +112,7 @@ export async function POST(
       `Fetch the full event details from: ${appUrl}/api/fix-queue`,
       ``,
       `CRITICAL: When you POST the fixed event to ${appUrl}/api/ingest/fixed-events, you MUST include:`,
-      `  Header: x-ingest-secret: ${process.env.INGEST_SECRET}`,
+      `  Header: x-fix-token: ${fixToken}`,
       `  "fixedFromEventId": "${eventId}"`,
       `This exact value (${eventId}) links the fix back to the original event so the reviewer gets notified.`,
       `Do NOT use any other ID — use only ${eventId} as the fixedFromEventId.`,
@@ -90,17 +123,18 @@ export async function POST(
     ].join('\n');
 
     import('@/lib/agentRunner').then(({ triggerAgentRun }) => {
-      triggerAgentRun(FIX_AGENT_SOURCE_ID, runId, anthropicKey, environmentId, fixMessage).catch((err: Error) => {
+      triggerAgentRun(fixSource.id, runId, anthropicKey, environmentId, fixMessage).catch((err: Error) => {
         console.error(`Fix agent run ${runId} failed:`, err.message);
-        // Revert the event back to 'pending' so reviewers can still act on it
+        // Revert the correction state together so stale fix-queue entries cannot be processed later.
+        pool.query('DELETE FROM needs_fix WHERE raw_event_id = ?', [eventId]).catch(() => {});
         pool.query(
-          "UPDATE raw_events SET status='pending', sent_for_correction=0 WHERE id=?",
+          "UPDATE raw_events SET status='pending', sent_for_correction=0 WHERE id=? AND status='pending_fix'",
           [eventId]
-        );
+        ).catch(() => {});
         pool.query(
           "UPDATE agent_runs SET status='failed', finished_at=NOW(), error_log=? WHERE id=?",
           [JSON.stringify([err.message]), runId]
-        );
+        ).catch(() => {});
         // Notify the reviewer who sent it so they know to handle it manually
         if (dbUser?.id) {
           pool.query(
