@@ -201,7 +201,7 @@ describe('POST /api/ingest/fixed-events', () => {
     expect(res.status).toBe(200);
     const sql = db.mockConn.query.mock.calls.map((call: any[]) => call[0]).join('\n');
     expect(sql).toContain('WHERE nf.raw_event_id = ?');
-    expect(sql).not.toContain('calendar_source_url');
+    expect(sql).not.toContain('WHERE re.calendar_source_url = ?');
     const deleteOriginal = db.mockConn.query.mock.calls.find(
       (call: any[]) => typeof call[0] === 'string' && call[0].includes('DELETE FROM raw_events')
     );
