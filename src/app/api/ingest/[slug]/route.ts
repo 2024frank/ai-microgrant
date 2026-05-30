@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
 import { sendReviewNotification } from '@/lib/email';
+import { mergePosterImages } from '@/lib/mergePosters';
 
 const MAX_EVENTS_PER_INGEST = 200;
 
@@ -102,6 +103,12 @@ export async function POST(
         fixEntry = row || null;
       }
 
+      // If agent passed poster_urls, merge them into a single base64 image
+      let imageCdnUrl = san(ev.image_cdn_url, 500);
+      if (Array.isArray(ev.poster_urls) && ev.poster_urls.length > 0) {
+        imageCdnUrl = await mergePosterImages(ev.poster_urls) ?? imageCdnUrl;
+      }
+
       const [res] = await conn.query(
         `INSERT INTO raw_events (
           source_id, agent_run_id, event_type, title, description,
@@ -114,7 +121,7 @@ export async function POST(
         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')`,
         [
           source.id, runId,
-          ['ot','ev','cl','ex','vt','sp','pe','wk','ms','ws'].includes(ev.eventType) ? ev.eventType : 'ot',
+          ['ot','ev','cl','ex','vt','sp','pe','wk','ms','ws','an'].includes(ev.eventType) ? ev.eventType : 'ot',
           san(ev.title, 200)           || 'Untitled',
           san(ev.description, 2000)    || '',
           san(ev.extendedDescription, 5000),
@@ -134,7 +141,7 @@ export async function POST(
           san(ev.email, 150)           || 'fkusiapp@Oberlin.edu',
           san(ev.phone,   30),
           san(ev.website, 500),
-          san(ev.image_cdn_url, 500),
+          imageCdnUrl,
           san(ev.calendarSourceName || source.calendar_source_name || source.name, 200),
           san(ev.calendarSourceUrl, 500),
           ['local','hyper_local','regional','national'].includes(ev.geo_scope) ? ev.geo_scope : null,

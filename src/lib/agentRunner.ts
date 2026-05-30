@@ -62,8 +62,14 @@ export async function triggerAgentRun(
     const outputChunks: string[] = [];
     let afterCreatedAt: string | undefined;
     let done = false;
+    const TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+    const deadline = Date.now() + TIMEOUT_MS;
 
     while (!done) {
+      if (Date.now() > deadline) {
+        throw new Error(`Agent run timed out after 30 minutes (session ${session.id})`);
+      }
+
       const page = await client.beta.sessions.events.list(session.id, {
         ...(afterCreatedAt ? { 'created_at[gt]': afterCreatedAt } : {}),
         limit: 100,
