@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/hooks/useAuth';
-import { Clock, Globe, Calendar, ArrowUpDown, Filter, RotateCcw, X, Wrench } from 'lucide-react';
+import { Clock, Globe, Calendar, ArrowUpDown, Filter, RotateCcw, X, Wrench, CheckSquare, Square, CheckCheck } from 'lucide-react';
 
 import { formatDateTime } from '@/lib/timezone';
 
@@ -21,6 +21,19 @@ const SORT_OPTIONS = [
   { value: 'event_date_desc', label: 'Event date: latest first' },
 ];
 
+const REASON_CODES = [
+  { code: 'wrong_audience',           label: 'Wrong audience' },
+  { code: 'bad_date_parse',           label: 'Bad date/time' },
+  { code: 'duplicate_missed',         label: 'Duplicate' },
+  { code: 'description_hallucinated', label: 'Hallucinated description' },
+  { code: 'missing_fields',           label: 'Missing fields' },
+  { code: 'wrong_geo_scope',          label: 'Wrong geo scope' },
+  { code: 'not_public_event',         label: 'Not public' },
+  { code: 'wrong_post_type',          label: 'Wrong post type' },
+  { code: 'bad_location',             label: 'Bad location' },
+  { code: 'other',                    label: 'Other' },
+];
+
 export default function ReviewerQueuePage() {
   const { user, token, ready } = useAuth();
   const [events, setEvents]    = useState<any[]>([]);
@@ -34,6 +47,15 @@ export default function ReviewerQueuePage() {
   const [sendBackModal, setSendBackModal]   = useState<{ eventId: number; title: string } | null>(null);
   const [correctionNotes, setCorrectionNotes] = useState('');
   const [sendingBack, setSendingBack]         = useState(false);
+
+  // Bulk select state
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [bulkRejectModal, setBulkRejectModal] = useState(false);
+  const [bulkRejectReasons, setBulkRejectReasons] = useState<string[]>(['other']);
+  const [bulkRejectNote, setBulkRejectNote] = useState('');
+  const [bulkProcessing, setBulkProcessing] = useState(false);
+  const [bulkResult, setBulkResult] = useState<{ ok: number; failed: number } | null>(null);
+
   const lastTotalRef = useRef<number | null>(null);
   const pollRef      = useRef<NodeJS.Timeout | null>(null);
   const router = useRouter();
@@ -53,6 +75,7 @@ export default function ReviewerQueuePage() {
         setEvents(d.events || []);
         setTotal(d.total  || 0);
         if (d.sources?.length) setSources(d.sources);
+        setSelected(new Set());
       })
       .finally(() => setLoading(false));
   }, [token, page, sort, sourceId]);
@@ -62,10 +85,8 @@ export default function ReviewerQueuePage() {
     loadQueue();
   }, [ready, token, loadQueue]);
 
-  // Reset to page 0 when filters change
   useEffect(() => { setPage(0); }, [sort, sourceId]);
 
-  // Poll for new events every 10s — show toast if count increases
   useEffect(() => {
     if (!ready || !token) return;
     const check = () => {
@@ -73,9 +94,7 @@ export default function ReviewerQueuePage() {
         .then(r => r.json())
         .then(d => {
           const newTotal = d.total || 0;
-          if (lastTotalRef.current !== null && newTotal > lastTotalRef.current) {
-            setNewEventsToast(true);
-          }
+          if (lastTotalRef.current !== null && newTotal > lastTotalRef.current) setNewEventsToast(true);
           lastTotalRef.current = newTotal;
         }).catch(() => {});
     };
@@ -89,6 +108,64 @@ export default function ReviewerQueuePage() {
   function refreshQueue() {
     setNewEventsToast(false);
     lastTotalRef.current = null;
+    loadQueue();
+  }
+
+  const allSelected = events.length > 0 && events.every(ev => selected.has(ev.id));
+  const someSelected = selected.size > 0;
+
+  function toggleSelectAll() {
+    if (allSelected) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(events.map(ev => ev.id)));
+    }
+  }
+
+  function toggleSelect(id: number, e: React.MouseEvent) {
+    e.stopPropagation();
+    setSelected(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+
+  async function bulkApprove() {
+    if (!token || selected.size === 0) return;
+    setBulkProcessing(true);
+    setBulkResult(null);
+    const ids = Array.from(selected);
+    const results = await Promise.all(ids.map(id =>
+      fetch(`/api/review/events/${id}/action`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'approve', edits: {}, time_spent_sec: 0 }),
+      }).then(r => r.ok).catch(() => false)
+    ));
+    const ok = results.filter(Boolean).length;
+    setBulkResult({ ok, failed: ids.length - ok });
+    setBulkProcessing(false);
+    loadQueue();
+  }
+
+  async function bulkReject() {
+    if (!token || selected.size === 0 || bulkRejectReasons.length === 0) return;
+    setBulkProcessing(true);
+    const ids = Array.from(selected);
+    const results = await Promise.all(ids.map(id =>
+      fetch(`/api/review/events/${id}/action`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ action: 'reject', edits: { reason_codes: bulkRejectReasons, reviewer_note: bulkRejectNote }, time_spent_sec: 0 }),
+      }).then(r => r.ok).catch(() => false)
+    ));
+    const ok = results.filter(Boolean).length;
+    setBulkResult({ ok, failed: ids.length - ok });
+    setBulkProcessing(false);
+    setBulkRejectModal(false);
+    setBulkRejectNote('');
+    setBulkRejectReasons(['other']);
     loadQueue();
   }
 
@@ -122,51 +199,43 @@ export default function ReviewerQueuePage() {
 
   const selectStyle: React.CSSProperties = {
     border: '1px solid #dde', borderRadius: 7, padding: '6px 10px',
-    fontSize: 13, background: 'white', color: '#333', cursor: 'pointer',
-    outline: 'none',
+    fontSize: 13, background: 'white', color: '#333', cursor: 'pointer', outline: 'none',
   };
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: '#f8f9fa' }}>
       <Sidebar role={user.role} name={user.name} email={user.email} token={token} />
+
       {newEventsToast && (
-        <div style={{ position: 'fixed', top: 20, left: '50%', transform: 'translateX(-50%)', background: '#3a8c3f', color: 'white', padding: '0.75rem 1.25rem', borderRadius: 8, fontSize: 13, fontWeight: 600, zIndex: 999, boxShadow: '0 4px 16px rgba(0,0,0,0.2)', display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer' }}
+        <div style={{ position:'fixed', top:20, left:'50%', transform:'translateX(-50%)', background:'#3a8c3f', color:'white', padding:'0.75rem 1.25rem', borderRadius:8, fontSize:13, fontWeight:600, zIndex:999, boxShadow:'0 4px 16px rgba(0,0,0,0.2)', display:'flex', alignItems:'center', gap:12, cursor:'pointer' }}
           onClick={refreshQueue}>
           🆕 New events arrived — click to refresh
         </div>
       )}
-      <main style={{ flex: 1, padding: '2rem' }}>
+
+      <main style={{ flex:1, padding:'2rem' }}>
 
         {/* Header */}
-        <div style={{ marginBottom: '1.25rem' }}>
-          <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>Review queue</h1>
-          <p style={{ fontSize: 13, color: '#888' }}>{total} event{total!==1?'s':''} pending review</p>
+        <div style={{ marginBottom:'1.25rem' }}>
+          <h1 style={{ fontSize:22, fontWeight:700, marginBottom:4 }}>Review queue</h1>
+          <p style={{ fontSize:13, color:'#888' }}>{total} event{total!==1?'s':''} pending review</p>
         </div>
 
         {/* Filter / sort bar */}
         <div style={{ display:'flex', gap:10, alignItems:'center', marginBottom:'1.25rem', flexWrap:'wrap' }}>
-          {/* Source filter */}
           <div style={{ display:'flex', alignItems:'center', gap:6 }}>
             <Filter size={13} color="#888"/>
             <select value={sourceId} onChange={e => setSourceId(e.target.value)} style={selectStyle}>
               <option value="">All sources</option>
-              {sources.map(s => (
-                <option key={s.id} value={String(s.id)}>{s.name}</option>
-              ))}
+              {sources.map(s => <option key={s.id} value={String(s.id)}>{s.name}</option>)}
             </select>
           </div>
-
-          {/* Sort */}
           <div style={{ display:'flex', alignItems:'center', gap:6 }}>
             <ArrowUpDown size={13} color="#888"/>
             <select value={sort} onChange={e => setSort(e.target.value)} style={selectStyle}>
-              {SORT_OPTIONS.map(o => (
-                <option key={o.value} value={o.value}>{o.label}</option>
-              ))}
+              {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
           </div>
-
-          {/* Active filter chip */}
           {sourceId && (
             <button onClick={() => setSourceId('')}
               style={{ display:'flex', alignItems:'center', gap:4, background:'#e8f5e9', color:'#3a8c3f', border:'none', borderRadius:20, padding:'4px 10px', fontSize:11, fontWeight:700, cursor:'pointer' }}>
@@ -174,6 +243,40 @@ export default function ReviewerQueuePage() {
             </button>
           )}
         </div>
+
+        {/* Bulk action bar */}
+        {someSelected && (
+          <div style={{ display:'flex', alignItems:'center', gap:10, background:'#1a1a2e', color:'white', borderRadius:10, padding:'10px 16px', marginBottom:'1rem', flexWrap:'wrap' }}>
+            <span style={{ fontSize:13, fontWeight:600 }}>{selected.size} selected</span>
+            <button onClick={() => setSelected(new Set())}
+              style={{ background:'rgba(255,255,255,0.1)', border:'none', color:'white', borderRadius:6, padding:'4px 10px', fontSize:12, cursor:'pointer' }}>
+              Clear
+            </button>
+            <div style={{ flex:1 }}/>
+            <button
+              onClick={bulkApprove}
+              disabled={bulkProcessing}
+              style={{ background:'#3a8c3f', border:'none', color:'white', borderRadius:7, padding:'7px 18px', fontSize:13, fontWeight:700, cursor:'pointer', display:'flex', alignItems:'center', gap:6, opacity: bulkProcessing ? 0.6 : 1 }}>
+              <CheckCheck size={14}/> {bulkProcessing ? 'Processing…' : `Approve ${selected.size}`}
+            </button>
+            <button
+              onClick={() => setBulkRejectModal(true)}
+              disabled={bulkProcessing}
+              style={{ background:'#c0392b', border:'none', color:'white', borderRadius:7, padding:'7px 18px', fontSize:13, fontWeight:700, cursor:'pointer', display:'flex', alignItems:'center', gap:6, opacity: bulkProcessing ? 0.6 : 1 }}>
+              <X size={14}/> Reject {selected.size}
+            </button>
+          </div>
+        )}
+
+        {/* Bulk result toast */}
+        {bulkResult && (
+          <div style={{ background: bulkResult.failed ? '#fff3e0' : '#e8f5e9', border:`1px solid ${bulkResult.failed ? '#c05e00' : '#3a8c3f'}`, borderRadius:8, padding:'10px 16px', marginBottom:'1rem', fontSize:13, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+            <span style={{ color: bulkResult.failed ? '#c05e00' : '#2a6b2e', fontWeight:600 }}>
+              {bulkResult.ok} succeeded{bulkResult.failed > 0 ? `, ${bulkResult.failed} failed` : ''}
+            </span>
+            <button onClick={() => setBulkResult(null)} style={{ background:'none', border:'none', cursor:'pointer', color:'#999' }}><X size={13}/></button>
+          </div>
+        )}
 
         {/* Event list */}
         {loading ? (
@@ -190,17 +293,33 @@ export default function ReviewerQueuePage() {
           </div>
         ) : (
           <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+            {/* Select all row */}
+            <div style={{ display:'flex', alignItems:'center', gap:10, padding:'4px 6px' }}>
+              <button onClick={toggleSelectAll} style={{ background:'none', border:'none', cursor:'pointer', color:'#3a8c3f', display:'flex', alignItems:'center', gap:6, fontSize:12, fontWeight:600, padding:'2px 4px' }}>
+                {allSelected ? <CheckSquare size={15}/> : <Square size={15}/>}
+                {allSelected ? 'Deselect all' : 'Select all'}
+              </button>
+            </div>
+
             {events.map(ev => {
               const [bg,fg] = (GEO_COLORS[ev.geo_scope]||'#f0f0f0|#555').split('|');
-              const isPendingFix  = !!ev.sent_for_correction;
-              const isFixed       = !!ev.corrected_from_id;
-              const isFixedSource = ev.source_slug === 'fixed-events';
+              const isPendingFix = !!ev.sent_for_correction;
+              const isFixed      = !!ev.corrected_from_id;
+              const isSelected   = selected.has(ev.id);
               return (
                 <div key={ev.id}
                   className="card"
-                  style={{ cursor:'pointer', display:'flex', alignItems:'center', gap:'1rem', padding:'1rem 1.25rem', opacity: isPendingFix ? 0.7 : 1 }}
+                  style={{ cursor:'pointer', display:'flex', alignItems:'center', gap:'0.75rem', padding:'1rem 1.25rem', opacity: isPendingFix ? 0.7 : 1, outline: isSelected ? '2px solid #3a8c3f' : 'none', background: isSelected ? '#f0faf0' : 'white' }}
                   onMouseEnter={e=>(e.currentTarget.style.boxShadow='0 2px 12px rgba(58,140,63,0.15)')}
                   onMouseLeave={e=>(e.currentTarget.style.boxShadow='none')}>
+
+                  {/* Checkbox */}
+                  <button
+                    onClick={e => toggleSelect(ev.id, e)}
+                    style={{ background:'none', border:'none', cursor:'pointer', color: isSelected ? '#3a8c3f' : '#ccc', flexShrink:0, padding:2, display:'flex', alignItems:'center' }}>
+                    {isSelected ? <CheckSquare size={17}/> : <Square size={17}/>}
+                  </button>
+
                   {/* Clickable area */}
                   <div style={{ display:'flex', alignItems:'center', gap:'1rem', flex:1, minWidth:0 }}
                     onClick={() => router.push(`/reviewer/events/${ev.id}`)}>
@@ -221,7 +340,7 @@ export default function ReviewerQueuePage() {
                           </span>
                         )}
                         {isFixed && (
-                          <span style={{ fontSize:10, padding:'1px 8px', borderRadius:20, background:'#e8f5e9', color:'#2a6b2e', fontWeight:700, flexShrink:0 }} title={`Sent back by ${ev.sent_for_fix_by || 'reviewer'}`}>
+                          <span style={{ fontSize:10, padding:'1px 8px', borderRadius:20, background:'#e8f5e9', color:'#2a6b2e', fontWeight:700, flexShrink:0 }}>
                             ✓ Fixed
                           </span>
                         )}
@@ -236,7 +355,6 @@ export default function ReviewerQueuePage() {
                       </div>
                     </div>
                   </div>
-
                   <div style={{ fontSize:11, color:'#bbb' }} onClick={() => router.push(`/reviewer/events/${ev.id}`)}>→</div>
                 </div>
               );
@@ -262,20 +380,55 @@ export default function ReviewerQueuePage() {
               <textarea
                 value={correctionNotes}
                 onChange={e => setCorrectionNotes(e.target.value)}
-                placeholder="e.g. The geo_scope should be city_wide not regional. The event is on-campus and open to the public."
+                placeholder="e.g. The geo_scope should be city_wide not regional."
                 rows={4}
                 autoFocus
                 style={{ width:'100%', border:'1px solid #ddd', borderRadius:7, padding:'10px 12px', fontSize:13, fontFamily:'inherit', resize:'vertical', boxSizing:'border-box', outline:'none' }}
               />
               <div style={{ display:'flex', gap:8, marginTop:'1rem', justifyContent:'flex-end' }}>
-                <button onClick={() => setSendBackModal(null)} style={{ background:'#f5f5f5', border:'1px solid #ddd', color:'#666', borderRadius:7, padding:'8px 16px', fontSize:13, cursor:'pointer' }}>
-                  Cancel
-                </button>
-                <button
-                  onClick={submitSendBack}
-                  disabled={!correctionNotes.trim() || sendingBack}
+                <button onClick={() => setSendBackModal(null)} style={{ background:'#f5f5f5', border:'1px solid #ddd', color:'#666', borderRadius:7, padding:'8px 16px', fontSize:13, cursor:'pointer' }}>Cancel</button>
+                <button onClick={submitSendBack} disabled={!correctionNotes.trim() || sendingBack}
                   style={{ background: correctionNotes.trim() ? '#c05e00' : '#ddd', color:'white', border:'none', borderRadius:7, padding:'8px 18px', fontSize:13, fontWeight:700, cursor: correctionNotes.trim() ? 'pointer' : 'not-allowed', display:'flex', alignItems:'center', gap:6 }}>
                   <RotateCcw size={13}/> {sendingBack ? 'Sending…' : 'Send for correction'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Bulk reject modal */}
+        {bulkRejectModal && (
+          <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.4)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:'1rem' }}
+            onClick={e => { if (e.target === e.currentTarget) setBulkRejectModal(false); }}>
+            <div style={{ background:'white', borderRadius:12, padding:'1.5rem', maxWidth:480, width:'100%', boxShadow:'0 8px 32px rgba(0,0,0,0.2)' }}>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'1rem' }}>
+                <span style={{ fontSize:15, fontWeight:700 }}>Reject {selected.size} event{selected.size!==1?'s':''}</span>
+                <button onClick={() => setBulkRejectModal(false)} style={{ background:'none', border:'none', cursor:'pointer', color:'#bbb' }}><X size={16}/></button>
+              </div>
+              <p style={{ fontSize:13, color:'#666', marginBottom:'0.75rem' }}>Select reason{bulkRejectReasons.length!==1?'s':''}:</p>
+              <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:'0.75rem' }}>
+                {REASON_CODES.map(r => {
+                  const active = bulkRejectReasons.includes(r.code);
+                  return (
+                    <button key={r.code} onClick={() => setBulkRejectReasons(prev => active ? prev.filter(x=>x!==r.code) : [...prev, r.code])}
+                      style={{ fontSize:11, padding:'4px 10px', borderRadius:20, border:`1px solid ${active ? '#c0392b' : '#ddd'}`, background: active ? '#fdecec' : 'white', color: active ? '#c0392b' : '#555', cursor:'pointer', fontWeight: active ? 700 : 400 }}>
+                      {r.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <textarea
+                value={bulkRejectNote}
+                onChange={e => setBulkRejectNote(e.target.value)}
+                placeholder="Optional note"
+                rows={2}
+                style={{ width:'100%', border:'1px solid #ddd', borderRadius:7, padding:'8px 12px', fontSize:13, fontFamily:'inherit', resize:'vertical', boxSizing:'border-box', outline:'none' }}
+              />
+              <div style={{ display:'flex', gap:8, marginTop:'1rem', justifyContent:'flex-end' }}>
+                <button onClick={() => setBulkRejectModal(false)} style={{ background:'#f5f5f5', border:'1px solid #ddd', color:'#666', borderRadius:7, padding:'8px 16px', fontSize:13, cursor:'pointer' }}>Cancel</button>
+                <button onClick={bulkReject} disabled={bulkRejectReasons.length===0 || bulkProcessing}
+                  style={{ background: bulkRejectReasons.length ? '#c0392b' : '#ddd', color:'white', border:'none', borderRadius:7, padding:'8px 18px', fontSize:13, fontWeight:700, cursor: bulkRejectReasons.length ? 'pointer' : 'not-allowed', display:'flex', alignItems:'center', gap:6 }}>
+                  <X size={13}/> {bulkProcessing ? 'Rejecting…' : `Reject ${selected.size}`}
                 </button>
               </div>
             </div>
