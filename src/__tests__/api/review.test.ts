@@ -325,7 +325,8 @@ describe('POST /api/review/events/:id/action — approve path', () => {
     );
     expect(sessionInsert).toBeDefined();
     expect(sessionInsert[0]).toContain("'approved'");
-    // submitted_to_ch = 1
-    expect(sessionInsert[1]).toContain(1);
+    // submitted_to_ch = 1 is a SQL literal for approvals.
+    expect(sessionInsert[0]).toContain('submitted_to_ch');
+    expect(sessionInsert[0]).toContain(',1,');
   });
 });
