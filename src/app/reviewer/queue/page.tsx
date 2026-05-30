@@ -101,7 +101,7 @@ export default function ReviewerQueuePage() {
     check();
     pollRef.current = setInterval(check, 10000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [ready, token]); // eslint-disable-line
+  }, [ready, token]);
 
   if (!ready || !user) return null;
 
@@ -130,7 +130,11 @@ export default function ReviewerQueuePage() {
     if (!selectableEventIds.has(id)) return;
     setSelected(prev => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
       return next;
     });
   }
