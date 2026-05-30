@@ -139,6 +139,15 @@ function ctx(id: string) {
   return { params: Promise.resolve({ id }) };
 }
 
+function mockLockedEvent(event: any | null = PENDING_EVENT) {
+  db.mockConn.query.mockImplementation((sql: string) => {
+    if (typeof sql === 'string' && sql.includes('FOR UPDATE')) {
+      return Promise.resolve(event ? [[event]] : [[]]);
+    }
+    return Promise.resolve([{ affectedRows: 1 }]);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Setup
 // ---------------------------------------------------------------------------
@@ -151,7 +160,7 @@ beforeEach(() => {
   db.mockConn.rollback         = jest.fn().mockResolvedValue(undefined);
   db.mockConn.release          = jest.fn();
   db.mockConn.query.mockReset();
-  db.mockConn.query.mockResolvedValue([{ affectedRows: 1 }]);
+  mockLockedEvent(PENDING_EVENT);
 });
 
 // ===========================================================================
@@ -162,7 +171,6 @@ describe('Stage 1 – Reject action writes a rejection_log row', () => {
     db.default.query.mockReset();
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_USER]])
-      .mockResolvedValueOnce([[PENDING_EVENT]])
       .mockResolvedValueOnce([[{ id: 5 }]]);
 
     await postAction(
@@ -200,7 +208,6 @@ describe('Stage 1 – Reject action writes a rejection_log row', () => {
     db.default.query.mockReset();
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_USER]])
-      .mockResolvedValueOnce([[PENDING_EVENT]])
       .mockResolvedValueOnce([[{ id: 5 }]]);
 
     await postAction(
@@ -221,7 +228,6 @@ describe('Stage 1 – Reject action writes a rejection_log row', () => {
     db.default.query.mockReset();
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_USER]])
-      .mockResolvedValueOnce([[PENDING_EVENT]])
       .mockResolvedValueOnce([[{ id: 5 }]]);
 
     await postAction(
@@ -247,7 +253,6 @@ describe('Stage 1 – Reject action writes a rejection_log row', () => {
     db.default.query.mockReset();
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_USER]])
-      .mockResolvedValueOnce([[PENDING_EVENT]])
       .mockResolvedValueOnce([[{ id: 5 }]]);
 
     const res = await postAction(

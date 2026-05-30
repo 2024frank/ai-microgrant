@@ -1,5 +1,13 @@
 import sharp from 'sharp';
 
+export const MAX_IMAGE_CDN_URL_LENGTH = 60_000;
+
+const FETCH_TIMEOUT_MS = 10_000;
+const MAX_POSTERS = 3;
+const MAX_POSTER_WIDTH = 640;
+const POSTER_HEIGHT = 480;
+const JPEG_QUALITY = 72;
+
 /**
  * Download poster images from `urls`, merge them side-by-side at a fixed height,
  * and return a base64-encoded JPEG data URI ready for `image_cdn_url`.
@@ -11,11 +19,11 @@ export async function mergePosterImages(urls: string[]): Promise<string | null> 
 
   // Download all posters, skip any that fail
   const results = await Promise.all(
-    urls.map(async (url) => {
+    urls.slice(0, MAX_POSTERS).map(async (url) => {
       try {
         const res = await fetch(url, {
           headers: { 'User-Agent': 'Mozilla/5.0' },
-          signal: AbortSignal.timeout(10_000),
+          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
         });
         if (!res.ok) return null;
         return Buffer.from(await res.arrayBuffer());
@@ -28,17 +36,27 @@ export async function mergePosterImages(urls: string[]): Promise<string | null> 
 
   if (buffers.length === 0) return null;
 
-  const HEIGHT = 900;
+  const resized = (await Promise.all(
+    buffers.map(async (buf) => {
+      try {
+        return await sharp(buf)
+          .resize({
+            width: MAX_POSTER_WIDTH,
+            height: POSTER_HEIGHT,
+            fit: 'inside',
+            kernel: sharp.kernel.lanczos3,
+          })
+          .toBuffer({ resolveWithObject: true });
+      } catch {
+        return null;
+      }
+    })
+  )).filter((r) => r !== null) as { data: Buffer; info: { width: number; height: number } }[];
 
-  const resized = await Promise.all(
-    buffers.map((buf) =>
-      sharp(buf)
-        .resize({ height: HEIGHT, kernel: sharp.kernel.lanczos3 })
-        .toBuffer({ resolveWithObject: true })
-    )
-  );
+  if (resized.length === 0) return null;
 
   const totalWidth = resized.reduce((sum, r) => sum + r.info.width, 0);
+  if (totalWidth <= 0) return null;
 
   let x = 0;
   const composites = resized.map((r) => {
@@ -47,17 +65,22 @@ export async function mergePosterImages(urls: string[]): Promise<string | null> 
     return composite;
   });
 
-  const merged = await sharp({
-    create: {
-      width: totalWidth,
-      height: HEIGHT,
-      channels: 3,
-      background: { r: 0, g: 0, b: 0 },
-    },
-  })
-    .composite(composites)
-    .jpeg({ quality: 97, chromaSubsampling: '4:4:4' })
-    .toBuffer();
+  try {
+    const merged = await sharp({
+      create: {
+        width: totalWidth,
+        height: POSTER_HEIGHT,
+        channels: 3,
+        background: { r: 0, g: 0, b: 0 },
+      },
+    })
+      .composite(composites)
+      .jpeg({ quality: JPEG_QUALITY })
+      .toBuffer();
 
-  return `data:image/jpeg;base64,${merged.toString('base64')}`;
+    const dataUri = `data:image/jpeg;base64,${merged.toString('base64')}`;
+    return Buffer.byteLength(dataUri, 'utf8') <= MAX_IMAGE_CDN_URL_LENGTH ? dataUri : null;
+  } catch {
+    return null;
+  }
 }

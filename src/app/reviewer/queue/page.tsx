@@ -101,7 +101,7 @@ export default function ReviewerQueuePage() {
     check();
     pollRef.current = setInterval(check, 10000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [ready, token]); // eslint-disable-line
+  }, [ready, token]);
 
   if (!ready || !user) return null;
 
@@ -111,31 +111,42 @@ export default function ReviewerQueuePage() {
     loadQueue();
   }
 
-  const allSelected = events.length > 0 && events.every(ev => selected.has(ev.id));
-  const someSelected = selected.size > 0;
+  const selectableEvents = events.filter(ev => !ev.sent_for_correction);
+  const selectableEventIds = new Set(selectableEvents.map(ev => ev.id));
+  const selectedCount = Array.from(selected).filter(id => selectableEventIds.has(id)).length;
+  const allSelected = selectableEvents.length > 0 && selectableEvents.every(ev => selected.has(ev.id));
+  const someSelected = selectedCount > 0;
 
   function toggleSelectAll() {
     if (allSelected) {
       setSelected(new Set());
     } else {
-      setSelected(new Set(events.map(ev => ev.id)));
+      setSelected(new Set(selectableEvents.map(ev => ev.id)));
     }
   }
 
   function toggleSelect(id: number, e: React.MouseEvent) {
     e.stopPropagation();
+    if (!selectableEventIds.has(id)) return;
     setSelected(prev => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
       return next;
     });
   }
 
   async function bulkApprove() {
-    if (!token || selected.size === 0) return;
+    const ids = Array.from(selected).filter(id => selectableEventIds.has(id));
+    if (!token || ids.length === 0) {
+      setSelected(new Set());
+      return;
+    }
     setBulkProcessing(true);
     setBulkResult(null);
-    const ids = Array.from(selected);
     const results = await Promise.all(ids.map(id =>
       fetch(`/api/review/events/${id}/action`, {
         method: 'POST',
@@ -150,9 +161,12 @@ export default function ReviewerQueuePage() {
   }
 
   async function bulkReject() {
-    if (!token || selected.size === 0 || bulkRejectReasons.length === 0) return;
+    const ids = Array.from(selected).filter(id => selectableEventIds.has(id));
+    if (!token || ids.length === 0 || bulkRejectReasons.length === 0) {
+      if (ids.length === 0) setSelected(new Set());
+      return;
+    }
     setBulkProcessing(true);
-    const ids = Array.from(selected);
     const results = await Promise.all(ids.map(id =>
       fetch(`/api/review/events/${id}/action`, {
         method: 'POST',
@@ -247,7 +261,7 @@ export default function ReviewerQueuePage() {
         {/* Bulk action bar */}
         {someSelected && (
           <div style={{ display:'flex', alignItems:'center', gap:10, background:'#1a1a2e', color:'white', borderRadius:10, padding:'10px 16px', marginBottom:'1rem', flexWrap:'wrap' }}>
-            <span style={{ fontSize:13, fontWeight:600 }}>{selected.size} selected</span>
+            <span style={{ fontSize:13, fontWeight:600 }}>{selectedCount} selected</span>
             <button onClick={() => setSelected(new Set())}
               style={{ background:'rgba(255,255,255,0.1)', border:'none', color:'white', borderRadius:6, padding:'4px 10px', fontSize:12, cursor:'pointer' }}>
               Clear
@@ -257,13 +271,13 @@ export default function ReviewerQueuePage() {
               onClick={bulkApprove}
               disabled={bulkProcessing}
               style={{ background:'#3a8c3f', border:'none', color:'white', borderRadius:7, padding:'7px 18px', fontSize:13, fontWeight:700, cursor:'pointer', display:'flex', alignItems:'center', gap:6, opacity: bulkProcessing ? 0.6 : 1 }}>
-              <CheckCheck size={14}/> {bulkProcessing ? 'Processing…' : `Approve ${selected.size}`}
+              <CheckCheck size={14}/> {bulkProcessing ? 'Processing...' : `Approve ${selectedCount}`}
             </button>
             <button
               onClick={() => setBulkRejectModal(true)}
               disabled={bulkProcessing}
               style={{ background:'#c0392b', border:'none', color:'white', borderRadius:7, padding:'7px 18px', fontSize:13, fontWeight:700, cursor:'pointer', display:'flex', alignItems:'center', gap:6, opacity: bulkProcessing ? 0.6 : 1 }}>
-              <X size={14}/> Reject {selected.size}
+              <X size={14}/> Reject {selectedCount}
             </button>
           </div>
         )}
@@ -295,10 +309,13 @@ export default function ReviewerQueuePage() {
           <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
             {/* Select all row */}
             <div style={{ display:'flex', alignItems:'center', gap:10, padding:'4px 6px' }}>
-              <button onClick={toggleSelectAll} style={{ background:'none', border:'none', cursor:'pointer', color:'#3a8c3f', display:'flex', alignItems:'center', gap:6, fontSize:12, fontWeight:600, padding:'2px 4px' }}>
+              <button onClick={toggleSelectAll} disabled={selectableEvents.length === 0} style={{ background:'none', border:'none', cursor: selectableEvents.length === 0 ? 'not-allowed' : 'pointer', color:'#3a8c3f', display:'flex', alignItems:'center', gap:6, fontSize:12, fontWeight:600, padding:'2px 4px', opacity: selectableEvents.length === 0 ? 0.45 : 1 }}>
                 {allSelected ? <CheckSquare size={15}/> : <Square size={15}/>}
                 {allSelected ? 'Deselect all' : 'Select all'}
               </button>
+              {selectableEvents.length < events.length && (
+                <span style={{ fontSize:11, color:'#c05e00' }}>Events sent for correction cannot be bulk reviewed.</span>
+              )}
             </div>
 
             {events.map(ev => {
@@ -316,7 +333,9 @@ export default function ReviewerQueuePage() {
                   {/* Checkbox */}
                   <button
                     onClick={e => toggleSelect(ev.id, e)}
-                    style={{ background:'none', border:'none', cursor:'pointer', color: isSelected ? '#3a8c3f' : '#ccc', flexShrink:0, padding:2, display:'flex', alignItems:'center' }}>
+                    disabled={isPendingFix}
+                    aria-label={isPendingFix ? `${ev.title} is waiting for correction and cannot be selected` : `${isSelected ? 'Deselect' : 'Select'} ${ev.title}`}
+                    style={{ background:'none', border:'none', cursor: isPendingFix ? 'not-allowed' : 'pointer', color: isSelected ? '#3a8c3f' : '#ccc', flexShrink:0, padding:2, display:'flex', alignItems:'center', opacity: isPendingFix ? 0.45 : 1 }}>
                     {isSelected ? <CheckSquare size={17}/> : <Square size={17}/>}
                   </button>
 
@@ -402,7 +421,7 @@ export default function ReviewerQueuePage() {
             onClick={e => { if (e.target === e.currentTarget) setBulkRejectModal(false); }}>
             <div style={{ background:'white', borderRadius:12, padding:'1.5rem', maxWidth:480, width:'100%', boxShadow:'0 8px 32px rgba(0,0,0,0.2)' }}>
               <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'1rem' }}>
-                <span style={{ fontSize:15, fontWeight:700 }}>Reject {selected.size} event{selected.size!==1?'s':''}</span>
+                <span style={{ fontSize:15, fontWeight:700 }}>Reject {selectedCount} event{selectedCount!==1?'s':''}</span>
                 <button onClick={() => setBulkRejectModal(false)} style={{ background:'none', border:'none', cursor:'pointer', color:'#bbb' }}><X size={16}/></button>
               </div>
               <p style={{ fontSize:13, color:'#666', marginBottom:'0.75rem' }}>Select reason{bulkRejectReasons.length!==1?'s':''}:</p>
@@ -428,7 +447,7 @@ export default function ReviewerQueuePage() {
                 <button onClick={() => setBulkRejectModal(false)} style={{ background:'#f5f5f5', border:'1px solid #ddd', color:'#666', borderRadius:7, padding:'8px 16px', fontSize:13, cursor:'pointer' }}>Cancel</button>
                 <button onClick={bulkReject} disabled={bulkRejectReasons.length===0 || bulkProcessing}
                   style={{ background: bulkRejectReasons.length ? '#c0392b' : '#ddd', color:'white', border:'none', borderRadius:7, padding:'8px 18px', fontSize:13, fontWeight:700, cursor: bulkRejectReasons.length ? 'pointer' : 'not-allowed', display:'flex', alignItems:'center', gap:6 }}>
-                  <X size={13}/> {bulkProcessing ? 'Rejecting…' : `Reject ${selected.size}`}
+                  <X size={13}/> {bulkProcessing ? 'Rejecting...' : `Reject ${selectedCount}`}
                 </button>
               </div>
             </div>
