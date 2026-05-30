@@ -22,12 +22,8 @@ export async function POST(
   const { edits = {}, time_spent_sec = null, action } = await req.json();
   const { id: eventId } = await context.params;
 
-  const [[event]] = await pool.query('SELECT * FROM raw_events WHERE id = ?', [eventId]) as any;
-  if (!event) return Response.json({ error: 'Not found' }, { status: 404 });
-  // Reject: only allowed on pending events
-  // Approve/resubmit: allowed from any status (pending, rejected, or re-editing approved events)
-  if (action === 'reject' && event.status !== 'pending') {
-    return Response.json({ error: 'Can only reject pending events' }, { status: 409 });
+  if (!['approve', 'reject'].includes(action)) {
+    return Response.json({ error: 'Unsupported review action' }, { status: 400 });
   }
 
   const [[dbUser]] = await pool.query('SELECT id FROM users WHERE firebase_uid = ?', [user.uid]) as any;
@@ -37,9 +33,23 @@ export async function POST(
   try {
     await (conn as any).beginTransaction();
 
+    const [[event]] = await conn.query('SELECT * FROM raw_events WHERE id = ? FOR UPDATE', [eventId]) as any;
+    if (!event) {
+      await (conn as any).rollback();
+      return Response.json({ error: 'Not found' }, { status: 404 });
+    }
+
+    if (action === 'reject' && event.status !== 'pending') {
+      await (conn as any).rollback();
+      return Response.json({ error: 'Can only reject pending events' }, { status: 409 });
+    }
+
     if (action === 'reject') {
       const { reason_codes, reviewer_note = '' } = edits;
-      if (!reason_codes?.length) return Response.json({ error: 'reason_codes required' }, { status: 400 });
+      if (!reason_codes?.length) {
+        await (conn as any).rollback();
+        return Response.json({ error: 'reason_codes required' }, { status: 400 });
+      }
 
       await conn.query("UPDATE raw_events SET status='rejected' WHERE id=?", [eventId]);
       await conn.query(
@@ -56,6 +66,15 @@ export async function POST(
     }
 
     // APPROVE
+    if (event.status === 'pending_fix' || event.sent_for_correction) {
+      await (conn as any).rollback();
+      return Response.json({ error: 'Cannot approve an event while it is waiting for correction' }, { status: 409 });
+    }
+    if (event.status === 'approved') {
+      await (conn as any).rollback();
+      return Response.json({ error: 'Event is already approved' }, { status: 409 });
+    }
+
     const editableFields = ['title','description','extended_description','sessions','location_type',
       'location','place_name','room_num','url_link','sponsors','post_type_ids','geo_scope',
       'contact_email','phone','website','image_cdn_url','buttons','display'];

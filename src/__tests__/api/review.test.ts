@@ -34,10 +34,19 @@ function makeReq(path: string, body?: any) {
   });
 }
 
+function mockLockedEvent(event: any | null = PENDING) {
+  db.mockConn.query.mockImplementation((sql: string) => {
+    if (typeof sql === 'string' && sql.includes('FOR UPDATE')) {
+      return Promise.resolve(event ? [[event]] : [[]]);
+    }
+    return Promise.resolve([{ affectedRows: 1 }]);
+  });
+}
+
 beforeEach(() => {
   db.default.query.mockReset();
   db.mockConn.query.mockReset();
-  db.mockConn.query.mockResolvedValue([{ affectedRows: 1 }]);
+  mockLockedEvent(PENDING);
   db.mockConn.beginTransaction = jest.fn().mockResolvedValue(undefined);
   db.mockConn.commit           = jest.fn().mockResolvedValue(undefined);
   db.mockConn.rollback         = jest.fn().mockResolvedValue(undefined);
@@ -104,6 +113,7 @@ describe('POST /api/review/events/:id/action', () => {
   });
 
   it('returns 409 when event already reviewed', async () => {
+    mockLockedEvent({ ...PENDING, status: 'approved' });
     db.default.query
       .mockResolvedValueOnce([[ADMIN]])
       .mockResolvedValueOnce([[{ ...PENDING, status: 'approved' }]])
@@ -117,6 +127,7 @@ describe('POST /api/review/events/:id/action', () => {
   });
 
   it('returns 404 when event not found', async () => {
+    mockLockedEvent(null);
     db.default.query
       .mockResolvedValueOnce([[ADMIN]])
       .mockResolvedValueOnce([[]])
@@ -146,6 +157,56 @@ describe('POST /api/review/events/:id/action — approve path', () => {
     expect(res.status).toBe(200);
     expect(data.ok).toBe(true);
     expect(data.communityhub).toEqual({ id: 'ch_post_abc123' });
+  });
+
+  it('locks the event row before submitting to CommunityHub', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[PENDING]])
+      .mockResolvedValueOnce([[{ id: 1 }]]);
+
+    await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve' }),
+      ctx('10')
+    );
+
+    const lockCall = db.mockConn.query.mock.calls.find(
+      (c: any[]) => typeof c[0] === 'string' && c[0].includes('FOR UPDATE')
+    );
+    expect(lockCall).toBeDefined();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not submit an already approved event again', async () => {
+    mockLockedEvent({ ...PENDING, status: 'approved', communityhub_post_id: 'ch_existing' });
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[{ id: 1 }]]);
+
+    const res = await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve' }),
+      ctx('10')
+    );
+
+    expect(res.status).toBe(409);
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(db.mockConn.rollback).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not approve an event that is waiting for correction', async () => {
+    mockLockedEvent({ ...PENDING, status: 'pending_fix', sent_for_correction: 1 });
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[{ id: 1 }]]);
+
+    const res = await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve' }),
+      ctx('10')
+    );
+
+    expect(res.status).toBe(409);
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(db.mockConn.rollback).toHaveBeenCalledTimes(1);
   });
 
   it('POSTs correct payload to CommunityHub including ingestedPostUrl', async () => {
