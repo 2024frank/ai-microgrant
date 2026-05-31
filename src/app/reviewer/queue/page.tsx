@@ -111,19 +111,24 @@ export default function ReviewerQueuePage() {
     loadQueue();
   }
 
-  const allSelected = events.length > 0 && events.every(ev => selected.has(ev.id));
+  const selectableEvents = events.filter(ev => !ev.sent_for_correction);
+  const allSelected = selectableEvents.length > 0 && selectableEvents.every(ev => selected.has(ev.id));
   const someSelected = selected.size > 0;
+  const selectedEvents = events.filter(ev => selected.has(ev.id));
+  const approvableSelectedCount = selectedEvents.filter(ev => !ev.sent_for_correction).length;
 
   function toggleSelectAll() {
     if (allSelected) {
       setSelected(new Set());
     } else {
-      setSelected(new Set(events.map(ev => ev.id)));
+      setSelected(new Set(selectableEvents.map(ev => ev.id)));
     }
   }
 
   function toggleSelect(id: number, e: React.MouseEvent) {
     e.stopPropagation();
+    const event = events.find(ev => ev.id === id);
+    if (event?.sent_for_correction) return;
     setSelected(prev => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
@@ -135,7 +140,15 @@ export default function ReviewerQueuePage() {
     if (!token || selected.size === 0) return;
     setBulkProcessing(true);
     setBulkResult(null);
-    const ids = Array.from(selected);
+    const ids = Array.from(selected).filter(id => {
+      const event = events.find(ev => ev.id === id);
+      return event && !event.sent_for_correction;
+    });
+    if (ids.length === 0) {
+      setBulkResult({ ok: 0, failed: selected.size });
+      setBulkProcessing(false);
+      return;
+    }
     const results = await Promise.all(ids.map(id =>
       fetch(`/api/review/events/${id}/action`, {
         method: 'POST',
@@ -255,9 +268,9 @@ export default function ReviewerQueuePage() {
             <div style={{ flex:1 }}/>
             <button
               onClick={bulkApprove}
-              disabled={bulkProcessing}
-              style={{ background:'#3a8c3f', border:'none', color:'white', borderRadius:7, padding:'7px 18px', fontSize:13, fontWeight:700, cursor:'pointer', display:'flex', alignItems:'center', gap:6, opacity: bulkProcessing ? 0.6 : 1 }}>
-              <CheckCheck size={14}/> {bulkProcessing ? 'Processing…' : `Approve ${selected.size}`}
+              disabled={bulkProcessing || approvableSelectedCount === 0}
+              style={{ background:'#3a8c3f', border:'none', color:'white', borderRadius:7, padding:'7px 18px', fontSize:13, fontWeight:700, cursor: bulkProcessing || approvableSelectedCount === 0 ? 'not-allowed' : 'pointer', display:'flex', alignItems:'center', gap:6, opacity: bulkProcessing || approvableSelectedCount === 0 ? 0.6 : 1 }}>
+              <CheckCheck size={14}/> {bulkProcessing ? 'Processing…' : `Approve ${approvableSelectedCount}`}
             </button>
             <button
               onClick={() => setBulkRejectModal(true)}
@@ -295,9 +308,9 @@ export default function ReviewerQueuePage() {
           <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
             {/* Select all row */}
             <div style={{ display:'flex', alignItems:'center', gap:10, padding:'4px 6px' }}>
-              <button onClick={toggleSelectAll} style={{ background:'none', border:'none', cursor:'pointer', color:'#3a8c3f', display:'flex', alignItems:'center', gap:6, fontSize:12, fontWeight:600, padding:'2px 4px' }}>
+              <button onClick={toggleSelectAll} disabled={selectableEvents.length === 0} style={{ background:'none', border:'none', cursor: selectableEvents.length === 0 ? 'not-allowed' : 'pointer', color:'#3a8c3f', display:'flex', alignItems:'center', gap:6, fontSize:12, fontWeight:600, padding:'2px 4px', opacity: selectableEvents.length === 0 ? 0.5 : 1 }}>
                 {allSelected ? <CheckSquare size={15}/> : <Square size={15}/>}
-                {allSelected ? 'Deselect all' : 'Select all'}
+                {selectableEvents.length === 0 ? 'No selectable events' : allSelected ? 'Deselect all' : 'Select all'}
               </button>
             </div>
 
@@ -316,7 +329,9 @@ export default function ReviewerQueuePage() {
                   {/* Checkbox */}
                   <button
                     onClick={e => toggleSelect(ev.id, e)}
-                    style={{ background:'none', border:'none', cursor:'pointer', color: isSelected ? '#3a8c3f' : '#ccc', flexShrink:0, padding:2, display:'flex', alignItems:'center' }}>
+                    disabled={isPendingFix}
+                    title={isPendingFix ? 'Waiting for the corrected version before review actions are available' : undefined}
+                    style={{ background:'none', border:'none', cursor: isPendingFix ? 'not-allowed' : 'pointer', color: isSelected ? '#3a8c3f' : '#ccc', flexShrink:0, padding:2, display:'flex', alignItems:'center', opacity: isPendingFix ? 0.45 : 1 }}>
                     {isSelected ? <CheckSquare size={17}/> : <Square size={17}/>}
                   </button>
 
