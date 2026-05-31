@@ -116,6 +116,20 @@ describe('POST /api/review/events/:id/action', () => {
     expect(res.status).toBe(409);
   });
 
+  it('returns 409 when approving an event awaiting correction', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[{ ...PENDING, status: 'pending_fix', sent_for_correction: 1 }]]);
+
+    const res = await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve' }),
+      ctx('10')
+    );
+
+    expect(res.status).toBe(409);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it('returns 404 when event not found', async () => {
     db.default.query
       .mockResolvedValueOnce([[ADMIN]])

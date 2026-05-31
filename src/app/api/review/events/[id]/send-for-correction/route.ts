@@ -97,6 +97,7 @@ export async function POST(
           "UPDATE raw_events SET status='pending', sent_for_correction=0 WHERE id=?",
           [eventId]
         );
+        pool.query("DELETE FROM needs_fix WHERE raw_event_id=?", [eventId]);
         pool.query(
           "UPDATE agent_runs SET status='failed', finished_at=NOW(), error_log=? WHERE id=?",
           [JSON.stringify([err.message]), runId]

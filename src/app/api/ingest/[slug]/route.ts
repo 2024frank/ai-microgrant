@@ -4,6 +4,7 @@ import { sendReviewNotification } from '@/lib/email';
 import { mergePosterImages } from '@/lib/mergePosters';
 
 const MAX_EVENTS_PER_INGEST = 200;
+const MAX_IMAGE_CDN_URL_LENGTH = 60_000;
 
 // Sanitise a string field: strip NUL bytes, truncate to maxLen
 function san(v: unknown, maxLen: number): string | null {
@@ -102,11 +103,29 @@ export async function POST(
         ) as any;
         fixEntry = row || null;
       }
+      if (fixedFromId && !fixEntry) {
+        console.warn(`[ingest] skipping stale fixed event for raw_event_id=${fixedFromId}`);
+        continue;
+      }
 
-      // If agent passed poster_urls, merge them into a single base64 image
+      // If agent passed poster_urls, merge them into one image when it can fit the DB column.
       let imageCdnUrl = san(ev.image_cdn_url, 500);
       if (Array.isArray(ev.poster_urls) && ev.poster_urls.length > 0) {
-        imageCdnUrl = await mergePosterImages(ev.poster_urls) ?? imageCdnUrl;
+        const posterFallback = san(ev.poster_urls[0], 500);
+        try {
+          const mergedPoster = await mergePosterImages(ev.poster_urls);
+          if (mergedPoster && mergedPoster.length <= MAX_IMAGE_CDN_URL_LENGTH) {
+            imageCdnUrl = mergedPoster;
+          } else {
+            if (mergedPoster) {
+              console.warn(`[ingest] merged poster data URI too large (${mergedPoster.length} chars); using first poster URL`);
+            }
+            imageCdnUrl = posterFallback ?? imageCdnUrl;
+          }
+        } catch (err: any) {
+          console.warn(`[ingest] poster merge failed; using first poster URL: ${err.message}`);
+          imageCdnUrl = posterFallback ?? imageCdnUrl;
+        }
       }
 
       const [res] = await conn.query(
@@ -161,8 +180,8 @@ export async function POST(
       // If this resolves a fix request: remove original pending_fix event, clean needs_fix, notify sender
       if (fixedFromId && fixEntry) {
         await conn.query('DELETE FROM needs_fix WHERE raw_event_id = ?', [fixedFromId]);
-        // Remove the original pending_fix event so only the corrected version stays in the queue
-        await conn.query('DELETE FROM raw_events WHERE id = ? AND status = ?', [fixedFromId, 'pending_fix']);
+        // Remove the original unreviewed event so only the corrected version stays in the queue.
+        await conn.query("DELETE FROM raw_events WHERE id = ? AND status IN ('pending','pending_fix')", [fixedFromId]);
         if (fixEntry.sent_by_user_id) {
           const notifTitle = `Fixed: ${ev.title || 'Event'}`;
           const parts: string[] = [];
