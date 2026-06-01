@@ -66,6 +66,7 @@ describe('POST /api/ingest/:slug poster image handling', () => {
     const fallbackUrl = 'https://cdn.example.com/poster.jpg';
     mockMergePosterImages.mockResolvedValue(`data:image/jpeg;base64,${'a'.repeat(70_000)}`);
     db.mockConn.query
+      .mockResolvedValueOnce([[]])
       .mockResolvedValueOnce([{ insertId: 123 }])
       .mockResolvedValueOnce([{ affectedRows: 1 }]);
 
@@ -86,6 +87,7 @@ describe('POST /api/ingest/:slug poster image handling', () => {
     const mergedImage = `data:image/jpeg;base64,${'a'.repeat(1_000)}`;
     mockMergePosterImages.mockResolvedValue(mergedImage);
     db.mockConn.query
+      .mockResolvedValueOnce([[]])
       .mockResolvedValueOnce([{ insertId: 124 }])
       .mockResolvedValueOnce([{ affectedRows: 1 }]);
 
