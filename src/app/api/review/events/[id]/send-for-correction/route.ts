@@ -90,17 +90,22 @@ export async function POST(
     ].join('\n');
 
     import('@/lib/agentRunner').then(({ triggerAgentRun }) => {
-      triggerAgentRun(FIX_AGENT_SOURCE_ID, runId, anthropicKey, environmentId, fixMessage).catch((err: Error) => {
+      triggerAgentRun(FIX_AGENT_SOURCE_ID, runId, anthropicKey, environmentId, fixMessage).catch(async (err: Error) => {
         console.error(`Fix agent run ${runId} failed:`, err.message);
         // Revert the event back to 'pending' so reviewers can still act on it
-        pool.query(
-          "UPDATE raw_events SET status='pending', sent_for_correction=0 WHERE id=?",
-          [eventId]
-        );
-        pool.query(
-          "UPDATE agent_runs SET status='failed', finished_at=NOW(), error_log=? WHERE id=?",
-          [JSON.stringify([err.message]), runId]
-        );
+        try {
+          await pool.query(
+            "UPDATE raw_events SET status='pending', sent_for_correction=0 WHERE id=?",
+            [eventId]
+          );
+          await pool.query('DELETE FROM needs_fix WHERE raw_event_id=?', [eventId]);
+          await pool.query(
+            "UPDATE agent_runs SET status='failed', finished_at=NOW(), error_log=? WHERE id=?",
+            [JSON.stringify([err.message]), runId]
+          );
+        } catch (cleanupErr: any) {
+          console.error(`Fix agent cleanup ${runId} failed:`, cleanupErr.message);
+        }
         // Notify the reviewer who sent it so they know to handle it manually
         if (dbUser?.id) {
           pool.query(

@@ -4,6 +4,8 @@ import { sendReviewNotification } from '@/lib/email';
 import { mergePosterImages } from '@/lib/mergePosters';
 
 const MAX_EVENTS_PER_INGEST = 200;
+// MySQL TEXT tops out at 65,535 bytes; leave room for UTF-8 overhead and SQL metadata.
+const MAX_IMAGE_CDN_URL_BYTES = 60_000;
 
 // Sanitise a string field: strip NUL bytes, truncate to maxLen
 function san(v: unknown, maxLen: number): string | null {
@@ -106,7 +108,14 @@ export async function POST(
       // If agent passed poster_urls, merge them into a single base64 image
       let imageCdnUrl = san(ev.image_cdn_url, 500);
       if (Array.isArray(ev.poster_urls) && ev.poster_urls.length > 0) {
-        imageCdnUrl = await mergePosterImages(ev.poster_urls) ?? imageCdnUrl;
+        const mergedImage = await mergePosterImages(ev.poster_urls);
+        if (mergedImage) {
+          if (Buffer.byteLength(mergedImage, 'utf8') <= MAX_IMAGE_CDN_URL_BYTES) {
+            imageCdnUrl = mergedImage;
+          } else {
+            console.warn(`[ingest] merged poster image too large for image_cdn_url; using fallback for source=${source.slug}`);
+          }
+        }
       }
 
       const [res] = await conn.query(
