@@ -1,7 +1,12 @@
 import { NextRequest } from 'next/server';
 import { GET } from '@/app/api/review/queue/route';
 import { POST } from '@/app/api/review/events/[id]/action/route';
+import { POST as sendForCorrection } from '@/app/api/review/events/[id]/send-for-correction/route';
 import { adminAuth } from '@/lib/firebase-admin';
+
+jest.mock('@/lib/agentRunner', () => ({
+  triggerAgentRun: jest.fn(),
+}));
 
 // Mock global fetch for CommunityHub API calls
 const mockFetch = jest.fn();
@@ -20,6 +25,11 @@ const PENDING = {
   calendar_source_name: 'Apollo', calendar_source_url: 'https://apollotheater.org',
   ingested_post_url: 'http://localhost/events/10', screen_ids: '[]', buttons: '[]', extended_description: null,
 };
+const PENDING_FIX = {
+  ...PENDING,
+  status: 'pending_fix',
+  sent_for_correction: 1,
+};
 
 // Helper — wraps id in a resolved Promise as Next.js 16 requires
 function ctx(id: string) {
@@ -36,6 +46,7 @@ function makeReq(path: string, body?: any) {
 
 beforeEach(() => {
   db.default.query.mockReset();
+  db.default.getConnection.mockClear();
   db.mockConn.query.mockReset();
   db.mockConn.query.mockResolvedValue([{ affectedRows: 1 }]);
   db.mockConn.beginTransaction = jest.fn().mockResolvedValue(undefined);
@@ -146,6 +157,23 @@ describe('POST /api/review/events/:id/action — approve path', () => {
     expect(res.status).toBe(200);
     expect(data.ok).toBe(true);
     expect(data.communityhub).toEqual({ id: 'ch_post_abc123' });
+  });
+
+  it('blocks approval while an event is pending fix', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[PENDING_FIX]]);
+
+    const res = await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve' }),
+      ctx('10')
+    );
+    const data = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(data.error).toContain('correction is in progress');
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(db.default.getConnection).not.toHaveBeenCalled();
   });
 
   it('POSTs correct payload to CommunityHub including ingestedPostUrl', async () => {
@@ -266,5 +294,41 @@ describe('POST /api/review/events/:id/action — approve path', () => {
     expect(sessionInsert[0]).toContain("'approved'");
     // submitted_to_ch = 1
     expect(sessionInsert[1]).toContain(1);
+  });
+});
+
+describe('POST /api/review/events/:id/send-for-correction', () => {
+  it('removes needs_fix when the fix agent fails and the event is returned to review', async () => {
+    const { triggerAgentRun } = require('@/lib/agentRunner');
+    triggerAgentRun.mockRejectedValueOnce(new Error('session timeout'));
+
+    db.default.query.mockReset();
+    db.default.query.mockResolvedValue([{ affectedRows: 1 }]);
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[PENDING]])
+      .mockResolvedValueOnce([[{ id: 1, email: ADMIN.email }]])
+      .mockResolvedValueOnce([{ insertId: 88 }]);
+
+    const res = await sendForCorrection(
+      makeReq('/api/review/events/10/send-for-correction', { correction_notes: 'Fix the date' }),
+      ctx('10')
+    );
+
+    expect(res.status).toBe(200);
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const revertCall = db.default.query.mock.calls.find(
+      (c: any[]) => typeof c[0] === 'string' && c[0].includes("status='pending'")
+    );
+    const cleanupCall = db.default.query.mock.calls.find(
+      (c: any[]) => typeof c[0] === 'string' && c[0].includes('DELETE FROM needs_fix')
+    );
+
+    expect(revertCall).toBeDefined();
+    expect(cleanupCall).toBeDefined();
+    expect(cleanupCall[1]).toEqual(['10']);
   });
 });

@@ -24,10 +24,17 @@ export async function POST(
 
   const [[event]] = await pool.query('SELECT * FROM raw_events WHERE id = ?', [eventId]) as any;
   if (!event) return Response.json({ error: 'Not found' }, { status: 404 });
+  if (!['approve', 'reject'].includes(action)) {
+    return Response.json({ error: 'Unsupported action' }, { status: 400 });
+  }
+
   // Reject: only allowed on pending events
-  // Approve/resubmit: allowed from any status (pending, rejected, or re-editing approved events)
+  // Approve/resubmit: allowed from reviewed events, but never while a fix is in flight.
   if (action === 'reject' && event.status !== 'pending') {
     return Response.json({ error: 'Can only reject pending events' }, { status: 409 });
+  }
+  if (action === 'approve' && event.status === 'pending_fix') {
+    return Response.json({ error: 'Cannot approve an event while correction is in progress' }, { status: 409 });
   }
 
   const [[dbUser]] = await pool.query('SELECT id FROM users WHERE firebase_uid = ?', [user.uid]) as any;
