@@ -106,7 +106,14 @@ export async function POST(
       // If agent passed poster_urls, merge them into a single base64 image
       let imageCdnUrl = san(ev.image_cdn_url, 500);
       if (Array.isArray(ev.poster_urls) && ev.poster_urls.length > 0) {
-        imageCdnUrl = await mergePosterImages(ev.poster_urls) ?? imageCdnUrl;
+        try {
+          imageCdnUrl = await mergePosterImages(ev.poster_urls) ?? imageCdnUrl;
+        } catch (err) {
+          console.warn(
+            '[ingest] poster merge failed; using fallback image:',
+            err instanceof Error ? err.message : String(err)
+          );
+        }
       }
 
       const [res] = await conn.query(

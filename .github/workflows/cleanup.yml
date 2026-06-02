@@ -10,8 +10,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Delete past events
+        env:
+          APP_URL: ${{ secrets.APP_URL || secrets.NEXT_PUBLIC_APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          curl -s -X POST "${{ secrets.APP_URL }}/api/cleanup" \
-            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+          if [ -z "$APP_URL" ]; then
+            echo "APP_URL or NEXT_PUBLIC_APP_URL secret is required"
+            exit 1
+          fi
+
+          curl -fsS -X POST "$APP_URL/api/cleanup" \
+            -H "x-cron-secret: $CRON_SECRET" \
             -H "Content-Type: application/json" | tee /tmp/result.json
           cat /tmp/result.json
