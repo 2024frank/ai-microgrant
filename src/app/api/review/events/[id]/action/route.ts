@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
-import { getAuthUser, unauthorized } from '@/lib/auth';
+import { canReviewSource, forbidden, getAuthUser, unauthorized } from '@/lib/auth';
 
 const CH_BASE = 'https://oberlin.communityhub.cloud/api/legacy/calendar';
 
@@ -24,6 +24,8 @@ export async function POST(
 
   const [[event]] = await pool.query('SELECT * FROM raw_events WHERE id = ?', [eventId]) as any;
   if (!event) return Response.json({ error: 'Not found' }, { status: 404 });
+  if (!(await canReviewSource(user, event.source_id))) return forbidden();
+
   // Reject: only allowed on pending events
   // Approve/resubmit: allowed from any status (pending, rejected, or re-editing approved events)
   if (action === 'reject' && event.status !== 'pending') {
