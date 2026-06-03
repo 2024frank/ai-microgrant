@@ -163,6 +163,7 @@ describe('Stage 1 – Reject action writes a rejection_log row', () => {
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_USER]])
       .mockResolvedValueOnce([[PENDING_EVENT]])
+      .mockResolvedValueOnce([[{ allowed: 1 }]])
       .mockResolvedValueOnce([[{ id: 5 }]]);
 
     await postAction(
@@ -201,6 +202,7 @@ describe('Stage 1 – Reject action writes a rejection_log row', () => {
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_USER]])
       .mockResolvedValueOnce([[PENDING_EVENT]])
+      .mockResolvedValueOnce([[{ allowed: 1 }]])
       .mockResolvedValueOnce([[{ id: 5 }]]);
 
     await postAction(
@@ -222,6 +224,7 @@ describe('Stage 1 – Reject action writes a rejection_log row', () => {
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_USER]])
       .mockResolvedValueOnce([[PENDING_EVENT]])
+      .mockResolvedValueOnce([[{ allowed: 1 }]])
       .mockResolvedValueOnce([[{ id: 5 }]]);
 
     await postAction(
@@ -248,6 +251,7 @@ describe('Stage 1 – Reject action writes a rejection_log row', () => {
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_USER]])
       .mockResolvedValueOnce([[PENDING_EVENT]])
+      .mockResolvedValueOnce([[{ allowed: 1 }]])
       .mockResolvedValueOnce([[{ id: 5 }]]);
 
     const res = await postAction(
