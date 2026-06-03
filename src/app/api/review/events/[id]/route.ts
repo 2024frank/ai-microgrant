@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
-import { getAuthUser, unauthorized } from '@/lib/auth';
+import { canReviewSource, forbidden, getAuthUser, unauthorized } from '@/lib/auth';
 
 export async function GET(
   req: NextRequest,
@@ -14,5 +14,7 @@ export async function GET(
      FROM raw_events re JOIN sources s ON re.source_id = s.id WHERE re.id = ?`, [id]
   ) as any;
   if (!event) return Response.json({ error: 'Not found' }, { status: 404 });
+  if (!(await canReviewSource(user, event.source_id))) return forbidden();
+
   return Response.json(event);
 }

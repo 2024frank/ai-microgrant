@@ -1,6 +1,8 @@
 import { NextRequest } from 'next/server';
 import { GET } from '@/app/api/review/queue/route';
 import { POST } from '@/app/api/review/events/[id]/action/route';
+import { GET as getReviewEvent } from '@/app/api/review/events/[id]/route';
+import { POST as sendForCorrection } from '@/app/api/review/events/[id]/send-for-correction/route';
 import { adminAuth } from '@/lib/firebase-admin';
 
 // Mock global fetch for CommunityHub API calls
@@ -11,6 +13,7 @@ const db         = require('@/lib/db');
 const mockVerify = adminAuth.verifyIdToken as jest.Mock;
 
 const ADMIN = { id: 1, email: 'admin@oberlin.edu', role: 'admin', full_name: 'Admin', active: 1, firebase_uid: 'uid-admin' };
+const REVIEWER = { id: 2, email: 'rev@oberlin.edu', role: 'reviewer', full_name: 'Reviewer', active: 1, firebase_uid: 'uid-rev' };
 const PENDING = {
   id: 10, title: 'Jazz Night', status: 'pending', event_type: 'ot',
   description: 'A great jazz show',
@@ -127,6 +130,53 @@ describe('POST /api/review/events/:id/action', () => {
       ctx('999')
     );
     expect(res.status).toBe(404);
+  });
+});
+
+describe('review source scoping', () => {
+  beforeEach(() => {
+    mockVerify.mockResolvedValue({ uid: 'uid-rev', email: 'rev@oberlin.edu' });
+  });
+
+  it('forbids assigned reviewers from reading out-of-scope review detail', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[REVIEWER]])
+      .mockResolvedValueOnce([[{ ...PENDING, id: 20, source_id: 2 }]])
+      .mockResolvedValueOnce([[{ allowed: 0 }]]);
+
+    const res = await getReviewEvent(makeReq('/api/review/events/20'), ctx('20'));
+    expect(res.status).toBe(403);
+  });
+
+  it('forbids assigned reviewers from approving out-of-scope events', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[REVIEWER]])
+      .mockResolvedValueOnce([[{ ...PENDING, id: 20, source_id: 2 }]])
+      .mockResolvedValueOnce([[{ allowed: 0 }]]);
+
+    const res = await POST(
+      makeReq('/api/review/events/20/action', { action: 'approve' }),
+      ctx('20')
+    );
+
+    expect(res.status).toBe(403);
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(db.mockConn.beginTransaction).not.toHaveBeenCalled();
+  });
+
+  it('forbids assigned reviewers from sending out-of-scope events for correction', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[REVIEWER]])
+      .mockResolvedValueOnce([[{ ...PENDING, id: 20, source_id: 2 }]])
+      .mockResolvedValueOnce([[{ allowed: 0 }]]);
+
+    const res = await sendForCorrection(
+      makeReq('/api/review/events/20/send-for-correction', { correction_notes: 'Wrong date' }),
+      ctx('20')
+    );
+
+    expect(res.status).toBe(403);
+    expect(db.mockConn.beginTransaction).not.toHaveBeenCalled();
   });
 });
 
