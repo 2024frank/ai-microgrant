@@ -106,7 +106,8 @@ export async function POST(
       // If agent passed poster_urls, merge them into a single base64 image
       let imageCdnUrl = san(ev.image_cdn_url, 500);
       if (Array.isArray(ev.poster_urls) && ev.poster_urls.length > 0) {
-        imageCdnUrl = await mergePosterImages(ev.poster_urls) ?? imageCdnUrl;
+        const firstPosterUrl = ev.poster_urls.map((url: unknown) => san(url, 500)).find(Boolean) ?? null;
+        imageCdnUrl = await mergePosterImages(ev.poster_urls) ?? imageCdnUrl ?? firstPosterUrl;
       }
 
       const [res] = await conn.query(
