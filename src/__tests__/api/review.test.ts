@@ -101,6 +101,7 @@ describe('POST /api/review/events/:id/action', () => {
       ctx('10')
     );
     expect(res.status).toBe(400);
+    expect(db.mockConn.beginTransaction).not.toHaveBeenCalled();
   });
 
   it('returns 409 when event already reviewed', async () => {
@@ -165,6 +166,23 @@ describe('POST /api/review/events/:id/action — approve path', () => {
     const body = JSON.parse(opts.body);
     expect(body.ingestedPostUrl).toBe(PENDING.ingested_post_url);
     expect(body.calendarSourceName).toBe(PENDING.calendar_source_name);
+  });
+
+  it('does not approve events while a correction is pending', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[{ ...PENDING, status: 'pending_fix', sent_for_correction: 1 }]]);
+
+    const res = await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve' }),
+      ctx('10')
+    );
+    const data = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(data.error).toMatch(/correction is still pending/i);
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(db.mockConn.beginTransaction).not.toHaveBeenCalled();
   });
 
   it('logs field edits when reviewer sends modified fields', async () => {

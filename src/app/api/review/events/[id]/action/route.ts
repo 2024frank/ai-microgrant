@@ -24,10 +24,19 @@ export async function POST(
 
   const [[event]] = await pool.query('SELECT * FROM raw_events WHERE id = ?', [eventId]) as any;
   if (!event) return Response.json({ error: 'Not found' }, { status: 404 });
-  // Reject: only allowed on pending events
-  // Approve/resubmit: allowed from any status (pending, rejected, or re-editing approved events)
+  if (!['approve', 'reject'].includes(action)) {
+    return Response.json({ error: 'Invalid action' }, { status: 400 });
+  }
+  // Reject: only allowed on pending events.
+  // Approve/resubmit: allowed after review, but not while a fix agent is still working.
   if (action === 'reject' && event.status !== 'pending') {
     return Response.json({ error: 'Can only reject pending events' }, { status: 409 });
+  }
+  if (action === 'reject' && !edits.reason_codes?.length) {
+    return Response.json({ error: 'reason_codes required' }, { status: 400 });
+  }
+  if (action === 'approve' && event.status === 'pending_fix') {
+    return Response.json({ error: 'Cannot approve while correction is still pending' }, { status: 409 });
   }
 
   const [[dbUser]] = await pool.query('SELECT id FROM users WHERE firebase_uid = ?', [user.uid]) as any;
@@ -39,7 +48,6 @@ export async function POST(
 
     if (action === 'reject') {
       const { reason_codes, reviewer_note = '' } = edits;
-      if (!reason_codes?.length) return Response.json({ error: 'reason_codes required' }, { status: 400 });
 
       await conn.query("UPDATE raw_events SET status='rejected' WHERE id=?", [eventId]);
       await conn.query(
