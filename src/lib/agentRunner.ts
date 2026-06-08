@@ -172,9 +172,11 @@ async function writeEvents(events: any[], sourceId: number, runId: number, calen
     await (conn as any).beginTransaction();
 
     for (const ev of events) {
-      // image_data mirrors base64 for the serving endpoint; image_cdn_url sent directly to CH
+      // image_data stores base64; image_cdn_url will be set to /api/events/{id}/poster.jpg after INSERT
       const rawImageUrl: string | null = ev.image_cdn_url || null;
       const rawImageData: string | null = rawImageUrl?.startsWith('data:') ? rawImageUrl : null;
+      // If the agent passed a plain URL (not base64), keep it; otherwise null (set after INSERT)
+      const storedCdnUrl: string | null = rawImageUrl && !rawImageUrl.startsWith('data:') ? rawImageUrl : null;
 
       const [res] = await conn.query(
         `INSERT INTO raw_events (
@@ -207,7 +209,7 @@ async function writeEvents(events: any[], sourceId: number, runId: number, calen
           ev.email            || 'fkusiapp@Oberlin.edu',
           ev.phone            || null,
           ev.website          || null,
-          rawImageUrl,
+          storedCdnUrl,
           rawImageData,
           ev.calendarSourceName || calendarSourceName,
           ev.calendarSourceUrl  || null,
@@ -219,11 +221,12 @@ async function writeEvents(events: any[], sourceId: number, runId: number, calen
       const eventId = res.insertId;
       const appUrl = process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'https://ai-microgrant-research-oberlin.vercel.app';
 
-      // Build ingestedPostUrl now that we have the row ID
       const ingestedPostUrl = `${appUrl}/events/${eventId}`;
+      // Set image_cdn_url to serving URL with .jpg extension — CH validates the extension
+      const servingImageUrl = rawImageData ? `${appUrl}/api/events/${eventId}/poster.jpg` : null;
       await conn.query(
-        'UPDATE raw_events SET ingested_post_url = ? WHERE id = ?',
-        [ingestedPostUrl, eventId]
+        'UPDATE raw_events SET ingested_post_url = ?, image_cdn_url = COALESCE(?, image_cdn_url) WHERE id = ?',
+        [ingestedPostUrl, servingImageUrl, eventId]
       );
 
       inserted.push({ id: eventId, title: ev.title, ingested_post_url: ingestedPostUrl });

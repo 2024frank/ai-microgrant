@@ -103,17 +103,20 @@ export async function POST(
         fixEntry = row || null;
       }
 
-      // If agent passed poster_urls, merge them into a single base64 image.
-      // image_cdn_url holds the value sent to CommunityHub (base64 or URL).
-      // image_data mirrors base64 values for the image-serving endpoint.
+      // Merge poster URLs into a single base64 image, or use image_cdn_url if provided.
+      // image_data stores the base64 for our serving endpoint (/api/events/{id}/poster.jpg).
+      // image_cdn_url is set after INSERT to the serving URL with a .jpg extension so
+      // CommunityHub accepts it (it validates the URL has a recognised image extension).
       let imageData: string | null = null;
-      let imageCdnUrl = san(ev.image_cdn_url, 500);
+      const rawCdnUrl = san(ev.image_cdn_url, 500);
       if (Array.isArray(ev.poster_urls) && ev.poster_urls.length > 0) {
         const merged = await mergePosterImages(ev.poster_urls);
-        if (merged) { imageData = merged; imageCdnUrl = merged; }
-      } else if (imageCdnUrl?.startsWith('data:')) {
-        imageData = imageCdnUrl; // keep base64 in image_cdn_url too
+        if (merged) imageData = merged;
+      } else if (rawCdnUrl?.startsWith('data:')) {
+        imageData = rawCdnUrl;
       }
+      // image_cdn_url in DB will be set to serving URL after we have the insertId
+      const imageCdnUrl: string | null = rawCdnUrl?.startsWith('data:') ? null : rawCdnUrl;
 
       const [res] = await conn.query(
         `INSERT INTO raw_events (
@@ -161,9 +164,11 @@ export async function POST(
       const eventId = res.insertId;
       const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://ai-microgrant-research-oberlin.vercel.app';
       const ingestedPostUrl = `${appUrl}/events/${eventId}`;
+      // Set image_cdn_url to the serving URL with .jpg extension — CH validates the extension
+      const servingImageUrl = imageData ? `${appUrl}/api/events/${eventId}/poster.jpg` : null;
       await conn.query(
-        'UPDATE raw_events SET ingested_post_url = ? WHERE id = ?',
-        [ingestedPostUrl, eventId]
+        'UPDATE raw_events SET ingested_post_url = ?, image_cdn_url = COALESCE(?, image_cdn_url) WHERE id = ?',
+        [ingestedPostUrl, servingImageUrl, eventId]
       );
 
       // If this resolves a fix request: remove original pending_fix event, clean needs_fix, notify sender

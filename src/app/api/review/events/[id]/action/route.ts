@@ -107,14 +107,14 @@ export async function POST(
     payload.placeId    = merged.place_id   || '';
     if (merged.extended_description) payload.extendedDescription = merged.extended_description;
     if (merged.contact_email) payload.contactEmail = merged.contact_email;
-    const imageVal = merged.image_data || merged.image_cdn_url || null;
+    // image_cdn_url in the DB is now a /api/events/{id}/poster.jpg URL — CH accepts it (has .jpg extension)
+    if (merged.image_cdn_url) payload.image_cdn_url = merged.image_cdn_url;
     if (merged.buttons) payload.buttons = j(merged.buttons);
     if (merged.place_name) payload.placeName = merged.place_name;
     if (merged.room_num) payload.roomNum = merged.room_num;
     if (['ph2','bo'].includes(merged.location_type)) payload.location = merged.location || '';
     if (['on','bo'].includes(merged.location_type)) payload.urlLink = merged.url_link   || '';
 
-    // Step 1: Create the post (without image — CH submit endpoint ignores image_cdn_url on create)
     const chRes  = await fetch(`${CH_BASE}/post/submit`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
     });
@@ -124,21 +124,7 @@ export async function POST(
     try { chData = JSON.parse(rawText); } catch { chData = { raw: rawText.slice(0, 200) }; }
     if (!chRes.ok) throw new Error(`CommunityHub ${chRes.status}: ${chData.raw ?? JSON.stringify(chData)}`);
 
-    // Step 2: PATCH image separately — CH only accepts image_cdn_url via update, not create
-    const postId = chData?.id;
-    if (postId && imageVal) {
-      const patchRes = await fetch(`${CH_BASE}/post/${postId}/submit`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image_cdn_url: imageVal }),
-      });
-      if (!patchRes.ok) {
-        const patchText = await patchRes.text();
-        console.warn(`[approve] image PATCH failed for CH post ${postId}: ${patchRes.status} ${patchText.slice(0, 150)}`);
-      }
-    }
-
-    await conn.query(`UPDATE raw_events SET status='approved', communityhub_post_id=? WHERE id=?`, [postId || null, eventId]);
+    await conn.query(`UPDATE raw_events SET status='approved', communityhub_post_id=? WHERE id=?`, [chData?.id || null, eventId]);
     await conn.query(
       `INSERT INTO review_sessions (raw_event_id, reviewer_id, action, time_spent_sec, submitted_to_ch, ch_response) VALUES (?,?,'approved',?,1,?)`,
       [eventId, reviewerId, time_spent_sec, JSON.stringify(chData)]

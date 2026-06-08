@@ -1,8 +1,7 @@
 /**
- * Patches all approved CommunityHub posts that have an image stored in our DB
- * but no image showing on CommunityHub (because we were using wrong field name).
- *
- * Sends the base64 image directly via the correct field: image_cdn_url
+ * Patches approved CommunityHub posts that have image_data in our DB but
+ * no image on CommunityHub. Sends the serving URL (/api/events/{id}/poster.jpg)
+ * which has a .jpg extension that CommunityHub accepts.
  *
  * Usage: npx tsx scripts/patch-ch-images.ts
  * Optional: npx tsx scripts/patch-ch-images.ts <communityhub_post_id>  (single post)
@@ -14,6 +13,8 @@ dotenv.config({ path: '.env' });
 import mysql from 'mysql2/promise';
 
 const CH_BASE = 'https://oberlin.communityhub.cloud/api/legacy/calendar';
+
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://ai-microgrant-research-oberlin.vercel.app';
 
 async function main() {
   const targetId = process.argv[2] || null;
@@ -27,26 +28,17 @@ async function main() {
     ssl:      { rejectUnauthorized: false },
   });
 
-  // Find approved events that have image data and a CommunityHub post ID
   const whereClause = targetId
     ? `AND re.communityhub_post_id = ${conn.escape(targetId)}`
     : '';
 
-  // Check if image_data column exists yet
-  const [colCheck] = await conn.query(
-    `SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'raw_events' AND COLUMN_NAME = 'image_data'`
-  ) as any;
-  const hasImageData = (colCheck as any[])[0].cnt > 0;
-  const imageCol = hasImageData ? 'COALESCE(re.image_data, re.image_cdn_url)' : 're.image_cdn_url';
-
+  // Find approved events that have image_data (base64) stored but no serving URL set
   const [rows] = await conn.query(
-    `SELECT re.id, re.communityhub_post_id,
-            ${imageCol} AS image_val
+    `SELECT re.id, re.communityhub_post_id
      FROM raw_events re
      WHERE re.status IN ('approved', 'resubmitted')
        AND re.communityhub_post_id IS NOT NULL
-       AND re.image_cdn_url IS NOT NULL
+       AND re.image_data IS NOT NULL
        ${whereClause}
      ORDER BY re.id`
   ) as any;
@@ -56,11 +48,15 @@ async function main() {
   let ok = 0, fail = 0;
 
   for (const row of rows as any[]) {
-    const { id, communityhub_post_id, image_val } = row;
-    if (!image_val) continue;
+    const { id, communityhub_post_id } = row;
 
-    // image_val may be a data URI (from merged posters) or a plain URL
-    const payload: any = { image_cdn_url: image_val };
+    // Build serving URL with .jpg extension — CH validates file extension in the URL
+    const imageUrl = `${APP_URL}/api/events/${id}/poster.jpg`;
+
+    // Update DB so future approvals also use the correct serving URL
+    await conn.query('UPDATE raw_events SET image_cdn_url = ? WHERE id = ?', [imageUrl, id]);
+
+    const payload: any = { image_cdn_url: imageUrl };
 
     try {
       const res = await fetch(`${CH_BASE}/post/${communityhub_post_id}/submit`, {
