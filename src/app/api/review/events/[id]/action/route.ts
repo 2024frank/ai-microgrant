@@ -4,17 +4,6 @@ import { getAuthUser, unauthorized, forbidden } from '@/lib/auth';
 
 const CH_BASE = 'https://oberlin.communityhub.cloud/api/legacy/calendar';
 
-// Return a publicly fetchable URL for the image.
-// If already a URL, use it directly (CommunityHub downloads it).
-// If it's a base64 data URI, point to our image-serving endpoint instead.
-function imageUrl(val: string, eventId: string): string {
-  if (!val) return val;
-  if (val.startsWith('data:')) {
-    const base = process.env.NEXT_PUBLIC_APP_URL || 'https://ai-microgrant-research-oberlin.vercel.app';
-    return `${base}/api/events/${eventId}/image`;
-  }
-  return val;
-}
 
 // mysql2 auto-parses JSON columns into objects/arrays; if the value is
 // already parsed, return it directly — otherwise JSON.parse the string.
@@ -118,7 +107,9 @@ export async function POST(
     payload.placeId    = merged.place_id   || '';
     if (merged.extended_description) payload.extendedDescription = merged.extended_description;
     if (merged.contact_email) payload.contactEmail = merged.contact_email;
-    if (merged.image_cdn_url) payload.image_cdn_url = imageUrl(merged.image_cdn_url, eventId);
+    // Send image directly — base64 data URI or URL; CommunityHub handles both
+    const imageVal = merged.image_data || merged.image_cdn_url;
+    if (imageVal) payload.image_cdn_url = imageVal;
     if (merged.buttons) payload.buttons = j(merged.buttons);
     if (merged.place_name) payload.placeName = merged.place_name;
     if (merged.room_num) payload.roomNum = merged.room_num;

@@ -104,15 +104,15 @@ export async function POST(
       }
 
       // If agent passed poster_urls, merge them into a single base64 image.
-      // base64 images go into image_data; image_cdn_url stores a public URL.
+      // image_cdn_url holds the value sent to CommunityHub (base64 or URL).
+      // image_data mirrors base64 values for the image-serving endpoint.
       let imageData: string | null = null;
       let imageCdnUrl = san(ev.image_cdn_url, 500);
       if (Array.isArray(ev.poster_urls) && ev.poster_urls.length > 0) {
         const merged = await mergePosterImages(ev.poster_urls);
-        if (merged) { imageData = merged; imageCdnUrl = null; }
+        if (merged) { imageData = merged; imageCdnUrl = merged; }
       } else if (imageCdnUrl?.startsWith('data:')) {
-        imageData = imageCdnUrl;
-        imageCdnUrl = null;
+        imageData = imageCdnUrl; // keep base64 in image_cdn_url too
       }
 
       const [res] = await conn.query(
@@ -161,11 +161,9 @@ export async function POST(
       const eventId = res.insertId;
       const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://ai-microgrant-research-oberlin.vercel.app';
       const ingestedPostUrl = `${appUrl}/events/${eventId}`;
-      // If we stored a base64 image, set image_cdn_url to the serving endpoint URL
-      const imageServingUrl = imageData ? `${appUrl}/api/events/${eventId}/image` : null;
       await conn.query(
-        'UPDATE raw_events SET ingested_post_url = ?, image_cdn_url = COALESCE(?, image_cdn_url) WHERE id = ?',
-        [ingestedPostUrl, imageServingUrl, eventId]
+        'UPDATE raw_events SET ingested_post_url = ? WHERE id = ?',
+        [ingestedPostUrl, eventId]
       );
 
       // If this resolves a fix request: remove original pending_fix event, clean needs_fix, notify sender

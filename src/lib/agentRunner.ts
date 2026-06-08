@@ -172,13 +172,9 @@ async function writeEvents(events: any[], sourceId: number, runId: number, calen
     await (conn as any).beginTransaction();
 
     for (const ev of events) {
-      // Separate base64 image data from the CDN URL
-      let rawImageData: string | null = null;
-      let rawImageUrl: string | null = ev.image_cdn_url || null;
-      if (rawImageUrl?.startsWith('data:')) {
-        rawImageData = rawImageUrl;
-        rawImageUrl  = null;
-      }
+      // image_data mirrors base64 for the serving endpoint; image_cdn_url sent directly to CH
+      const rawImageUrl: string | null = ev.image_cdn_url || null;
+      const rawImageData: string | null = rawImageUrl?.startsWith('data:') ? rawImageUrl : null;
 
       const [res] = await conn.query(
         `INSERT INTO raw_events (
@@ -225,10 +221,9 @@ async function writeEvents(events: any[], sourceId: number, runId: number, calen
 
       // Build ingestedPostUrl now that we have the row ID
       const ingestedPostUrl = `${appUrl}/events/${eventId}`;
-      const imageServingUrl  = rawImageData ? `${appUrl}/api/events/${eventId}/image` : null;
       await conn.query(
-        'UPDATE raw_events SET ingested_post_url = ?, image_cdn_url = COALESCE(?, image_cdn_url) WHERE id = ?',
-        [ingestedPostUrl, imageServingUrl, eventId]
+        'UPDATE raw_events SET ingested_post_url = ? WHERE id = ?',
+        [ingestedPostUrl, eventId]
       );
 
       inserted.push({ id: eventId, title: ev.title, ingested_post_url: ingestedPostUrl });
