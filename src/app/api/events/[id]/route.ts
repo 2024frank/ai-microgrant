@@ -77,7 +77,7 @@ export async function PATCH(
       // Convert base64 data URIs to our image-serving URL so CommunityHub can download
       if (chKey === 'image_cdn_url' && typeof v === 'string' && v.startsWith('data:')) {
         const base = process.env.NEXT_PUBLIC_APP_URL || 'https://ai-microgrant-research-oberlin.vercel.app';
-        chEdits['imageCdnUrl'] = `${base}/api/events/${id}/image`;
+        chEdits['image_cdn_url'] = `${base}/api/events/${id}/image`;
       } else {
         chEdits[chKey] = v;
       }

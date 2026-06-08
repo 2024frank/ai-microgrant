@@ -118,7 +118,7 @@ export async function POST(
     payload.placeId    = merged.place_id   || '';
     if (merged.extended_description) payload.extendedDescription = merged.extended_description;
     if (merged.contact_email) payload.contactEmail = merged.contact_email;
-    if (merged.image_cdn_url) payload.imageCdnUrl = imageUrl(merged.image_cdn_url, eventId);
+    if (merged.image_cdn_url) payload.image_cdn_url = imageUrl(merged.image_cdn_url, eventId);
     if (merged.buttons) payload.buttons = j(merged.buttons);
     if (merged.place_name) payload.placeName = merged.place_name;
     if (merged.room_num) payload.roomNum = merged.room_num;

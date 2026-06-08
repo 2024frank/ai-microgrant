@@ -134,7 +134,7 @@ export async function POST(
           JSON.stringify(Array.isArray(ev.sponsors)   ? ev.sponsors.slice(0,20)   : []),
           JSON.stringify(Array.isArray(ev.postTypeId) ? ev.postTypeId.slice(0,20) : []),
           JSON.stringify(Array.isArray(ev.sessions)   ? ev.sessions.slice(0,50)   : []),
-          ['ph','on','bo','ne'].includes(ev.locationType) ? ev.locationType : 'ne',
+          ['ph2','on','bo','ne'].includes(ev.locationType) ? ev.locationType : 'ne',
           san(ev.location, 300),
           san(ev.placeId,  100),
           san(ev.placeName,200),

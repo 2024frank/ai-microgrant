@@ -73,7 +73,7 @@ async function main() {
         const res = await fetch(`${CH_BASE}/post/${communityhub_post_id}/submit`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ imageCdnUrl: imageUrl }),
+          body: JSON.stringify({ image_cdn_url: imageUrl }),
           signal: AbortSignal.timeout(15_000),
         });
         const text = await res.text();
