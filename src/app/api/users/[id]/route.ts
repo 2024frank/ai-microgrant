@@ -27,6 +27,7 @@ export async function PATCH(
   }
 
   const [[updated]] = await pool.query('SELECT id, email, full_name, role, active FROM users WHERE id = ?', [id]) as any;
+  if (!updated) return Response.json({ error: 'Not found' }, { status: 404 });
   return Response.json(updated);
 }
 

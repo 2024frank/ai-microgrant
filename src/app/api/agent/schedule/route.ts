@@ -34,11 +34,16 @@ export async function GET(req: NextRequest) {
       totalNew += result.inserted;
     } catch (err: any) {
       results.push({ source: source.name, status: 'error', inserted: 0, error: err.message });
+      // Ensure the run record is marked failed even if triggerAgentRun threw before its own catch
+      await pool.query(
+        "UPDATE agent_runs SET status='failed', finished_at=NOW(), error_log=? WHERE id=? AND status='running'",
+        [JSON.stringify([err.message]), runId]
+      ).catch(() => {});
     }
   }
 
   // Email admin with run summary
-  if (process.env.ADMIN_EMAIL && totalNew >= 0) {
+  if (process.env.ADMIN_EMAIL && (totalNew > 0 || results.some(r => r.status === 'error'))) {
     sendAgentRunSummary({
       adminEmail: process.env.ADMIN_EMAIL,
       results,

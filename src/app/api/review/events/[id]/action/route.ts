@@ -1,8 +1,23 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
-import { getAuthUser, unauthorized } from '@/lib/auth';
+import { getAuthUser, unauthorized, forbidden } from '@/lib/auth';
 
 const CH_BASE = 'https://oberlin.communityhub.cloud/api/legacy/calendar';
+
+// If val is already a base64 data URI, return as-is.
+// Otherwise fetch the URL and convert to a base64 JPEG data URI.
+async function toBase64Image(val: string): Promise<string> {
+  if (!val || val.startsWith('data:')) return val;
+  try {
+    const res = await fetch(val, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) return val;
+    const buf = Buffer.from(await res.arrayBuffer());
+    const mime = res.headers.get('content-type') || 'image/jpeg';
+    return `data:${mime};base64,${buf.toString('base64')}`;
+  } catch {
+    return val;
+  }
+}
 
 // mysql2 auto-parses JSON columns into objects/arrays; if the value is
 // already parsed, return it directly — otherwise JSON.parse the string.
@@ -18,14 +33,19 @@ export async function POST(
 ) {
   const user = await getAuthUser(req);
   if (!user) return unauthorized();
+  if (user.role !== 'admin' && user.role !== 'reviewer') return forbidden();
 
   const { edits = {}, time_spent_sec = null, action } = await req.json();
   const { id: eventId } = await context.params;
 
+  // Validate reject payload before acquiring a connection
+  if (action === 'reject') {
+    const { reason_codes } = edits;
+    if (!reason_codes?.length) return Response.json({ error: 'reason_codes required' }, { status: 400 });
+  }
+
   const [[event]] = await pool.query('SELECT * FROM raw_events WHERE id = ?', [eventId]) as any;
   if (!event) return Response.json({ error: 'Not found' }, { status: 404 });
-  // Reject: only allowed on pending events
-  // Approve/resubmit: allowed from any status (pending, rejected, or re-editing approved events)
   if (action === 'reject' && event.status !== 'pending') {
     return Response.json({ error: 'Can only reject pending events' }, { status: 409 });
   }
@@ -39,7 +59,6 @@ export async function POST(
 
     if (action === 'reject') {
       const { reason_codes, reviewer_note = '' } = edits;
-      if (!reason_codes?.length) return Response.json({ error: 'reason_codes required' }, { status: 400 });
 
       await conn.query("UPDATE raw_events SET status='rejected' WHERE id=?", [eventId]);
       await conn.query(
@@ -102,7 +121,7 @@ export async function POST(
     payload.placeId    = merged.place_id   || '';
     if (merged.extended_description) payload.extendedDescription = merged.extended_description;
     if (merged.contact_email) payload.contactEmail = merged.contact_email;
-    if (merged.image_cdn_url) payload.imageCdnUrl = merged.image_cdn_url;
+    if (merged.image_cdn_url) payload.imageCdnUrl = await toBase64Image(merged.image_cdn_url);
     if (merged.buttons) payload.buttons = j(merged.buttons);
     if (merged.place_name) payload.placeName = merged.place_name;
     if (merged.room_num) payload.roomNum = merged.room_num;

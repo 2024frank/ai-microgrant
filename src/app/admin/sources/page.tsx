@@ -253,8 +253,8 @@ export default function SourcesPage() {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead>
                   <tr style={{ background: '#f8f9fa', borderBottom: '1px solid #eee' }}>
-                    {['Source', 'Ingest endpoint', 'Schedule', 'Last run', 'Events', 'Active', '', ''].map(h => (
-                      <th key={h} style={{ padding: '0.75rem 1rem', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#888', textTransform: 'uppercase', letterSpacing: 0.5 }}>{h}</th>
+                    {['Source', 'Ingest endpoint', 'Schedule', 'Last run', 'Events', 'Active', '', ''].map((h, i) => (
+                      <th key={i} style={{ padding: '0.75rem 1rem', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#888', textTransform: 'uppercase', letterSpacing: 0.5 }}>{h}</th>
                     ))}
                   </tr>
                 </thead>

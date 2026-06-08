@@ -17,9 +17,21 @@ export async function getAuthUser(req: NextRequest): Promise<AuthUser | null> {
     const email   = decoded.email?.toLowerCase();
     if (!email) return null;
 
-    const [[user]] = await pool.query(
-      'SELECT * FROM users WHERE email = ? AND active = 1', [email]
+    let [[user]] = await pool.query(
+      'SELECT * FROM users WHERE firebase_uid = ? AND active = 1', [decoded.uid]
     ) as any;
+
+    if (!user) {
+      // Fall back to email lookup (covers seeded users with empty firebase_uid)
+      [[user]] = await pool.query(
+        'SELECT * FROM users WHERE email = ? AND active = 1', [email]
+      ) as any;
+      // Stamp the uid so future lookups hit the fast path
+      if (user) {
+        await pool.query('UPDATE users SET firebase_uid = ? WHERE id = ?', [decoded.uid, user.id]);
+      }
+    }
+
     if (!user) return null;
 
     return { uid: decoded.uid, email: user.email, role: user.role, name: user.full_name };

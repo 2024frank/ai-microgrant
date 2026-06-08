@@ -49,9 +49,10 @@ export default function EventsListPage({ status, title, emptyMsg }: EventsListPa
     if (q)            params.set('q', q);
     if (sourceFilter) params.set('source_id', sourceFilter);
 
-    fetch(`/api/events?${params}`)
-      .then(r => r.json())
+    fetch(`/api/events?${params}`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
       .then(d => { setEvents(d.events || []); setTotal(d.pagination?.total || 0); })
+      .catch(() => { setEvents([]); setTotal(0); })
       .finally(() => setLoading(false));
   }, [ready, token, status, page, q, sourceFilter]);
 

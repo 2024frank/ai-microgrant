@@ -70,6 +70,15 @@ export async function triggerAgentRun(
         throw new Error(`Agent run timed out after 30 minutes (session ${session.id})`);
       }
 
+      // Check if this run was stopped externally before each poll
+      const [[currentRun]] = await pool.query(
+        'SELECT status FROM agent_runs WHERE id = ?', [runId]
+      ) as any;
+      if (currentRun?.status === 'stopped') {
+        console.log(`[agentRunner] run=${runId} stopped externally — aborting`);
+        return { run_id: runId, inserted: 0, events: [] };
+      }
+
       const page = await client.beta.sessions.events.list(session.id, {
         ...(afterCreatedAt ? { 'created_at[gt]': afterCreatedAt } : {}),
         limit: 100,
@@ -99,8 +108,8 @@ export async function triggerAgentRun(
         }
       }
 
-      // No new events yet — wait before next poll
-      if (!done && events.length === 0) {
+      // Brief delay between every poll to avoid hammering the Sessions API
+      if (!done) {
         await new Promise(r => setTimeout(r, 3000));
       }
     }
@@ -120,7 +129,18 @@ export async function triggerAgentRun(
       return { run_id: runId, inserted: 0, events: [] };
     }
 
-    const events: any[] = JSON.parse(jsonMatch[0]);
+    let events: any[];
+    try {
+      events = JSON.parse(jsonMatch[0]);
+    } catch {
+      // Malformed JSON match — treat as no-output run
+      await pool.query(
+        `UPDATE agent_runs SET status='completed', finished_at=NOW(),
+         events_found=0, events_extracted=0 WHERE id=?`,
+        [runId]
+      );
+      return { run_id: runId, inserted: 0, events: [] };
+    }
 
     // Write events to MySQL
     const inserted = await writeEvents(events, sourceId, runId, source.calendar_source_name);

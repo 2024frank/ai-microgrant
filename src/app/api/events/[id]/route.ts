@@ -10,12 +10,17 @@ export async function GET(
 ) {
   const { id } = await context.params;
   const [[event]] = await pool.query(
-    `SELECT re.*, s.name AS source_name, s.calendar_source_name
+    `SELECT re.id, re.title, re.description, re.extended_description,
+            re.event_type, re.sponsors, re.post_type_ids, re.sessions,
+            re.location_type, re.location, re.place_name, re.room_num, re.url_link,
+            re.display, re.buttons, re.website, re.image_cdn_url,
+            re.calendar_source_name, re.calendar_source_url, re.ingested_post_url,
+            re.geo_scope, re.geo_json, re.status, re.created_at,
+            s.name AS source_name, s.calendar_source_name AS source_calendar_name
      FROM raw_events re LEFT JOIN sources s ON re.source_id = s.id WHERE re.id = ?`, [id]
   ) as any;
   if (!event) return Response.json({ error: 'Not found' }, { status: 404 });
 
-  // Parse JSON fields
   const parsed = {
     ...event,
     sponsors:      pj(event.sponsors,      []),
@@ -71,7 +76,10 @@ export async function PATCH(
     const chRes  = await fetch(`${CH_BASE}/post/${event.communityhub_post_id}/submit`, {
       method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify(chEdits),
     });
-    const chData = await chRes.json();
+    const rawText = await chRes.text();
+    let chData: any;
+    try { chData = JSON.parse(rawText); } catch { chData = { raw: rawText.slice(0, 200) }; }
+    if (!chRes.ok) throw new Error(`CommunityHub ${chRes.status}: ${chData.raw ?? JSON.stringify(chData)}`);
     const setClauses = Object.keys(edits).filter(k => editableFields.includes(k)).map(k => `${k} = ?`).join(', ');
     const setVals    = Object.entries(edits).filter(([k]) => editableFields.includes(k)).map(([,v]) => typeof v==='object'?JSON.stringify(v):v);
     if (setClauses) await conn.query(`UPDATE raw_events SET ${setClauses}, status='resubmitted' WHERE id=?`, [...setVals, id]);

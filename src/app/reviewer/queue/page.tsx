@@ -399,7 +399,7 @@ export default function ReviewerQueuePage() {
         {/* Bulk reject modal */}
         {bulkRejectModal && (
           <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.4)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:'1rem' }}
-            onClick={e => { if (e.target === e.currentTarget) setBulkRejectModal(false); }}>
+            onClick={e => { if (e.target === e.currentTarget) { setBulkRejectModal(false); setBulkRejectNote(''); setBulkRejectReasons(['other']); } }}>
             <div style={{ background:'white', borderRadius:12, padding:'1.5rem', maxWidth:480, width:'100%', boxShadow:'0 8px 32px rgba(0,0,0,0.2)' }}>
               <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'1rem' }}>
                 <span style={{ fontSize:15, fontWeight:700 }}>Reject {selected.size} event{selected.size!==1?'s':''}</span>
@@ -425,7 +425,7 @@ export default function ReviewerQueuePage() {
                 style={{ width:'100%', border:'1px solid #ddd', borderRadius:7, padding:'8px 12px', fontSize:13, fontFamily:'inherit', resize:'vertical', boxSizing:'border-box', outline:'none' }}
               />
               <div style={{ display:'flex', gap:8, marginTop:'1rem', justifyContent:'flex-end' }}>
-                <button onClick={() => setBulkRejectModal(false)} style={{ background:'#f5f5f5', border:'1px solid #ddd', color:'#666', borderRadius:7, padding:'8px 16px', fontSize:13, cursor:'pointer' }}>Cancel</button>
+                <button onClick={() => { setBulkRejectModal(false); setBulkRejectNote(''); setBulkRejectReasons(['other']); }} style={{ background:'#f5f5f5', border:'1px solid #ddd', color:'#666', borderRadius:7, padding:'8px 16px', fontSize:13, cursor:'pointer' }}>Cancel</button>
                 <button onClick={bulkReject} disabled={bulkRejectReasons.length===0 || bulkProcessing}
                   style={{ background: bulkRejectReasons.length ? '#c0392b' : '#ddd', color:'white', border:'none', borderRadius:7, padding:'8px 18px', fontSize:13, fontWeight:700, cursor: bulkRejectReasons.length ? 'pointer' : 'not-allowed', display:'flex', alignItems:'center', gap:6 }}>
                   <X size={13}/> {bulkProcessing ? 'Rejecting…' : `Reject ${selected.size}`}

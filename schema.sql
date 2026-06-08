@@ -55,7 +55,7 @@ CREATE TABLE agent_runs (
   source_id           INT UNSIGNED    NOT NULL,
   started_at          DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
   finished_at         DATETIME        NULL,
-  status              ENUM('running','completed','failed') NOT NULL DEFAULT 'running',
+  status              ENUM('running','completed','failed','stopped') NOT NULL DEFAULT 'running',
   events_found        INT UNSIGNED    NOT NULL DEFAULT 0,
   events_extracted    INT UNSIGNED    NOT NULL DEFAULT 0,
   events_skipped_dup  INT UNSIGNED    NOT NULL DEFAULT 0,

@@ -56,6 +56,10 @@ export function useAuth(requiredRole?: 'admin' | 'reviewer') {
         });
         if (!res.ok) { router.push('/login'); return; }
         const userData = await res.json() as AppUser;
+        if (requiredRole && userData.role !== requiredRole && !(requiredRole === 'reviewer' && userData.role === 'admin')) {
+          router.push('/login');
+          return;
+        }
         localStorage.setItem('user', JSON.stringify(userData));
         setUser(userData);
         setReady(true);

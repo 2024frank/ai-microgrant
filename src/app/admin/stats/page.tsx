@@ -122,7 +122,7 @@ export default function AdminStatsPage() {
             {(activity?.reviewer_stats||[]).map((u:any,i:number) => (
               <div key={u.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0.5rem 0', borderBottom: '1px solid #f5f5f5' }}>
                 <div style={{ width: 24, height: 24, borderRadius: '50%', background: i===0?'#3a8c3f':'#e8f5e9', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: i===0?'white':'#3a8c3f', flexShrink: 0 }}>
-                  {u.full_name[0]}
+                  {u.full_name?.[0] || '?'}
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.full_name}</div>

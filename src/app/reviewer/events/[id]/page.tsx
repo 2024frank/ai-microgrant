@@ -175,13 +175,19 @@ export default function ReviewEventPage() {
     if (!reasons.length) return;
     setSubmitting(true);
     const time_spent_sec = Math.round((Date.now() - startMsRef.current) / 1000);
-    await fetch(`/api/review/events/${id}/action`, {
+    const res = await fetch(`/api/review/events/${id}/action`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
       body: JSON.stringify({ action: 'reject', edits: { reason_codes: reasons, reviewer_note: note }, time_spent_sec }),
     });
-    showToast('Event rejected');
-    setTimeout(() => router.push('/reviewer/queue'), 1000);
+    if (res.ok) {
+      showToast('Event rejected');
+      setTimeout(() => router.push('/reviewer/queue'), 1000);
+    } else {
+      const d = await res.json().catch(() => ({}));
+      showToast(`Error: ${d.error || 'Please try again'}`);
+      setSubmitting(false);
+    }
   }
 
   if (!ready || !user) return null;

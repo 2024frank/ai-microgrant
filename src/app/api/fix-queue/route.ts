@@ -3,11 +3,14 @@ import pool from '@/lib/db';
 
 /**
  * GET /api/fix-queue
- * Public — no auth. Returns all events currently pending correction.
- * The fix agent fetches from here, corrects the event, then POSTs back
- * through /api/ingest/fixed-events with fixedFromEventId set.
+ * Secured by CRON_SECRET (same secret used by the fix agent).
+ * Returns all events currently pending correction.
  */
 export async function GET(_req: NextRequest) {
+  const auth = _req.headers.get('authorization');
+  if (!process.env.CRON_SECRET || auth !== `Bearer ${process.env.CRON_SECRET}`) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
   const [rows] = await pool.query(
     `SELECT
        nf.id AS fix_id,
