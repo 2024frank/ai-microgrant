@@ -4,19 +4,16 @@ import { getAuthUser, unauthorized, forbidden } from '@/lib/auth';
 
 const CH_BASE = 'https://oberlin.communityhub.cloud/api/legacy/calendar';
 
-// If val is already a base64 data URI, return as-is.
-// Otherwise fetch the URL and convert to a base64 JPEG data URI.
-async function toBase64Image(val: string): Promise<string> {
-  if (!val || val.startsWith('data:')) return val;
-  try {
-    const res = await fetch(val, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(10_000) });
-    if (!res.ok) return val;
-    const buf = Buffer.from(await res.arrayBuffer());
-    const mime = res.headers.get('content-type') || 'image/jpeg';
-    return `data:${mime};base64,${buf.toString('base64')}`;
-  } catch {
-    return val;
+// Return a publicly fetchable URL for the image.
+// If already a URL, use it directly (CommunityHub downloads it).
+// If it's a base64 data URI, point to our image-serving endpoint instead.
+function imageUrl(val: string, eventId: string): string {
+  if (!val) return val;
+  if (val.startsWith('data:')) {
+    const base = process.env.NEXT_PUBLIC_APP_URL || 'https://ai-microgrant-research-oberlin.vercel.app';
+    return `${base}/api/events/${eventId}/image`;
   }
+  return val;
 }
 
 // mysql2 auto-parses JSON columns into objects/arrays; if the value is
@@ -121,7 +118,7 @@ export async function POST(
     payload.placeId    = merged.place_id   || '';
     if (merged.extended_description) payload.extendedDescription = merged.extended_description;
     if (merged.contact_email) payload.contactEmail = merged.contact_email;
-    if (merged.image_cdn_url) payload.imageCdnUrl = await toBase64Image(merged.image_cdn_url);
+    if (merged.image_cdn_url) payload.imageCdnUrl = imageUrl(merged.image_cdn_url, eventId);
     if (merged.buttons) payload.buttons = j(merged.buttons);
     if (merged.place_name) payload.placeName = merged.place_name;
     if (merged.room_num) payload.roomNum = merged.room_num;

@@ -71,7 +71,17 @@ export async function PATCH(
       website:'website', image_cdn_url:'image_cdn_url', buttons:'buttons', display:'display',
     };
     const chEdits: Record<string,any> = {};
-    for (const [k,v] of Object.entries(edits)) { if (fieldMap[k]) chEdits[fieldMap[k]] = v; }
+    for (const [k,v] of Object.entries(edits)) {
+      if (!fieldMap[k]) continue;
+      const chKey = fieldMap[k];
+      // Convert base64 data URIs to our image-serving URL so CommunityHub can download
+      if (chKey === 'image_cdn_url' && typeof v === 'string' && v.startsWith('data:')) {
+        const base = process.env.NEXT_PUBLIC_APP_URL || 'https://ai-microgrant-research-oberlin.vercel.app';
+        chEdits['imageCdnUrl'] = `${base}/api/events/${id}/image`;
+      } else {
+        chEdits[chKey] = v;
+      }
+    }
 
     const chRes  = await fetch(`${CH_BASE}/post/${event.communityhub_post_id}/submit`, {
       method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify(chEdits),
