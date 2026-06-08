@@ -7,16 +7,16 @@ export async function GET(
 ) {
   const { id } = await context.params;
   const [[event]] = await pool.query(
-    'SELECT image_cdn_url FROM raw_events WHERE id = ?', [id]
+    'SELECT image_data, image_cdn_url FROM raw_events WHERE id = ?', [id]
   ) as any;
 
-  if (!event?.image_cdn_url) {
-    return new Response('Not found', { status: 404 });
-  }
+  if (!event) return new Response('Not found', { status: 404 });
 
-  const val: string = event.image_cdn_url;
+  // image_data holds the raw base64 data URI; image_cdn_url is a fallback URL
+  const val: string = event.image_data || event.image_cdn_url;
+  if (!val) return new Response('No image', { status: 404 });
 
-  // Already a data URI — decode and serve the bytes directly
+  // Decode a data URI and serve the bytes directly
   if (val.startsWith('data:')) {
     const comma = val.indexOf(',');
     if (comma === -1) return new Response('Invalid image data', { status: 500 });

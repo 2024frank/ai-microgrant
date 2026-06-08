@@ -103,10 +103,16 @@ export async function POST(
         fixEntry = row || null;
       }
 
-      // If agent passed poster_urls, merge them into a single base64 image
+      // If agent passed poster_urls, merge them into a single base64 image.
+      // base64 images go into image_data; image_cdn_url stores a public URL.
+      let imageData: string | null = null;
       let imageCdnUrl = san(ev.image_cdn_url, 500);
       if (Array.isArray(ev.poster_urls) && ev.poster_urls.length > 0) {
-        imageCdnUrl = await mergePosterImages(ev.poster_urls) ?? imageCdnUrl;
+        const merged = await mergePosterImages(ev.poster_urls);
+        if (merged) { imageData = merged; imageCdnUrl = null; }
+      } else if (imageCdnUrl?.startsWith('data:')) {
+        imageData = imageCdnUrl;
+        imageCdnUrl = null;
       }
 
       const [res] = await conn.query(
@@ -115,10 +121,10 @@ export async function POST(
           extended_description, sponsors, post_type_ids, sessions,
           location_type, location, place_id, place_name, room_num,
           url_link, display, screen_ids, buttons, contact_email, email,
-          phone, website, image_cdn_url, calendar_source_name,
+          phone, website, image_cdn_url, image_data, calendar_source_name,
           calendar_source_url, geo_scope, geo_json,
           corrected_from_id, sent_for_fix_by, status
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')`,
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')`,
         [
           source.id, runId,
           ['ot','ev','cl','ex','vt','sp','pe','wk','ms','ws','an'].includes(ev.eventType) ? ev.eventType : 'ot',
@@ -142,6 +148,7 @@ export async function POST(
           san(ev.phone,   30),
           san(ev.website, 500),
           imageCdnUrl,
+          imageData,
           san(ev.calendarSourceName || source.calendar_source_name || source.name, 200),
           san(ev.calendarSourceUrl, 500),
           ['local','hyper_local','regional','national'].includes(ev.geo_scope) ? ev.geo_scope : null,
@@ -152,10 +159,13 @@ export async function POST(
       ) as any;
 
       const eventId = res.insertId;
-      const ingestedPostUrl = `${process.env.NEXT_PUBLIC_APP_URL}/events/${eventId}`;
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://ai-microgrant-research-oberlin.vercel.app';
+      const ingestedPostUrl = `${appUrl}/events/${eventId}`;
+      // If we stored a base64 image, set image_cdn_url to the serving endpoint URL
+      const imageServingUrl = imageData ? `${appUrl}/api/events/${eventId}/image` : null;
       await conn.query(
-        'UPDATE raw_events SET ingested_post_url = ? WHERE id = ?',
-        [ingestedPostUrl, eventId]
+        'UPDATE raw_events SET ingested_post_url = ?, image_cdn_url = COALESCE(?, image_cdn_url) WHERE id = ?',
+        [ingestedPostUrl, imageServingUrl, eventId]
       );
 
       // If this resolves a fix request: remove original pending_fix event, clean needs_fix, notify sender

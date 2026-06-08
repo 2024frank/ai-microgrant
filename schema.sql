@@ -97,6 +97,7 @@ CREATE TABLE raw_events (
   phone                 VARCHAR(30)                       NULL,
   website               TEXT                              NULL,
   image_cdn_url         TEXT                              NULL,
+  image_data            MEDIUMTEXT                        NULL,
   calendar_source_name  VARCHAR(120)                      NULL,
   calendar_source_url   TEXT                              NULL,
   ingested_post_url     TEXT                              NULL,

@@ -172,15 +172,23 @@ async function writeEvents(events: any[], sourceId: number, runId: number, calen
     await (conn as any).beginTransaction();
 
     for (const ev of events) {
+      // Separate base64 image data from the CDN URL
+      let rawImageData: string | null = null;
+      let rawImageUrl: string | null = ev.image_cdn_url || null;
+      if (rawImageUrl?.startsWith('data:')) {
+        rawImageData = rawImageUrl;
+        rawImageUrl  = null;
+      }
+
       const [res] = await conn.query(
         `INSERT INTO raw_events (
           source_id, agent_run_id, event_type, title, description,
           extended_description, sponsors, post_type_ids, sessions,
           location_type, location, place_id, place_name, room_num,
           url_link, display, screen_ids, buttons, contact_email, email,
-          phone, website, image_cdn_url, calendar_source_name,
+          phone, website, image_cdn_url, image_data, calendar_source_name,
           calendar_source_url, geo_scope, geo_json, status
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')`,
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')`,
         [
           sourceId, runId,
           ev.eventType        || 'ot',
@@ -203,7 +211,8 @@ async function writeEvents(events: any[], sourceId: number, runId: number, calen
           ev.email            || 'fkusiapp@Oberlin.edu',
           ev.phone            || null,
           ev.website          || null,
-          ev.image_cdn_url    || null,
+          rawImageUrl,
+          rawImageData,
           ev.calendarSourceName || calendarSourceName,
           ev.calendarSourceUrl  || null,
           ev.geo_scope        || null,
@@ -212,12 +221,14 @@ async function writeEvents(events: any[], sourceId: number, runId: number, calen
       ) as any;
 
       const eventId = res.insertId;
+      const appUrl = process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'https://ai-microgrant-research-oberlin.vercel.app';
 
       // Build ingestedPostUrl now that we have the row ID
-      const ingestedPostUrl = `${process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'https://ai-microgrant-research-oberlin.vercel.app'}/events/${eventId}`;
+      const ingestedPostUrl = `${appUrl}/events/${eventId}`;
+      const imageServingUrl  = rawImageData ? `${appUrl}/api/events/${eventId}/image` : null;
       await conn.query(
-        'UPDATE raw_events SET ingested_post_url = ? WHERE id = ?',
-        [ingestedPostUrl, eventId]
+        'UPDATE raw_events SET ingested_post_url = ?, image_cdn_url = COALESCE(?, image_cdn_url) WHERE id = ?',
+        [ingestedPostUrl, imageServingUrl, eventId]
       );
 
       inserted.push({ id: eventId, title: ev.title, ingested_post_url: ingestedPostUrl });
