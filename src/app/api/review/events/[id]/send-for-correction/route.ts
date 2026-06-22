@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
 import { getAuthUser, unauthorized } from '@/lib/auth';
 
-const FIX_AGENT_SOURCE_ID = 6; // "Fixed Events" source
+const FIX_AGENT_SOURCE_SLUG = 'fixed-events';
 
 export async function POST(
   req: NextRequest,
@@ -22,6 +22,15 @@ export async function POST(
     'SELECT id, source_id, title, status, calendar_source_url FROM raw_events WHERE id = ?', [eventId]
   ) as any;
   if (!event) return Response.json({ error: 'Not found' }, { status: 404 });
+
+  const [[fixSource]] = await pool.query(
+    'SELECT id FROM sources WHERE slug = ? AND active = 1',
+    [FIX_AGENT_SOURCE_SLUG]
+  ) as any;
+  if (!fixSource) {
+    return Response.json({ error: 'Fixed Events source is not configured' }, { status: 500 });
+  }
+  const fixAgentSourceId = fixSource.id;
 
   const [[dbUser]] = await pool.query(
     'SELECT id, email FROM users WHERE firebase_uid = ?', [user.uid]
@@ -56,16 +65,17 @@ export async function POST(
       [eventId, dbUser?.id ?? null]
     );
 
+    const [runResult] = await conn.query(
+      "INSERT INTO agent_runs (source_id, status) VALUES (?, 'running')",
+      [fixAgentSourceId]
+    ) as any;
+    const runId = runResult.insertId;
+
     await (conn as any).commit();
 
     // Fire fix agent in background — don't block the response
     const anthropicKey   = process.env.ANTHROPIC_API_KEY   ?? '';
     const environmentId  = process.env.SOURCE_BUILDER_ENVIRONMENT_ID ?? '';
-    const [runResult] = await pool.query(
-      "INSERT INTO agent_runs (source_id, status) VALUES (?, 'running')",
-      [FIX_AGENT_SOURCE_ID]
-    ) as any;
-    const runId = runResult.insertId;
 
     const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://ai-microgrant-research-oberlin.vercel.app';
     const fixMessage = [
@@ -90,7 +100,7 @@ export async function POST(
     ].join('\n');
 
     import('@/lib/agentRunner').then(({ triggerAgentRun }) => {
-      triggerAgentRun(FIX_AGENT_SOURCE_ID, runId, anthropicKey, environmentId, fixMessage).catch((err: Error) => {
+      triggerAgentRun(fixAgentSourceId, runId, anthropicKey, environmentId, fixMessage).catch((err: Error) => {
         console.error(`Fix agent run ${runId} failed:`, err.message);
         // Revert the event back to 'pending' so reviewers can still act on it
         pool.query(
