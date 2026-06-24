@@ -7,6 +7,7 @@ const mockVerify = adminAuth.verifyIdToken as jest.Mock;
 function ctx(id: string) { return { params: Promise.resolve({ id }) }; }
 
 const ADMIN = { id: 1, email: 'admin@oberlin.edu', role: 'admin', full_name: 'Admin', active: 1, firebase_uid: 'uid-admin' };
+const REVIEWER = { id: 2, email: 'reviewer@oberlin.edu', role: 'reviewer', full_name: 'Reviewer', active: 1, firebase_uid: 'uid-reviewer' };
 const MOCK_EVENT = {
   id: 10, title: 'Original Title', status: 'pending', event_type: 'ot',
   description: 'Original desc', sessions: '[]', location_type: 'ph2',
@@ -114,5 +115,21 @@ describe('POST /api/events/:id/edit', () => {
       ctx('10')
     );
     expect(res.status).toBe(401);
+  });
+
+  it('returns 403 when reviewer edits an event from an unassigned source', async () => {
+    mockVerify.mockResolvedValueOnce({ uid: 'uid-reviewer', email: 'reviewer@oberlin.edu' });
+    db.default.query
+      .mockResolvedValueOnce([[REVIEWER]])
+      .mockResolvedValueOnce([[{ ...MOCK_EVENT, source_id: 2 }]])
+      .mockResolvedValueOnce([[{ assigned_count: 1, matching_count: 0 }]]);
+
+    const res = await POST(
+      makeReq('10', { edits: { title: 'Unauthorized Title' } }),
+      ctx('10')
+    );
+
+    expect(res.status).toBe(403);
+    expect(db.mockConn.beginTransaction).not.toHaveBeenCalled();
   });
 });

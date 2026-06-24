@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
-import { getAuthUser, unauthorized } from '@/lib/auth';
+import { canReviewSource, forbidden, getAuthUser, unauthorized } from '@/lib/auth';
 
 const FIX_AGENT_SOURCE_ID = 6; // "Fixed Events" source
 
@@ -22,6 +22,10 @@ export async function POST(
     'SELECT id, source_id, title, status, calendar_source_url FROM raw_events WHERE id = ?', [eventId]
   ) as any;
   if (!event) return Response.json({ error: 'Not found' }, { status: 404 });
+  if (!(await canReviewSource(user, event.source_id))) return forbidden();
+  if (event.status !== 'pending') {
+    return Response.json({ error: 'Can only send pending events for correction' }, { status: 409 });
+  }
 
   const [[dbUser]] = await pool.query(
     'SELECT id, email FROM users WHERE firebase_uid = ?', [user.uid]
@@ -97,6 +101,7 @@ export async function POST(
           "UPDATE raw_events SET status='pending', sent_for_correction=0 WHERE id=?",
           [eventId]
         );
+        pool.query('DELETE FROM needs_fix WHERE raw_event_id = ?', [eventId]);
         pool.query(
           "UPDATE agent_runs SET status='failed', finished_at=NOW(), error_log=? WHERE id=?",
           [JSON.stringify([err.message]), runId]

@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
-import { getAuthUser, unauthorized, forbidden } from '@/lib/auth';
+import { canReviewSource, getAuthUser, unauthorized, forbidden } from '@/lib/auth';
 
 const CH_BASE = 'https://oberlin.communityhub.cloud/api/legacy/calendar';
 
@@ -24,6 +24,10 @@ export async function POST(
   const { edits = {}, time_spent_sec = null, action } = await req.json();
   const { id: eventId } = await context.params;
 
+  if (action !== 'approve' && action !== 'reject') {
+    return Response.json({ error: 'Invalid action' }, { status: 400 });
+  }
+
   // Validate reject payload before acquiring a connection
   if (action === 'reject') {
     const { reason_codes } = edits;
@@ -32,8 +36,12 @@ export async function POST(
 
   const [[event]] = await pool.query('SELECT * FROM raw_events WHERE id = ?', [eventId]) as any;
   if (!event) return Response.json({ error: 'Not found' }, { status: 404 });
-  if (action === 'reject' && event.status !== 'pending') {
+  if (!(await canReviewSource(user, event.source_id))) return forbidden();
+  if (action === 'reject' && !['pending', 'pending_fix'].includes(event.status)) {
     return Response.json({ error: 'Can only reject pending events' }, { status: 409 });
+  }
+  if (action === 'approve' && event.status !== 'pending') {
+    return Response.json({ error: 'Can only approve pending events' }, { status: 409 });
   }
 
   const [[dbUser]] = await pool.query('SELECT id FROM users WHERE firebase_uid = ?', [user.uid]) as any;
@@ -47,6 +55,7 @@ export async function POST(
       const { reason_codes, reviewer_note = '' } = edits;
 
       await conn.query("UPDATE raw_events SET status='rejected' WHERE id=?", [eventId]);
+      await conn.query('DELETE FROM needs_fix WHERE raw_event_id = ?', [eventId]);
       await conn.query(
         `INSERT INTO rejection_log (raw_event_id, source_id, reviewer_id, reason_codes, reviewer_note, event_title, event_snapshot)
          VALUES (?,?,?,?,?,?,?)`,

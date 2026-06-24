@@ -18,6 +18,7 @@
 
 import { NextRequest } from 'next/server';
 import { GET as getQueue }      from '@/app/api/review/queue/route';
+import { GET as getReviewEvent } from '@/app/api/review/events/[id]/route';
 import { GET as getPublicEvents } from '@/app/api/events/route';
 import { adminAuth } from '@/lib/firebase-admin';
 
@@ -87,6 +88,10 @@ function makePublicReq(params: Record<string, string> = {}) {
   const url = new URL('http://localhost/api/events');
   Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
   return new NextRequest(url);
+}
+
+function ctx(id: string) {
+  return { params: Promise.resolve({ id }) };
 }
 
 // ---------------------------------------------------------------------------
@@ -162,6 +167,32 @@ describe('Review Queue — source assignment scoping', () => {
     expect(data.events).toHaveLength(1);
     expect(data.events[0].source_id).toBe(2);
     expect(data.events[0].source_name).toBe('Oberlin College');
+  });
+
+  it('reviewer with assignments cannot load another source event by direct id', async () => {
+    mockVerify.mockResolvedValue({ uid: 'uid-alice', email: 'alice@oberlin.edu' });
+    db.default.query
+      .mockResolvedValueOnce([[REVIEWER_A]])
+      .mockResolvedValueOnce([[{ ...OBERLIN_EVENT_1, source_id: 2 }]])
+      .mockResolvedValueOnce([[{ assigned_count: 1, matching_count: 0 }]]);
+
+    const res = await getReviewEvent(makeAuthReq('alice@oberlin.edu'), ctx('200'));
+
+    expect(res.status).toBe(403);
+  });
+
+  it('reviewer with assignments can load an event from their assigned source', async () => {
+    mockVerify.mockResolvedValue({ uid: 'uid-alice', email: 'alice@oberlin.edu' });
+    db.default.query
+      .mockResolvedValueOnce([[REVIEWER_A]])
+      .mockResolvedValueOnce([[APOLLO_EVENT_1]])
+      .mockResolvedValueOnce([[{ assigned_count: 1, matching_count: 1 }]]);
+
+    const res = await getReviewEvent(makeAuthReq('alice@oberlin.edu'), ctx('100'));
+    const data = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(data.source_id).toBe(1);
   });
 });
 

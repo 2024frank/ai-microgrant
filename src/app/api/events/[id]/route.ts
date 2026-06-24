@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
-import { getAuthUser } from '@/lib/auth';
+import { canReviewSource, forbidden, getAuthUser } from '@/lib/auth';
 
 const CH_BASE = 'https://oberlin.communityhub.cloud/api/legacy/calendar';
 
@@ -44,6 +44,7 @@ export async function PATCH(
 
   const [[event]] = await pool.query('SELECT * FROM raw_events WHERE id = ?', [id]) as any;
   if (!event) return Response.json({ error: 'Not found' }, { status: 404 });
+  if (!(await canReviewSource(user, event.source_id))) return forbidden();
   if (!event.communityhub_post_id) return Response.json({ error: 'Not yet submitted' }, { status: 400 });
 
   const [[dbUser]] = await pool.query('SELECT id FROM users WHERE firebase_uid = ?', [user.uid]) as any;
@@ -77,7 +78,7 @@ export async function PATCH(
       // Convert base64 data URIs to our image-serving URL so CommunityHub can download
       if (chKey === 'image_cdn_url' && typeof v === 'string' && v.startsWith('data:')) {
         const base = process.env.NEXT_PUBLIC_APP_URL || 'https://ai-microgrant-research-oberlin.vercel.app';
-        chEdits['image_cdn_url'] = `${base}/api/events/${id}/image`;
+        chEdits['image_cdn_url'] = `${base}/api/events/${id}/poster.jpg`;
       } else {
         chEdits[chKey] = v;
       }
