@@ -102,6 +102,7 @@ export async function POST(
         ) as any;
         fixEntry = row || null;
       }
+      const correctedFromId = fixEntry?.raw_event_id ?? fixedFromId;
 
       // Merge poster URLs into a single base64 image, or use image_cdn_url if provided.
       // image_data stores the base64 for our serving endpoint (/api/events/{id}/poster.jpg).
@@ -156,7 +157,7 @@ export async function POST(
           san(ev.calendarSourceUrl, 500),
           ['local','hyper_local','regional','national'].includes(ev.geo_scope) ? ev.geo_scope : null,
           ev.geo ? JSON.stringify(ev.geo) : null,
-          fixedFromId,
+          correctedFromId,
           san(fixEntry?.sent_by_email, 150),
         ]
       ) as any;
@@ -172,10 +173,11 @@ export async function POST(
       );
 
       // If this resolves a fix request: remove original pending_fix event, clean needs_fix, notify sender
-      if (fixedFromId && fixEntry) {
-        await conn.query('DELETE FROM needs_fix WHERE raw_event_id = ?', [fixedFromId]);
+      if (fixEntry) {
+        const originalEventId = fixEntry.raw_event_id;
+        await conn.query('DELETE FROM needs_fix WHERE raw_event_id = ?', [originalEventId]);
         // Remove the original pending_fix event so only the corrected version stays in the queue
-        await conn.query('DELETE FROM raw_events WHERE id = ? AND status = ?', [fixedFromId, 'pending_fix']);
+        await conn.query('DELETE FROM raw_events WHERE id = ? AND status = ?', [originalEventId, 'pending_fix']);
         if (fixEntry.sent_by_user_id) {
           const notifTitle = `Fixed: ${ev.title || 'Event'}`;
           const parts: string[] = [];

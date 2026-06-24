@@ -58,7 +58,7 @@ async function main() {
 
   for (const row of rows as any[]) {
     const { id, image_cdn_url, communityhub_post_id } = row;
-    const imageUrl = `${APP_URL}/api/events/${id}/image`;
+    const imageUrl = `${APP_URL}/api/events/${id}/poster.jpg`;
 
     // Move base64 to image_data, set image_cdn_url to the serving URL
     await conn.query(

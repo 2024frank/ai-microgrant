@@ -11,6 +11,7 @@ const db         = require('@/lib/db');
 const mockVerify = adminAuth.verifyIdToken as jest.Mock;
 
 const ADMIN = { id: 1, email: 'admin@oberlin.edu', role: 'admin', full_name: 'Admin', active: 1, firebase_uid: 'uid-admin' };
+const REVIEWER = { id: 2, email: 'reviewer@oberlin.edu', role: 'reviewer', full_name: 'Reviewer', active: 1, firebase_uid: 'uid-reviewer' };
 const PENDING = {
   id: 10, title: 'Jazz Night', status: 'pending', event_type: 'ot',
   description: 'A great jazz show',
@@ -128,6 +129,25 @@ describe('POST /api/review/events/:id/action', () => {
     );
     expect(res.status).toBe(404);
   });
+
+  it('returns 403 when reviewer is assigned to a different source', async () => {
+    mockVerify.mockResolvedValueOnce({ uid: 'uid-reviewer', email: 'reviewer@oberlin.edu' });
+    db.default.query
+      .mockResolvedValueOnce([[REVIEWER]])
+      .mockResolvedValueOnce([[{ ...PENDING, source_id: 2 }]])
+      .mockResolvedValueOnce([[{ assigned_count: 1, matching_count: 0 }]]);
+
+    const res = await POST(
+      makeReq('/api/review/events/10/action', {
+        action: 'reject',
+        edits: { reason_codes: ['other'] },
+      }),
+      ctx('10')
+    );
+
+    expect(res.status).toBe(403);
+    expect(db.mockConn.beginTransaction).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /api/review/events/:id/action — approve path', () => {
@@ -146,6 +166,58 @@ describe('POST /api/review/events/:id/action — approve path', () => {
     expect(res.status).toBe(200);
     expect(data.ok).toBe(true);
     expect(data.communityhub).toEqual({ id: 'ch_post_abc123' });
+  });
+
+  it('returns 409 and does not resubmit an already approved event', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[{ ...PENDING, status: 'approved', communityhub_post_id: 'ch_existing' }]])
+      .mockResolvedValueOnce([[{ id: 1 }]]);
+
+    const res = await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve' }),
+      ctx('10')
+    );
+
+    expect(res.status).toBe(409);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('returns 409 and does not approve an event awaiting fixes', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[{ ...PENDING, status: 'pending_fix' }]])
+      .mockResolvedValueOnce([[{ id: 1 }]]);
+
+    const res = await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve' }),
+      ctx('10')
+    );
+
+    expect(res.status).toBe(409);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects pending_fix events and clears correction queue entries', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[{ ...PENDING, status: 'pending_fix' }]])
+      .mockResolvedValueOnce([[{ id: 1 }]]);
+
+    const res = await POST(
+      makeReq('/api/review/events/10/action', {
+        action: 'reject',
+        edits: { reason_codes: ['other'] },
+      }),
+      ctx('10')
+    );
+
+    expect(res.status).toBe(200);
+    const needsFixDelete = db.mockConn.query.mock.calls.find(
+      (c: any[]) => typeof c[0] === 'string' && c[0].includes('DELETE FROM needs_fix')
+    );
+    expect(needsFixDelete).toBeDefined();
+    expect(needsFixDelete[1]).toEqual(['10']);
   });
 
   it('POSTs correct payload to CommunityHub including ingestedPostUrl', async () => {
