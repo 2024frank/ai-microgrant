@@ -40,10 +40,13 @@ export default function AdminStatsPage() {
       {showTour && <OnboardingTour role="admin" token={token} onDone={() => setShowTour(false)}/>}
       <Sidebar role="admin" name={user.name} email={user.email} token={token} />
       <main style={{ flex: 1, padding: '2rem', overflowY: 'auto' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
-          <h1 style={{ fontSize: 22, fontWeight: 700 }}>Dashboard</h1>
-          <select value={days} onChange={e => setDays(e.target.value)}
-            style={{ padding: '0.4rem 0.75rem', border: '1.5px solid #ddd', borderRadius: 6, fontSize: 13, outline: 'none' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: '1.5rem', gap: 16, flexWrap: 'wrap' }}>
+          <div>
+            <h1 style={{ fontSize: 25, fontWeight: 800 }}>Dashboard</h1>
+            <p style={{ fontSize: 13, color: 'var(--gray-mid)', marginTop: 3 }}>Extraction quality and review activity at a glance.</p>
+          </div>
+          <select value={days} onChange={e => setDays(e.target.value)} className="input"
+            style={{ width: 'auto', padding: '0.5rem 0.85rem', fontWeight: 600, cursor: 'pointer' }}>
             <option value="7">Last 7 days</option>
             <option value="30">Last 30 days</option>
             <option value="90">Last 90 days</option>
@@ -51,8 +54,11 @@ export default function AdminStatsPage() {
         </div>
 
         {activity?.today && (
-          <div style={{ background: '#e8f5e9', borderRadius: 10, padding: '1rem 1.25rem', marginBottom: '1.5rem', display: 'flex', gap: '2rem', alignItems: 'center' }}>
-            <span style={{ fontSize: 12, fontWeight: 700, color: '#2a6b2e', textTransform: 'uppercase', letterSpacing: 0.5 }}>Today</span>
+          <div className="animate-rise" style={{ background: 'linear-gradient(180deg, #ecf7ed, #e3f3e5)', border: '1px solid var(--green-200)', borderRadius: 'var(--r-lg)', padding: '1rem 1.35rem', marginBottom: '1.5rem', display: 'flex', gap: '2rem', alignItems: 'center', flexWrap: 'wrap', boxShadow: 'var(--shadow-xs)' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 11.5, fontWeight: 800, color: 'var(--green-700)', textTransform: 'uppercase', letterSpacing: 0.8 }}>
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--green-500)', boxShadow: '0 0 0 3px rgba(58,140,63,0.18)' }}/>
+              Today
+            </span>
             <TodayStat label="Extracted" val={activity.today.extracted_today || 0}/>
             <TodayStat label="Approved"  val={activity.today.approved_today  || 0}/>
             <TodayStat label="Rejected"  val={activity.today.rejected_today  || 0} color="#c0392b"/>
@@ -61,7 +67,7 @@ export default function AdminStatsPage() {
         )}
 
         {stats && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
+          <div className="stagger" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
             <StatCard label="Extracted"    value={stats.total_extracted || 0} icon={<TrendingUp size={18} color="#3a8c3f"/>} />
             <StatCard label="Approved"     value={stats.total_approved  || 0} icon={<CheckCircle size={18} color="#3a8c3f"/>} color="#e8f5e9" />
             <StatCard label="Rejected"     value={stats.total_rejected  || 0} icon={<XCircle size={18} color="#c0392b"/>}    color="#fdecea" />
@@ -191,22 +197,26 @@ export default function AdminStatsPage() {
   );
 }
 
-function TodayStat({ label, val, color='#3a8c3f' }: any) {
+function TodayStat({ label, val, color='#2a6b2e' }: any) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-      <span style={{ fontSize: 20, fontWeight: 800, color }}>{val}</span>
-      <span style={{ fontSize: 11, color: '#2a6b2e' }}>{label}</span>
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 7 }}>
+      <span className="tnum" style={{ fontSize: 22, fontWeight: 800, color, letterSpacing: '-0.02em' }}>{val}</span>
+      <span style={{ fontSize: 11.5, color: 'var(--green-700)', fontWeight: 600 }}>{label}</span>
     </div>
   );
 }
 
-function StatCard({ label, value, icon, color='#f8f9fa' }: any) {
+function StatCard({ label, value, icon, color='#f1f5f1' }: any) {
   return (
-    <div className="card" style={{ background: color, display: 'flex', alignItems: 'center', gap: 12 }}>
-      <div style={{ padding: 8, background: 'white', borderRadius: 8 }}>{icon}</div>
-      <div>
-        <div style={{ fontSize: 22, fontWeight: 800 }}>{value}</div>
-        <div style={{ fontSize: 11, color: '#888', textTransform: 'uppercase', letterSpacing: 0.5 }}>{label}</div>
+    <div className="card card-hover" style={{ padding: '1.25rem 1.35rem', display: 'flex', alignItems: 'center', gap: 14 }}>
+      <div style={{
+        width: 46, height: 46, borderRadius: 13, flexShrink: 0,
+        background: color, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        boxShadow: 'inset 0 0 0 1px rgba(20,45,25,0.04)',
+      }}>{icon}</div>
+      <div style={{ minWidth: 0 }}>
+        <div className="tnum" style={{ fontSize: 27, fontWeight: 800, lineHeight: 1.05, letterSpacing: '-0.02em' }}>{value}</div>
+        <div style={{ fontSize: 10.5, color: 'var(--gray-mid)', textTransform: 'uppercase', letterSpacing: 0.7, fontWeight: 700, marginTop: 3 }}>{label}</div>
       </div>
     </div>
   );

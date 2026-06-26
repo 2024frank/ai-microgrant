@@ -1,77 +1,261 @@
 @import "tailwindcss";
 
+/* ============================================================
+   AI Events Ingestion — Design System
+   Civic / trustworthy green. Calm surfaces, crisp depth, soft motion.
+   Legacy token + class names are preserved so existing pages keep
+   working while inheriting the upgraded look.
+   ============================================================ */
+
 :root {
+  /* Brand green scale */
+  --green-50:  #f0f9f1;
+  --green-100: #e8f5e9;
+  --green-200: #c8e6c9;
+  --green-300: #a5d6a7;
+  --green-400: #66bb6a;
+  --green-500: #3a8c3f;
+  --green-600: #2f7a34;
+  --green-700: #2a6b2e;
+  --green-800: #1f5022;
+
+  /* Legacy aliases (used across pages — keep) */
   --green-primary: #3a8c3f;
   --green-dark:    #2a6b2e;
   --green-light:   #e8f5e9;
   --green-mid:     #c8e6c9;
-  --black:         #111111;
-  --gray-dark:     #333333;
-  --gray-mid:      #666666;
-  --gray-light:    #f5f5f5;
-  --white:         #ffffff;
-  --danger:        #c0392b;
+
+  /* Neutrals */
+  --black:      #0f1411;
+  --gray-900:   #1a1f1c;
+  --gray-dark:  #333333;
+  --gray-700:   #3f4a43;
+  --gray-mid:   #667067;
+  --gray-500:   #8a948c;
+  --gray-300:   #d7ddd8;
+  --gray-200:   #e7ece8;
+  --gray-100:   #f2f5f2;
+  --gray-light: #f5f7f5;
+  --white:      #ffffff;
+
+  /* Semantic */
+  --danger:        #d63b2a;
+  --danger-dark:   #b32d1e;
+  --danger-light:  #fdecea;
   --warning:       #e67e22;
+  --warning-light: #fff3e0;
+  --info:          #1565c0;
+  --info-light:    #e3f2fd;
+
+  /* Surfaces */
+  --bg:          #f7f9f7;
+  --surface:     #ffffff;
+  --border:      #e7ece8;
+  --border-soft: #eef2ee;
+
+  /* Radii */
+  --r-sm: 7px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 20px;
+
+  /* Elevation — subtle green-tinted shadows */
+  --shadow-xs: 0 1px 2px rgba(20, 45, 25, 0.05);
+  --shadow-sm: 0 1px 3px rgba(20, 45, 25, 0.07), 0 1px 2px rgba(20, 45, 25, 0.04);
+  --shadow-md: 0 4px 14px rgba(20, 45, 25, 0.08), 0 2px 4px rgba(20, 45, 25, 0.04);
+  --shadow-lg: 0 12px 32px rgba(20, 45, 25, 0.12), 0 4px 8px rgba(20, 45, 25, 0.05);
+  --shadow-xl: 0 24px 56px rgba(15, 35, 20, 0.18);
+  --ring: 0 0 0 3px rgba(58, 140, 63, 0.22);
+
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
 }
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
 
 body {
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
-  background: var(--white);
+  font-family: var(--font-inter), system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background:
+    radial-gradient(1200px 600px at 100% -10%, rgba(58, 140, 63, 0.05), transparent 60%),
+    var(--bg);
   color: var(--black);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  letter-spacing: -0.01em;
+  text-rendering: optimizeLegibility;
 }
+
+::selection { background: var(--green-200); color: var(--green-800); }
+
+h1, h2, h3, h4 { letter-spacing: -0.02em; font-weight: 700; }
+
+a { color: inherit; }
+
+/* Numbers in stats / tables align nicely */
+.tnum { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+
+/* ---- Buttons ---------------------------------------------- */
+.btn-primary,
+.btn-ghost,
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  padding: 0.55rem 1.15rem;
+  border-radius: var(--r-sm);
+  font-weight: 600;
+  font-size: 0.875rem;
+  line-height: 1;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: transform 0.12s var(--ease), background 0.15s var(--ease),
+    box-shadow 0.15s var(--ease), border-color 0.15s var(--ease), color 0.15s var(--ease);
+  white-space: nowrap;
+}
+.btn-primary:active,
+.btn-ghost:active,
+.btn-danger:active { transform: translateY(0.5px) scale(0.99); }
 
 .btn-primary {
-  background: var(--green-primary);
-  color: white;
-  padding: 0.5rem 1.25rem;
-  border-radius: 6px;
-  font-weight: 500;
-  font-size: 0.9rem;
-  border: none;
-  cursor: pointer;
-  transition: background 0.15s;
+  background: linear-gradient(180deg, var(--green-500), var(--green-600));
+  color: #fff;
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, 0.18);
 }
-.btn-primary:hover { background: var(--green-dark); }
+.btn-primary:hover { background: linear-gradient(180deg, var(--green-600), var(--green-700)); box-shadow: var(--shadow-md); }
 
 .btn-ghost {
-  background: transparent;
-  color: var(--green-primary);
-  padding: 0.5rem 1.25rem;
-  border-radius: 6px;
-  font-weight: 500;
-  font-size: 0.9rem;
-  border: 1.5px solid var(--green-primary);
-  cursor: pointer;
-  transition: all 0.15s;
+  background: var(--surface);
+  color: var(--green-700);
+  border-color: var(--green-200);
 }
-.btn-ghost:hover { background: var(--green-light); }
+.btn-ghost:hover { background: var(--green-50); border-color: var(--green-300); }
 
 .btn-danger {
-  background: var(--danger);
-  color: white;
-  padding: 0.5rem 1.25rem;
-  border-radius: 6px;
-  font-weight: 500;
-  font-size: 0.9rem;
-  border: none;
-  cursor: pointer;
+  background: linear-gradient(180deg, var(--danger), var(--danger-dark));
+  color: #fff;
+  box-shadow: var(--shadow-sm);
+}
+.btn-danger:hover { box-shadow: var(--shadow-md); }
+
+.btn-primary:disabled,
+.btn-ghost:disabled,
+.btn-danger:disabled { opacity: 0.55; cursor: not-allowed; box-shadow: none; transform: none; }
+
+:where(button, a, input, select, textarea):focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+  border-radius: var(--r-sm);
 }
 
+/* ---- Cards ------------------------------------------------ */
 .card {
-  background: white;
-  border: 1px solid #e0e0e0;
-  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
   padding: 1.5rem;
+  box-shadow: var(--shadow-sm);
+}
+.card-hover { transition: box-shadow 0.18s var(--ease), transform 0.18s var(--ease), border-color 0.18s var(--ease); }
+.card-hover:hover { box-shadow: var(--shadow-md); transform: translateY(-2px); border-color: var(--green-200); }
+
+/* ---- Badges ----------------------------------------------- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1.4;
+}
+.badge-green { background: var(--green-100); color: var(--green-700); }
+.badge-gray  { background: var(--gray-100);  color: var(--gray-700); }
+.badge-red   { background: var(--danger-light); color: var(--danger-dark); }
+.badge-amber { background: var(--warning-light); color: #c05e00; }
+.badge-blue  { background: var(--info-light); color: var(--info); }
+
+/* ---- Form controls ---------------------------------------- */
+.input,
+input.input,
+select.input,
+textarea.input {
+  width: 100%;
+  border: 1px solid var(--gray-300);
+  border-radius: var(--r-sm);
+  padding: 0.6rem 0.8rem;
+  font-size: 0.875rem;
+  font-family: inherit;
+  color: var(--black);
+  background: var(--surface);
+  transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+  outline: none;
+}
+.input:focus { border-color: var(--green-400); box-shadow: var(--ring); }
+.input::placeholder { color: var(--gray-500); }
+
+/* ---- Surfaces / helpers ----------------------------------- */
+.surface { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); }
+.muted   { color: var(--gray-mid); }
+.hairline { border-top: 1px solid var(--border-soft); }
+
+/* ---- Motion ----------------------------------------------- */
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slideUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes scaleIn { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: scale(1); } }
+@keyframes shimmer { 100% { transform: translateX(100%); } }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.animate-fade  { animation: fadeIn 0.35s var(--ease) both; }
+.animate-rise  { animation: slideUp 0.4s var(--ease) both; }
+.animate-pop   { animation: scaleIn 0.22s var(--ease) both; }
+
+/* Stagger helper for lists */
+.stagger > * { animation: slideUp 0.4s var(--ease) both; }
+.stagger > *:nth-child(1) { animation-delay: 0.02s; }
+.stagger > *:nth-child(2) { animation-delay: 0.06s; }
+.stagger > *:nth-child(3) { animation-delay: 0.10s; }
+.stagger > *:nth-child(4) { animation-delay: 0.14s; }
+.stagger > *:nth-child(5) { animation-delay: 0.18s; }
+.stagger > *:nth-child(6) { animation-delay: 0.22s; }
+.stagger > *:nth-child(7) { animation-delay: 0.26s; }
+.stagger > *:nth-child(8) { animation-delay: 0.30s; }
+
+/* ---- Loading skeleton ------------------------------------- */
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--gray-100);
+  border-radius: var(--r-sm);
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.65), transparent);
+  animation: shimmer 1.4s infinite;
 }
 
-.badge {
+.spinner {
+  width: 16px; height: 16px;
+  border: 2px solid var(--green-200);
+  border-top-color: var(--green-500);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
   display: inline-block;
-  padding: 2px 10px;
-  border-radius: 20px;
-  font-size: 0.75rem;
-  font-weight: 600;
 }
-.badge-green  { background: var(--green-light); color: var(--green-dark); }
-.badge-gray   { background: #f0f0f0; color: #555; }
-.badge-red    { background: #fdecea; color: var(--danger); }
-.badge-amber  { background: #fff3e0; color: #c05e00; }
+
+/* ---- Scrollbars ------------------------------------------- */
+* { scrollbar-width: thin; scrollbar-color: var(--gray-300) transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--gray-300); border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
+*::-webkit-scrollbar-thumb:hover { background: var(--gray-500); background-clip: padding-box; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; scroll-behavior: auto !important; }
+}

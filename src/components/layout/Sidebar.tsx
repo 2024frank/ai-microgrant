@@ -86,11 +86,14 @@ export default function Sidebar({ role, name, email, token }: SidebarProps) {
     <aside style={{
       width: w, minWidth: w, height: '100vh',
       position: 'sticky', top: 0, alignSelf: 'flex-start',
-      borderRight: '1px solid #e8f0e8',
-      background: previewAsReviewer ? '#f8fff8' : '#fff',
+      borderRight: '1px solid var(--border)',
+      background: previewAsReviewer
+        ? 'linear-gradient(180deg, #f8fff8, #f1faf1)'
+        : 'linear-gradient(180deg, #ffffff, #fbfdfb)',
+      boxShadow: '1px 0 0 rgba(20,45,25,0.02), 4px 0 24px rgba(20,45,25,0.03)',
       display: 'flex', flexDirection: 'column', flexShrink: 0,
       overflow: 'hidden',
-      transition: 'width 0.2s ease, min-width 0.2s ease',
+      transition: 'width 0.22s var(--ease), min-width 0.22s var(--ease)',
     }}>
 
       {/* Logo row */}
@@ -101,12 +104,19 @@ export default function Sidebar({ role, name, email, token }: SidebarProps) {
         gap: collapsed ? 0 : 10, flexShrink: 0,
         justifyContent: collapsed ? 'center' : 'flex-start',
       }}>
-        <Image src="/logo.png" alt="AI Events Ingestion Software" width={32} height={32} style={{ borderRadius: 4, flexShrink: 0 }}/>
+        <div style={{
+          width: 34, height: 34, borderRadius: 9, flexShrink: 0,
+          background: 'linear-gradient(180deg, #ffffff, #eef7ef)',
+          border: '1px solid var(--green-200)', boxShadow: 'var(--shadow-xs)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <Image src="/logo.png" alt="AI Events Ingestion Software" width={22} height={22} style={{ borderRadius: 5 }}/>
+        </div>
         {!collapsed && (
           <div>
-            <div style={{ fontSize: 10, fontWeight: 800, color: '#3a8c3f', letterSpacing: 0.8, lineHeight: 1.35, whiteSpace: 'nowrap' }}>AI EVENTS</div>
-            <div style={{ fontSize: 10, fontWeight: 800, color: '#3a8c3f', letterSpacing: 0.8, lineHeight: 1.35, whiteSpace: 'nowrap' }}>INGESTION</div>
-            <div style={{ fontSize: 9, color: '#bbb', marginTop: 1 }}>CommunityHub</div>
+            <div style={{ fontSize: 10.5, fontWeight: 800, color: 'var(--green-600)', letterSpacing: 0.9, lineHeight: 1.3, whiteSpace: 'nowrap' }}>AI EVENTS</div>
+            <div style={{ fontSize: 10.5, fontWeight: 800, color: 'var(--green-600)', letterSpacing: 0.9, lineHeight: 1.3, whiteSpace: 'nowrap' }}>INGESTION</div>
+            <div style={{ fontSize: 9, color: 'var(--gray-500)', marginTop: 2, letterSpacing: 0.4 }}>CommunityHub</div>
           </div>
         )}
       </div>
@@ -289,15 +299,18 @@ function NavItem({ href, icon, label, active, collapsed, badge }: {
       display: 'flex', alignItems: 'center',
       gap: collapsed ? 0 : 8,
       padding: collapsed ? '0.5rem' : '0.45rem 0.75rem',
-      borderRadius: 7, marginBottom: 1,
+      borderRadius: 8, marginBottom: 2,
       fontSize: 13, textDecoration: 'none',
       justifyContent: collapsed ? 'center' : 'flex-start',
-      background: active ? '#e8f5e9' : 'transparent',
-      color:      active ? '#2a6b2e' : '#555',
-      fontWeight: active ? 600 : 400,
+      background: active ? 'linear-gradient(180deg, #ecf7ed, #e3f3e4)' : 'transparent',
+      color:      active ? 'var(--green-700)' : 'var(--gray-700)',
+      fontWeight: active ? 700 : 500,
+      boxShadow: active ? 'inset 3px 0 0 var(--green-500)' : 'none',
       position: 'relative',
-      transition: 'background 0.1s',
-    }}>
+      transition: 'background 0.15s var(--ease), color 0.15s var(--ease), box-shadow 0.15s var(--ease)',
+    }}
+    onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'var(--gray-100)'; }}
+    onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}>
       <span style={{ flexShrink: 0 }}>{icon}</span>
       {!collapsed && <span style={{ flex: 1, whiteSpace: 'nowrap' }}>{label}</span>}
       {!collapsed && badge !== undefined && (

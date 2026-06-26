@@ -215,8 +215,8 @@ export default function ReviewEventPage() {
 
         <div style={{ marginBottom:'1rem', display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:12 }}>
           <div>
-            <button onClick={() => router.push('/reviewer/queue')} style={{ background:'none', border:'none', cursor:'pointer', color:'#888', fontSize:12, padding:0, marginBottom:6 }}>← Back to queue</button>
-            <h1 style={{ fontSize:20, fontWeight:700 }}>Review event</h1>
+            <button onClick={() => router.push('/reviewer/queue')} style={{ background:'none', border:'none', cursor:'pointer', color:'var(--gray-mid)', fontSize:12, fontWeight:500, padding:0, marginBottom:7 }}>← Back to queue</button>
+            <h1 style={{ fontSize:24, fontWeight:800 }}>Review event</h1>
           </div>
           <div style={{ display:'flex', gap:8, flexWrap:'wrap', justifyContent:'flex-end' }}>
             <button onClick={saveEdits} disabled={!hasEdits || saving} className="btn-ghost"
@@ -241,8 +241,8 @@ export default function ReviewEventPage() {
         </div>
 
         {/* Source info bar */}
-        <div style={{ background:'#e8f5e9', borderRadius:8, padding:'0.75rem 1rem', marginBottom:'1.25rem', fontSize:12, display:'flex', gap:16, alignItems:'center' }}>
-          <span style={{ fontWeight:600, color:'#2a6b2e' }}>{event.source_name}</span>
+        <div style={{ background:'linear-gradient(180deg, #ecf7ed, #e3f3e5)', border:'1px solid var(--green-200)', borderRadius:'var(--r-md)', padding:'0.7rem 1rem', marginBottom:'1.25rem', fontSize:12, display:'flex', gap:16, alignItems:'center', flexWrap:'wrap' }}>
+          <span style={{ fontWeight:700, color:'var(--green-700)' }}>{event.source_name}</span>
           {event.calendar_source_url && (
             <a href={event.calendar_source_url} target="_blank" rel="noreferrer"
               style={{ display:'flex', alignItems:'center', gap:4, color:'#3a8c3f', textDecoration:'none', fontSize:11 }}>
@@ -528,7 +528,8 @@ export default function ReviewEventPage() {
 function SectionCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="card" style={{ display:'flex', flexDirection:'column', gap:'1rem', marginBottom:'1rem' }}>
-      <div style={{ fontSize:11, fontWeight:700, color:'#aaa', textTransform:'uppercase', letterSpacing:1, borderBottom:'1px solid #f0f0f0', paddingBottom:'0.5rem' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:8, fontSize:11, fontWeight:700, color:'var(--green-700)', textTransform:'uppercase', letterSpacing:0.9, borderBottom:'1px solid var(--border-soft)', paddingBottom:'0.6rem' }}>
+        <span style={{ width:5, height:5, borderRadius:'50%', background:'var(--green-500)' }}/>
         {title}
       </div>
       {children}
@@ -548,18 +549,22 @@ function Field({ label, children }: { label?: string; children: React.ReactNode 
 function ToggleBtn({ active, onClick, children }: { active: boolean; onClick: ()=>void; children: React.ReactNode }) {
   return (
     <button onClick={onClick}
-      style={{ padding:'0.35rem 0.75rem', borderRadius:6, border:'1.5px solid', fontSize:12, cursor:'pointer',
-        borderColor: active ? '#3a8c3f' : '#ddd',
-        background:  active ? '#e8f5e9' : 'white',
-        color:       active ? '#2a6b2e' : '#555',
-        fontWeight:  active ? 600 : 400 }}>
+      style={{ padding:'0.4rem 0.8rem', borderRadius:'var(--r-sm)', border:'1px solid', fontSize:12, cursor:'pointer',
+        transition:'all 0.14s var(--ease)',
+        borderColor: active ? 'var(--green-400)' : 'var(--gray-300)',
+        background:  active ? 'var(--green-100)' : 'var(--surface)',
+        color:       active ? 'var(--green-700)' : 'var(--gray-700)',
+        boxShadow:   active ? 'var(--shadow-xs)' : 'none',
+        fontWeight:  active ? 700 : 500 }}>
       {children}
     </button>
   );
 }
 
 const inputStyle: React.CSSProperties = {
-  width:'100%', padding:'0.55rem 0.75rem',
-  border:'1.5px solid #ddd', borderRadius:6,
+  width:'100%', padding:'0.6rem 0.8rem',
+  border:'1px solid var(--gray-300)', borderRadius:'var(--r-sm)',
   fontSize:13, outline:'none', boxSizing:'border-box', fontFamily:'inherit',
+  color:'var(--black)', background:'var(--surface)',
+  transition:'border-color 0.15s var(--ease), box-shadow 0.15s var(--ease)',
 };

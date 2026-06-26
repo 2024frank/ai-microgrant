@@ -198,8 +198,9 @@ export default function ReviewerQueuePage() {
   }
 
   const selectStyle: React.CSSProperties = {
-    border: '1px solid #dde', borderRadius: 7, padding: '6px 10px',
-    fontSize: 13, background: 'white', color: '#333', cursor: 'pointer', outline: 'none',
+    border: '1px solid var(--gray-300)', borderRadius: 'var(--r-sm)', padding: '7px 12px',
+    fontSize: 13, background: 'var(--surface)', color: 'var(--gray-dark)', cursor: 'pointer',
+    outline: 'none', fontWeight: 500, boxShadow: 'var(--shadow-xs)',
   };
 
   return (
@@ -216,9 +217,18 @@ export default function ReviewerQueuePage() {
       <main style={{ flex:1, padding:'2rem' }}>
 
         {/* Header */}
-        <div style={{ marginBottom:'1.25rem' }}>
-          <h1 style={{ fontSize:22, fontWeight:700, marginBottom:4 }}>Review queue</h1>
-          <p style={{ fontSize:13, color:'#888' }}>{total} event{total!==1?'s':''} pending review</p>
+        <div style={{ marginBottom:'1.4rem' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+            <h1 style={{ fontSize:25, fontWeight:800 }}>Review queue</h1>
+            {total > 0 && (
+              <span className="tnum" style={{ display:'inline-flex', alignItems:'center', background:'var(--green-100)', color:'var(--green-700)', fontWeight:700, fontSize:13, padding:'2px 11px', borderRadius:999 }}>
+                {total}
+              </span>
+            )}
+          </div>
+          <p style={{ fontSize:13, color:'var(--gray-mid)', marginTop:3 }}>
+            {total} event{total!==1?'s':''} awaiting review across all sources.
+          </p>
         </div>
 
         {/* Filter / sort bar */}
@@ -309,9 +319,9 @@ export default function ReviewerQueuePage() {
               return (
                 <div key={ev.id}
                   className="card"
-                  style={{ cursor:'pointer', display:'flex', alignItems:'center', gap:'0.75rem', padding:'1rem 1.25rem', opacity: isPendingFix ? 0.7 : 1, outline: isSelected ? '2px solid #3a8c3f' : 'none', background: isSelected ? '#f0faf0' : 'white' }}
-                  onMouseEnter={e=>(e.currentTarget.style.boxShadow='0 2px 12px rgba(58,140,63,0.15)')}
-                  onMouseLeave={e=>(e.currentTarget.style.boxShadow='none')}>
+                  style={{ cursor:'pointer', display:'flex', alignItems:'center', gap:'0.75rem', padding:'0.9rem 1.15rem', opacity: isPendingFix ? 0.72 : 1, outline: isSelected ? '2px solid var(--green-500)' : 'none', background: isSelected ? '#f0faf0' : 'var(--surface)', transition:'box-shadow 0.18s var(--ease), transform 0.18s var(--ease)' }}
+                  onMouseEnter={e=>{ e.currentTarget.style.boxShadow='var(--shadow-md)'; e.currentTarget.style.transform='translateY(-2px)'; }}
+                  onMouseLeave={e=>{ e.currentTarget.style.boxShadow='var(--shadow-sm)'; e.currentTarget.style.transform='none'; }}>
 
                   {/* Checkbox */}
                   <button
