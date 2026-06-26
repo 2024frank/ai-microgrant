@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
-import { getAuthUser, unauthorized } from '@/lib/auth';
+import { canReviewSource, getAuthUser, unauthorized, forbidden } from '@/lib/auth';
 
 export async function GET(
   req: NextRequest,
@@ -10,6 +10,13 @@ export async function GET(
   if (!user) return unauthorized();
 
   const { id } = await context.params;
+
+  const [[event]] = await pool.query(
+    'SELECT source_id FROM raw_events WHERE id = ?',
+    [id]
+  ) as any;
+  if (!event) return Response.json(null, { status: 404 });
+  if (!(await canReviewSource(user, event.source_id))) return forbidden();
 
   const [[rejection]] = await pool.query(
     `SELECT rl.reason_codes, rl.reviewer_note, rl.created_at,

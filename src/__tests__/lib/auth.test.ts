@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { getAuthUser } from '@/lib/auth';
+import { canReviewSource, getAuthUser } from '@/lib/auth';
 import { adminAuth } from '@/lib/firebase-admin';
 
 const db = require('@/lib/db');
@@ -61,14 +61,70 @@ describe('getAuthUser', () => {
     expect(result!.role).toBe('reviewer');
   });
 
-  it('queries DB with correct email (lowercased)', async () => {
+  it('falls back to the lowercased email when uid lookup misses', async () => {
     mockVerify.mockResolvedValueOnce({ uid: 'uid-x', email: 'User@Oberlin.EDU' });
-    db.default.query.mockResolvedValueOnce([[{
-      id: 3, email: 'user@oberlin.edu', role: 'reviewer', full_name: 'User X', active: 1, firebase_uid: 'uid-x',
-    }]]);
+    db.default.query
+      .mockResolvedValueOnce([[]])
+      .mockResolvedValueOnce([[{
+        id: 3, email: 'user@oberlin.edu', role: 'reviewer', full_name: 'User X', active: 1, firebase_uid: '',
+      }]])
+      .mockResolvedValueOnce([{ affectedRows: 1 }]);
 
     await getAuthUser(makeReq('valid-token'));
-    const queryCall = db.default.query.mock.calls[0];
+    const queryCall = db.default.query.mock.calls[1];
     expect(queryCall[1][0]).toBe('user@oberlin.edu');
+  });
+});
+
+describe('canReviewSource', () => {
+  it('allows admins without querying reviewer assignments', async () => {
+    const allowed = await canReviewSource({
+      uid: 'uid-admin',
+      email: 'admin@oberlin.edu',
+      role: 'admin',
+      name: 'Admin',
+    }, 1);
+
+    expect(allowed).toBe(true);
+    expect(db.default.query).not.toHaveBeenCalled();
+  });
+
+  it('allows reviewers with no source assignments to review all sources', async () => {
+    db.default.query.mockResolvedValueOnce([[{ assigned_count: 0, matching_count: null }]]);
+
+    const allowed = await canReviewSource({
+      uid: 'uid-reviewer',
+      email: 'reviewer@oberlin.edu',
+      role: 'reviewer',
+      name: 'Reviewer',
+    }, 99);
+
+    expect(allowed).toBe(true);
+  });
+
+  it('allows reviewers assigned to the source', async () => {
+    db.default.query.mockResolvedValueOnce([[{ assigned_count: 2, matching_count: 1 }]]);
+
+    const allowed = await canReviewSource({
+      uid: 'uid-reviewer',
+      email: 'reviewer@oberlin.edu',
+      role: 'reviewer',
+      name: 'Reviewer',
+    }, 1);
+
+    expect(allowed).toBe(true);
+  });
+
+  it('denies reviewers assigned only to other sources', async () => {
+    db.default.query.mockResolvedValueOnce([[{ assigned_count: 1, matching_count: 0 }]]);
+
+    const allowed = await canReviewSource({
+      uid: 'uid-reviewer',
+      email: 'reviewer@oberlin.edu',
+      role: 'reviewer',
+      name: 'Reviewer',
+    }, 2);
+
+    expect(allowed).toBe(false);
   });
 });

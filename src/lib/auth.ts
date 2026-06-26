@@ -9,6 +9,22 @@ export interface AuthUser {
   name:  string;
 }
 
+export async function canReviewSource(user: AuthUser, sourceId: number | string): Promise<boolean> {
+  if (user.role === 'admin') return true;
+
+  const [[scope]] = await pool.query(
+    `SELECT
+       COUNT(*) AS assigned_count,
+       SUM(CASE WHEN rs.source_id = ? THEN 1 ELSE 0 END) AS matching_count
+     FROM reviewer_sources rs
+     JOIN users u ON u.id = rs.reviewer_id
+     WHERE u.firebase_uid = ?`,
+    [sourceId, user.uid]
+  ) as any;
+
+  return Number(scope?.assigned_count ?? 0) === 0 || Number(scope?.matching_count ?? 0) > 0;
+}
+
 export async function getAuthUser(req: NextRequest): Promise<AuthUser | null> {
   const header = req.headers.get('authorization');
   if (!header?.startsWith('Bearer ')) return null;

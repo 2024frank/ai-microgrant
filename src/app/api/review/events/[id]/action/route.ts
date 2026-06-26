@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
-import { getAuthUser, unauthorized, forbidden } from '@/lib/auth';
+import { canReviewSource, getAuthUser, unauthorized, forbidden } from '@/lib/auth';
 
 const CH_BASE = 'https://oberlin.communityhub.cloud/api/legacy/calendar';
 
@@ -32,8 +32,12 @@ export async function POST(
 
   const [[event]] = await pool.query('SELECT * FROM raw_events WHERE id = ?', [eventId]) as any;
   if (!event) return Response.json({ error: 'Not found' }, { status: 404 });
-  if (action === 'reject' && event.status !== 'pending') {
-    return Response.json({ error: 'Can only reject pending events' }, { status: 409 });
+  if (!(await canReviewSource(user, event.source_id))) return forbidden();
+  if (!['approve', 'reject'].includes(action)) {
+    return Response.json({ error: 'Invalid action' }, { status: 400 });
+  }
+  if (event.status !== 'pending') {
+    return Response.json({ error: `Can only ${action} pending events` }, { status: 409 });
   }
 
   const [[dbUser]] = await pool.query('SELECT id FROM users WHERE firebase_uid = ?', [user.uid]) as any;

@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
-import { getAuthUser, unauthorized } from '@/lib/auth';
+import { canReviewSource, getAuthUser, unauthorized, forbidden } from '@/lib/auth';
 
 /**
  * POST /api/events/:id/edit
@@ -18,6 +18,7 @@ export async function POST(
 ) {
   const user = await getAuthUser(req);
   if (!user) return unauthorized();
+  if (user.role !== 'admin' && user.role !== 'reviewer') return forbidden();
 
   const { id } = await context.params;
   const { edits = {}, note = '' } = await req.json();
@@ -27,6 +28,7 @@ export async function POST(
      JOIN sources s ON re.source_id = s.id WHERE re.id = ?`, [id]
   ) as any;
   if (!event) return Response.json({ error: 'Not found' }, { status: 404 });
+  if (!(await canReviewSource(user, event.source_id))) return forbidden();
 
   const [[dbUser]] = await pool.query(
     'SELECT id FROM users WHERE firebase_uid = ?', [user.uid]
