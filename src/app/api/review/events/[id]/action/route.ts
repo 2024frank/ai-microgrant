@@ -107,8 +107,13 @@ export async function POST(
     payload.placeId    = merged.place_id   || '';
     if (merged.extended_description) payload.extendedDescription = merged.extended_description;
     if (merged.contact_email) payload.contactEmail = merged.contact_email;
-    // image_cdn_url in the DB is now a /api/events/{id}/poster.jpg URL — CH accepts it (has .jpg extension)
-    if (merged.image_cdn_url) payload.image_cdn_url = merged.image_cdn_url;
+    // Always hand CommunityHub our own stable serving URL (which proxies/caches
+    // the real image bytes), never a raw third-party URL its downloader may fail
+    // to fetch. The /poster.jpg path satisfies CH's image-extension check.
+    if (merged.image_data || merged.image_cdn_url) {
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://ai-microgrant-research-oberlin.vercel.app';
+      payload.image_cdn_url = `${appUrl}/api/events/${eventId}/poster.jpg`;
+    }
     if (merged.buttons) payload.buttons = j(merged.buttons);
     if (merged.place_name) payload.placeName = merged.place_name;
     if (merged.room_num) payload.roomNum = merged.room_num;

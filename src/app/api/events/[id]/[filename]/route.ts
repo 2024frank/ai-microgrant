@@ -30,5 +30,23 @@ export async function GET(
     });
   }
 
-  return Response.redirect(val, 302);
+  // Proxy external images server-side so consumers (e.g. CommunityHub) always
+  // receive real image bytes from our stable URL, instead of a redirect to a
+  // third-party host whose downloader they may fail to fetch from.
+  try {
+    const upstream = await fetch(val, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!upstream.ok) return new Response('Upstream image error', { status: 502 });
+    const buf = Buffer.from(await upstream.arrayBuffer());
+    return new Response(buf, {
+      headers: {
+        'Content-Type': upstream.headers.get('content-type') || 'image/jpeg',
+        'Cache-Control': 'public, max-age=86400',
+      },
+    });
+  } catch {
+    return new Response('Image fetch failed', { status: 502 });
+  }
 }
