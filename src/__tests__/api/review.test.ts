@@ -11,6 +11,7 @@ const db         = require('@/lib/db');
 const mockVerify = adminAuth.verifyIdToken as jest.Mock;
 
 const ADMIN = { id: 1, email: 'admin@oberlin.edu', role: 'admin', full_name: 'Admin', active: 1, firebase_uid: 'uid-admin' };
+const REVIEWER = { id: 2, email: 'reviewer@oberlin.edu', role: 'reviewer', full_name: 'Reviewer', active: 1, firebase_uid: 'uid-reviewer' };
 const PENDING = {
   id: 10, title: 'Jazz Night', status: 'pending', event_type: 'ot',
   description: 'A great jazz show',
@@ -116,6 +117,22 @@ describe('POST /api/review/events/:id/action', () => {
     expect(res.status).toBe(409);
   });
 
+  it('returns 403 when assigned reviewer rejects an out-of-scope event', async () => {
+    mockVerify.mockResolvedValueOnce({ uid: 'uid-reviewer', email: 'reviewer@oberlin.edu' });
+    db.default.query
+      .mockResolvedValueOnce([[REVIEWER]])
+      .mockResolvedValueOnce([[PENDING]])
+      .mockResolvedValueOnce([[{ assigned_count: 1, matching_count: 0 }]]);
+
+    const res = await POST(
+      makeReq('/api/review/events/10/action', { action: 'reject', edits: { reason_codes: ['other'] } }),
+      ctx('10')
+    );
+
+    expect(res.status).toBe(403);
+    expect(db.mockConn.beginTransaction).not.toHaveBeenCalled();
+  });
+
   it('returns 404 when event not found', async () => {
     db.default.query
       .mockResolvedValueOnce([[ADMIN]])
@@ -146,6 +163,38 @@ describe('POST /api/review/events/:id/action — approve path', () => {
     expect(res.status).toBe(200);
     expect(data.ok).toBe(true);
     expect(data.communityhub).toEqual({ id: 'ch_post_abc123' });
+  });
+
+  it('returns 403 when assigned reviewer approves an out-of-scope event', async () => {
+    mockVerify.mockResolvedValueOnce({ uid: 'uid-reviewer', email: 'reviewer@oberlin.edu' });
+    db.default.query
+      .mockResolvedValueOnce([[REVIEWER]])
+      .mockResolvedValueOnce([[PENDING]])
+      .mockResolvedValueOnce([[{ assigned_count: 1, matching_count: 0 }]]);
+
+    const res = await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve' }),
+      ctx('10')
+    );
+
+    expect(res.status).toBe(403);
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(db.mockConn.beginTransaction).not.toHaveBeenCalled();
+  });
+
+  it('returns 409 and does not publish when approving a non-pending event', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[{ ...PENDING, status: 'approved' }]]);
+
+    const res = await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve' }),
+      ctx('10')
+    );
+
+    expect(res.status).toBe(409);
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(db.mockConn.beginTransaction).not.toHaveBeenCalled();
   });
 
   it('POSTs correct payload to CommunityHub including ingestedPostUrl', async () => {
