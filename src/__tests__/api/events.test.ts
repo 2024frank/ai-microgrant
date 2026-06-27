@@ -1,7 +1,12 @@
 import { NextRequest } from 'next/server';
 import { GET } from '@/app/api/events/route';
+import { PATCH } from '@/app/api/events/[id]/route';
+import { adminAuth } from '@/lib/firebase-admin';
 
 const db = require('@/lib/db');
+const mockVerify = adminAuth.verifyIdToken as jest.Mock;
+const mockFetch = jest.fn();
+global.fetch = mockFetch;
 
 const EVENTS = [
   { id: 1, title: 'Jazz Night',           status: 'pending',  event_type: 'ot', sponsors: '[]', post_type_ids: '[]', sessions: '[]', buttons: '[]' },
@@ -17,6 +22,19 @@ function makeReq(params: Record<string, string> = {}) {
 
 beforeEach(() => {
   db.default.query.mockReset();
+  db.mockConn.query.mockReset();
+  db.mockConn.query.mockResolvedValue([{ affectedRows: 1 }]);
+  db.mockConn.beginTransaction = jest.fn().mockResolvedValue(undefined);
+  db.mockConn.commit           = jest.fn().mockResolvedValue(undefined);
+  db.mockConn.rollback         = jest.fn().mockResolvedValue(undefined);
+  db.mockConn.release          = jest.fn();
+  mockVerify.mockReset();
+  mockVerify.mockResolvedValue({ uid: 'uid-admin', email: 'admin@oberlin.edu' });
+  mockFetch.mockReset();
+  mockFetch.mockResolvedValue({
+    ok: true,
+    text: jest.fn().mockResolvedValue(JSON.stringify({ ok: true })),
+  });
 });
 
 describe('GET /api/events (public — no auth required)', () => {
@@ -111,5 +129,38 @@ describe('GET /api/events (public — no auth required)', () => {
     const data = await (await GET(makeReq())).json();
     expect(Array.isArray(data.events[0].sponsors)).toBe(true);
     expect(Array.isArray(data.events[0].sessions)).toBe(true);
+  });
+});
+
+describe('PATCH /api/events/:id', () => {
+  it('converts data URI image edits to the poster.jpg serving URL for CommunityHub', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[
+        { id: 1, email: 'admin@oberlin.edu', role: 'admin', full_name: 'Admin', active: 1, firebase_uid: 'uid-admin' },
+      ]])
+      .mockResolvedValueOnce([[
+        {
+          id: 10,
+          source_id: 1,
+          status: 'approved',
+          communityhub_post_id: 'ch_existing_123',
+          image_cdn_url: 'http://old.example/image.jpg',
+        },
+      ]])
+      .mockResolvedValueOnce([[{ id: 1 }]]);
+
+    const res = await PATCH(
+      new NextRequest('http://localhost/api/events/10', {
+        method: 'PATCH',
+        headers: { Authorization: 'Bearer valid', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ edits: { image_cdn_url: 'data:image/jpeg;base64,abc123' } }),
+      }),
+      { params: Promise.resolve({ id: '10' }) }
+    );
+
+    expect(res.status).toBe(200);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [, opts] = mockFetch.mock.calls[0];
+    expect(JSON.parse(opts.body).image_cdn_url).toBe('http://localhost:3000/api/events/10/poster.jpg');
   });
 });

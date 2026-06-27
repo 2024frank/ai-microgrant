@@ -345,7 +345,8 @@ describe('Scenario 2 – Reviewer queue serves events with correct structure', (
   it('full event detail includes all fields needed for the review card', async () => {
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_USER]])
-      .mockResolvedValueOnce([[{ ...RAW_EVENT, source_name: SOURCE.name, calendar_source_name: SOURCE.calendar_source_name }]]);
+      .mockResolvedValueOnce([[{ ...RAW_EVENT, source_name: SOURCE.name, calendar_source_name: SOURCE.calendar_source_name }]])
+      .mockResolvedValueOnce([[{ user_count: 1, assignment_count: 0, matching_count: 0 }]]);
 
     const res  = await getEvent(makeAuthReq('/api/review/events/10'), ctx('10'));
     const data = await res.json();
@@ -386,6 +387,7 @@ describe('Scenario 3 – Approve sends correct CommunityHub payload', () => {
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_USER]])
       .mockResolvedValueOnce([[RAW_EVENT]])
+      .mockResolvedValueOnce([[{ user_count: 1, assignment_count: 0, matching_count: 0 }]])
       .mockResolvedValueOnce([[{ id: 5 }]]); // reviewer db id
   });
 
