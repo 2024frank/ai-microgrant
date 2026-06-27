@@ -186,7 +186,7 @@ describe('Scenario 1 – Agent run writes events with schema-correct structure',
 
     db.default.query
       .mockResolvedValueOnce([[SOURCE]])          // SELECT sources
-      .mockResolvedValueOnce([{ insertId: 99 }]) // INSERT agent_runs
+      .mockResolvedValueOnce([[{ status: 'running' }]]) // stop-status poll
       .mockResolvedValueOnce([{ affectedRows: 1 }]); // UPDATE agent_runs completed
 
     // conn queries: 2 per event (INSERT raw_events + UPDATE ingested_post_url)
