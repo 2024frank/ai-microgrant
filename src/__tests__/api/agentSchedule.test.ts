@@ -25,14 +25,19 @@ function makeReq(secret = 'test-cron-secret') {
 }
 
 // Helper: set up pool mocks for N sources
-// Route does: [sources] + N×[INSERT agent_runs] + (if totalNew>0) [reviewers] + N×[pending per reviewer]
+// Route does: [sources] + per-source [INSERT agent_runs, optional failure UPDATE]
+// + (if totalNew>0) [reviewers] + N×[pending per reviewer]
 function mockForSources(sources: any[], triggerResults: any[], reviewerPending = 0) {
   db.default.query.mockReset();
   db.default.query.mockResolvedValueOnce([sources]); // active sources query
-  // INSERT agent_runs — one per source
+
   for (let i = 0; i < sources.length; i++) {
     db.default.query.mockResolvedValueOnce([{ insertId: i + 1 }]);
+    if (triggerResults[i] instanceof Error) {
+      db.default.query.mockResolvedValueOnce([{ affectedRows: 1 }]);
+    }
   }
+
   // reviewers + pending (only if at least one source succeeds)
   const totalNew = triggerResults.reduce((s, r) => s + (r?.inserted || 0), 0);
   if (totalNew > 0) {

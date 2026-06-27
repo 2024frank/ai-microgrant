@@ -89,6 +89,7 @@ beforeEach(() => {
 function setupPoolHappyPath() {
   db.default.query
     .mockResolvedValueOnce([[SOURCE]])
+    .mockResolvedValueOnce([[{ status: 'running' }]]) // stop-status poll
     .mockResolvedValueOnce([{ affectedRows: 1 }]); // UPDATE agent_runs completed
 }
 
@@ -192,6 +193,7 @@ describe('triggerAgentRun — multiple events', () => {
 
     db.default.query
       .mockResolvedValueOnce([[SOURCE]])
+      .mockResolvedValueOnce([[{ status: 'running' }]])
       .mockResolvedValueOnce([{ affectedRows: 1 }]);
 
     const result = await triggerAgentRun(1, 99, 'test-key', 'test-env');
@@ -260,6 +262,7 @@ describe('triggerAgentRun — DB write failure', () => {
   it('rolls back transaction and marks run failed when conn.query throws', async () => {
     db.default.query
       .mockResolvedValueOnce([[SOURCE]])
+      .mockResolvedValueOnce([[{ status: 'running' }]])
       .mockResolvedValueOnce([{ affectedRows: 1 }]);
 
     db.mockConn.query.mockReset();
