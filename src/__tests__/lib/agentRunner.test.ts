@@ -69,6 +69,12 @@ function makeSessionEvents(events: object[] = [AGENT_EVENT]) {
 // ── Setup ─────────────────────────────────────────────────────────────────────
 beforeEach(() => {
   jest.clearAllMocks();
+  db.default.query.mockReset();
+  db.mockConn.query.mockReset();
+  mockGetHistory.mockReset();
+  mockSessionsCreate.mockReset();
+  mockSessionsEventsSend.mockReset();
+  mockSessionsEventsList.mockReset();
   process.env.NEXT_PUBLIC_APP_URL = 'http://localhost:3000';
 
   mockGetHistory.mockResolvedValue({ count: 0, prompt_block: '' });
@@ -89,6 +95,7 @@ beforeEach(() => {
 function setupPoolHappyPath() {
   db.default.query
     .mockResolvedValueOnce([[SOURCE]])
+    .mockResolvedValueOnce([[{ status: 'running' }]]) // stop-status poll
     .mockResolvedValueOnce([{ affectedRows: 1 }]); // UPDATE agent_runs completed
 }
 
@@ -192,6 +199,7 @@ describe('triggerAgentRun — multiple events', () => {
 
     db.default.query
       .mockResolvedValueOnce([[SOURCE]])
+      .mockResolvedValueOnce([[{ status: 'running' }]])
       .mockResolvedValueOnce([{ affectedRows: 1 }]);
 
     const result = await triggerAgentRun(1, 99, 'test-key', 'test-env');
@@ -233,7 +241,7 @@ describe('triggerAgentRun — agent failures', () => {
   });
 
   it('marks run as failed when sessions.create throws', async () => {
-    mockSessionsCreate.mockRejectedValue(new Error('Rate limited'));
+    mockSessionsCreate.mockRejectedValueOnce(new Error('Rate limited'));
     await expect(triggerAgentRun(1, 99, 'test-key', 'test-env'))
       .rejects.toThrow('Rate limited');
 
@@ -244,7 +252,7 @@ describe('triggerAgentRun — agent failures', () => {
   });
 
   it('stores error message in error_log', async () => {
-    mockSessionsCreate.mockRejectedValue(new Error('Connection timeout'));
+    mockSessionsCreate.mockRejectedValueOnce(new Error('Connection timeout'));
     await expect(triggerAgentRun(1, 99, 'test-key', 'test-env')).rejects.toThrow();
 
     const failUpdate = db.default.query.mock.calls.find(
@@ -260,6 +268,7 @@ describe('triggerAgentRun — DB write failure', () => {
   it('rolls back transaction and marks run failed when conn.query throws', async () => {
     db.default.query
       .mockResolvedValueOnce([[SOURCE]])
+      .mockResolvedValueOnce([[{ status: 'running' }]])
       .mockResolvedValueOnce([{ affectedRows: 1 }]);
 
     db.mockConn.query.mockReset();

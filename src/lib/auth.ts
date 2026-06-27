@@ -40,6 +40,24 @@ export async function getAuthUser(req: NextRequest): Promise<AuthUser | null> {
   }
 }
 
+export async function canReviewSource(user: AuthUser, sourceId: number | string): Promise<boolean> {
+  if (user.role === 'admin') return true;
+
+  const [[scope]] = await pool.query(
+    `SELECT
+       COUNT(u.id) AS user_count,
+       COUNT(rs.source_id) AS assignment_count,
+       COALESCE(SUM(CASE WHEN rs.source_id = ? THEN 1 ELSE 0 END), 0) AS matching_count
+     FROM users u
+     LEFT JOIN reviewer_sources rs ON rs.reviewer_id = u.id
+     WHERE u.firebase_uid = ? AND u.active = 1`,
+    [sourceId, user.uid]
+  ) as any;
+
+  if (Number(scope?.user_count ?? 0) === 0) return false;
+  return Number(scope?.assignment_count ?? 0) === 0 || Number(scope?.matching_count ?? 0) > 0;
+}
+
 export function unauthorized() {
   return Response.json({ error: 'Unauthorized' }, { status: 401 });
 }

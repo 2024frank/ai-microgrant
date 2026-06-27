@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
-import { getAuthUser, unauthorized, forbidden } from '@/lib/auth';
+import { canReviewSource, getAuthUser, unauthorized, forbidden } from '@/lib/auth';
 
 const CH_BASE = 'https://oberlin.communityhub.cloud/api/legacy/calendar';
 
@@ -11,6 +11,11 @@ function j(val: any, fallback: any = []): any {
   if (val === null || val === undefined) return fallback;
   if (typeof val === 'string') { try { return JSON.parse(val); } catch { return fallback; } }
   return val; // already an object/array from mysql2
+}
+
+async function parseCommunityHubResponse(res: Response): Promise<any> {
+  const rawText = await res.text();
+  try { return JSON.parse(rawText); } catch { return { raw: rawText.slice(0, 200) }; }
 }
 
 export async function POST(
@@ -24,6 +29,10 @@ export async function POST(
   const { edits = {}, time_spent_sec = null, action } = await req.json();
   const { id: eventId } = await context.params;
 
+  if (action !== 'approve' && action !== 'reject') {
+    return Response.json({ error: 'Invalid action' }, { status: 400 });
+  }
+
   // Validate reject payload before acquiring a connection
   if (action === 'reject') {
     const { reason_codes } = edits;
@@ -32,8 +41,12 @@ export async function POST(
 
   const [[event]] = await pool.query('SELECT * FROM raw_events WHERE id = ?', [eventId]) as any;
   if (!event) return Response.json({ error: 'Not found' }, { status: 404 });
+  if (!(await canReviewSource(user, event.source_id))) return forbidden();
   if (action === 'reject' && event.status !== 'pending') {
     return Response.json({ error: 'Can only reject pending events' }, { status: 409 });
+  }
+  if (action === 'approve' && !event.communityhub_post_id && event.status !== 'pending') {
+    return Response.json({ error: 'Can only approve pending events' }, { status: 409 });
   }
 
   const [[dbUser]] = await pool.query('SELECT id FROM users WHERE firebase_uid = ?', [user.uid]) as any;
@@ -115,16 +128,39 @@ export async function POST(
     if (['ph2','bo'].includes(merged.location_type)) payload.location = merged.location || '';
     if (['on','bo'].includes(merged.location_type)) payload.urlLink = merged.url_link   || '';
 
-    const chRes  = await fetch(`${CH_BASE}/post/submit`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
-    });
+    const postIdFromEvent = event.communityhub_post_id;
+    const chRes = await fetch(
+      postIdFromEvent ? `${CH_BASE}/post/${postIdFromEvent}/submit` : `${CH_BASE}/post/submit`,
+      {
+        method: postIdFromEvent ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }
+    );
     // CommunityHub may return HTML on errors — parse safely
-    const rawText = await chRes.text();
-    let chData: any;
-    try { chData = JSON.parse(rawText); } catch { chData = { raw: rawText.slice(0, 200) }; }
+    let chData = await parseCommunityHubResponse(chRes);
+    if (!chData || typeof chData !== 'object') chData = { raw: String(chData).slice(0, 200) };
     if (!chRes.ok) throw new Error(`CommunityHub ${chRes.status}: ${chData.raw ?? JSON.stringify(chData)}`);
 
-    await conn.query(`UPDATE raw_events SET status='approved', communityhub_post_id=? WHERE id=?`, [chData?.id || null, eventId]);
+    const communityHubPostId = postIdFromEvent || chData?.id || null;
+    if (!communityHubPostId) throw new Error('CommunityHub did not return a post id');
+
+    if (!postIdFromEvent && payload.image_cdn_url) {
+      const imageRes = await fetch(`${CH_BASE}/post/${communityHubPostId}/submit`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image_cdn_url: payload.image_cdn_url }),
+      });
+      let imageData = await parseCommunityHubResponse(imageRes);
+      if (!imageData || typeof imageData !== 'object') imageData = { raw: String(imageData).slice(0, 200) };
+      if (!imageRes.ok) {
+        throw new Error(`CommunityHub image ${imageRes.status}: ${imageData.raw ?? JSON.stringify(imageData)}`);
+      }
+      chData.imagePatch = imageData;
+    }
+    chData.id = chData.id || communityHubPostId;
+
+    await conn.query(`UPDATE raw_events SET status='approved', communityhub_post_id=? WHERE id=?`, [communityHubPostId, eventId]);
     await conn.query(
       `INSERT INTO review_sessions (raw_event_id, reviewer_id, action, time_spent_sec, submitted_to_ch, ch_response) VALUES (?,?,'approved',?,1,?)`,
       [eventId, reviewerId, time_spent_sec, JSON.stringify(chData)]

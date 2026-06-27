@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { GET } from '@/app/api/review/queue/route';
 import { POST } from '@/app/api/review/events/[id]/action/route';
+import { POST as sendForCorrection } from '@/app/api/review/events/[id]/send-for-correction/route';
 import { adminAuth } from '@/lib/firebase-admin';
 
 // Mock global fetch for CommunityHub API calls
@@ -11,6 +12,7 @@ const db         = require('@/lib/db');
 const mockVerify = adminAuth.verifyIdToken as jest.Mock;
 
 const ADMIN = { id: 1, email: 'admin@oberlin.edu', role: 'admin', full_name: 'Admin', active: 1, firebase_uid: 'uid-admin' };
+const REVIEWER = { id: 2, email: 'reviewer@oberlin.edu', role: 'reviewer', full_name: 'Reviewer', active: 1, firebase_uid: 'uid-reviewer' };
 const PENDING = {
   id: 10, title: 'Jazz Night', status: 'pending', event_type: 'ot',
   description: 'A great jazz show',
@@ -128,6 +130,22 @@ describe('POST /api/review/events/:id/action', () => {
     );
     expect(res.status).toBe(404);
   });
+
+  it('returns 403 when reviewer tries to act on an out-of-scope source', async () => {
+    mockVerify.mockResolvedValueOnce({ uid: 'uid-reviewer', email: 'reviewer@oberlin.edu' });
+    db.default.query
+      .mockResolvedValueOnce([[REVIEWER]])
+      .mockResolvedValueOnce([[{ ...PENDING, source_id: 2 }]])
+      .mockResolvedValueOnce([[{ user_count: 1, assignment_count: 1, matching_count: 0 }]]);
+
+    const res = await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve' }),
+      ctx('10')
+    );
+
+    expect(res.status).toBe(403);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /api/review/events/:id/action — approve path', () => {
@@ -165,6 +183,46 @@ describe('POST /api/review/events/:id/action — approve path', () => {
     const body = JSON.parse(opts.body);
     expect(body.ingestedPostUrl).toBe(PENDING.ingested_post_url);
     expect(body.calendarSourceName).toBe(PENDING.calendar_source_name);
+  });
+
+  it('PATCHes the image after creating a CommunityHub post', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[{ ...PENDING, image_cdn_url: 'http://localhost:3000/api/events/10/poster.jpg' }]])
+      .mockResolvedValueOnce([[{ id: 1 }]]);
+
+    await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve' }),
+      ctx('10')
+    );
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch.mock.calls[0][0]).toBe('https://oberlin.communityhub.cloud/api/legacy/calendar/post/submit');
+    expect(mockFetch.mock.calls[1][0]).toBe('https://oberlin.communityhub.cloud/api/legacy/calendar/post/ch_post_abc123/submit');
+    expect(mockFetch.mock.calls[1][1].method).toBe('PATCH');
+    expect(JSON.parse(mockFetch.mock.calls[1][1].body)).toEqual({
+      image_cdn_url: 'http://localhost:3000/api/events/10/poster.jpg',
+    });
+  });
+
+  it('PATCHes an existing CommunityHub post instead of creating a duplicate', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[{ ...PENDING, status: 'approved', communityhub_post_id: 'ch_existing_123' }]])
+      .mockResolvedValueOnce([[{ id: 1 }]]);
+
+    await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve', edits: { title: 'Updated title' } }),
+      ctx('10')
+    );
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockFetch.mock.calls[0][0]).toBe('https://oberlin.communityhub.cloud/api/legacy/calendar/post/ch_existing_123/submit');
+    expect(mockFetch.mock.calls[0][1].method).toBe('PATCH');
+    const approveUpdate = db.mockConn.query.mock.calls.find(
+      (c: any[]) => typeof c[0] === 'string' && c[0].includes("status='approved'")
+    );
+    expect(approveUpdate[1]).toContain('ch_existing_123');
   });
 
   it('logs field edits when reviewer sends modified fields', async () => {
@@ -266,5 +324,23 @@ describe('POST /api/review/events/:id/action — approve path', () => {
     expect(sessionInsert[0]).toContain("'approved'");
     // submitted_to_ch = 1
     expect(sessionInsert[1]).toContain(1);
+  });
+});
+
+describe('POST /api/review/events/:id/send-for-correction', () => {
+  it('returns 409 for approved events so published rows cannot enter the fix-delete flow', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[{ ...PENDING, status: 'approved' }]]);
+
+    const res = await sendForCorrection(
+      makeReq('/api/review/events/10/send-for-correction', {
+        correction_notes: 'Fix the title',
+      }),
+      ctx('10')
+    );
+
+    expect(res.status).toBe(409);
+    expect(db.mockConn.beginTransaction).not.toHaveBeenCalled();
   });
 });
