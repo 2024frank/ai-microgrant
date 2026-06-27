@@ -69,6 +69,12 @@ function makeSessionEvents(events: object[] = [AGENT_EVENT]) {
 // ── Setup ─────────────────────────────────────────────────────────────────────
 beforeEach(() => {
   jest.clearAllMocks();
+  db.default.query.mockReset();
+  db.mockConn.query.mockReset();
+  mockGetHistory.mockReset();
+  mockSessionsCreate.mockReset();
+  mockSessionsEventsSend.mockReset();
+  mockSessionsEventsList.mockReset();
   process.env.NEXT_PUBLIC_APP_URL = 'http://localhost:3000';
 
   mockGetHistory.mockResolvedValue({ count: 0, prompt_block: '' });
