@@ -235,7 +235,7 @@ describe('triggerAgentRun — agent failures', () => {
   });
 
   it('marks run as failed when sessions.create throws', async () => {
-    mockSessionsCreate.mockRejectedValue(new Error('Rate limited'));
+    mockSessionsCreate.mockRejectedValueOnce(new Error('Rate limited'));
     await expect(triggerAgentRun(1, 99, 'test-key', 'test-env'))
       .rejects.toThrow('Rate limited');
 
@@ -246,7 +246,7 @@ describe('triggerAgentRun — agent failures', () => {
   });
 
   it('stores error message in error_log', async () => {
-    mockSessionsCreate.mockRejectedValue(new Error('Connection timeout'));
+    mockSessionsCreate.mockRejectedValueOnce(new Error('Connection timeout'));
     await expect(triggerAgentRun(1, 99, 'test-key', 'test-env')).rejects.toThrow();
 
     const failUpdate = db.default.query.mock.calls.find(
