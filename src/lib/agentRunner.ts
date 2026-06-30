@@ -239,7 +239,7 @@ async function writeEvents(events: any[], sourceId: number, runId: number, calen
       const eventId = res.insertId;
       const appUrl = process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'https://ai-microgrant-research-oberlin.vercel.app';
 
-      const ingestedPostUrl = `${appUrl}/events/${eventId}`;
+      const ingestedPostUrl = `${appUrl}/reviewer/events/${eventId}`;
       // Set image_cdn_url to serving URL with .jpg extension — CH validates the extension
       const servingImageUrl = rawImageData ? `${appUrl}/api/events/${eventId}/poster.jpg` : null;
       await conn.query(

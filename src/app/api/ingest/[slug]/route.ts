@@ -180,7 +180,7 @@ export async function POST(
 
       const eventId = res.insertId;
       const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://ai-microgrant-research-oberlin.vercel.app';
-      const ingestedPostUrl = `${appUrl}/events/${eventId}`;
+      const ingestedPostUrl = `${appUrl}/reviewer/events/${eventId}`;
       // Set image_cdn_url to the serving URL with .jpg extension — CH validates the extension
       const servingImageUrl = imageData ? `${appUrl}/api/events/${eventId}/poster.jpg` : null;
       await conn.query(
