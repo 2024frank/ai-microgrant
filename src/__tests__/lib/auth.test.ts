@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { getAuthUser } from '@/lib/auth';
+import { canReviewSource, getAuthUser } from '@/lib/auth';
 import { adminAuth } from '@/lib/firebase-admin';
 
 const db = require('@/lib/db');
@@ -70,5 +70,35 @@ describe('getAuthUser', () => {
     await getAuthUser(makeReq('valid-token'));
     const queryCall = db.default.query.mock.calls[0];
     expect(queryCall[1][0]).toBe('user@oberlin.edu');
+  });
+});
+
+describe('canReviewSource', () => {
+  const admin = { uid: 'uid-admin', email: 'admin@oberlin.edu', role: 'admin' as const, name: 'Admin' };
+  const reviewer = { uid: 'uid-rev', email: 'reviewer@oberlin.edu', role: 'reviewer' as const, name: 'Reviewer' };
+
+  it('allows admins without querying reviewer assignments', async () => {
+    await expect(canReviewSource(admin, 1)).resolves.toBe(true);
+    expect(db.default.query).not.toHaveBeenCalled();
+  });
+
+  it('allows reviewers with no source assignments', async () => {
+    db.default.query.mockResolvedValueOnce([[{ allowed: 1 }]]);
+
+    await expect(canReviewSource(reviewer, 1)).resolves.toBe(true);
+  });
+
+  it('allows reviewers assigned to the event source', async () => {
+    db.default.query.mockResolvedValueOnce([[{ allowed: 1 }]]);
+
+    await expect(canReviewSource(reviewer, 2)).resolves.toBe(true);
+    expect(db.default.query.mock.calls[0][0]).toContain('reviewer_sources');
+    expect(db.default.query.mock.calls[0][1]).toEqual(['uid-rev', 'uid-rev', 2]);
+  });
+
+  it('denies reviewers assigned only to other sources', async () => {
+    db.default.query.mockResolvedValueOnce([[{ allowed: 0 }]]);
+
+    await expect(canReviewSource(reviewer, 99)).resolves.toBe(false);
   });
 });

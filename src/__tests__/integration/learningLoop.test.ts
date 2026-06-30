@@ -151,7 +151,18 @@ beforeEach(() => {
   db.mockConn.rollback         = jest.fn().mockResolvedValue(undefined);
   db.mockConn.release          = jest.fn();
   db.mockConn.query.mockReset();
-  db.mockConn.query.mockResolvedValue([{ affectedRows: 1 }]);
+  db.mockConn.query.mockImplementation((sql: string) => {
+    if (typeof sql === 'string' && sql.includes('FOR UPDATE')) {
+      return Promise.resolve([[PENDING_EVENT]]);
+    }
+    if (typeof sql === 'string' && sql.includes('reviewer_sources')) {
+      return Promise.resolve([[{ allowed: 1 }]]);
+    }
+    if (typeof sql === 'string' && sql.includes('SELECT id FROM users')) {
+      return Promise.resolve([[{ id: 5 }]]);
+    }
+    return Promise.resolve([{ affectedRows: 1 }]);
+  });
 });
 
 // ===========================================================================

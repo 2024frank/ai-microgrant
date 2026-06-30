@@ -345,7 +345,8 @@ describe('Scenario 2 – Reviewer queue serves events with correct structure', (
   it('full event detail includes all fields needed for the review card', async () => {
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_USER]])
-      .mockResolvedValueOnce([[{ ...RAW_EVENT, source_name: SOURCE.name, calendar_source_name: SOURCE.calendar_source_name }]]);
+      .mockResolvedValueOnce([[{ ...RAW_EVENT, source_name: SOURCE.name, calendar_source_name: SOURCE.calendar_source_name }]])
+      .mockResolvedValueOnce([[{ allowed: 1 }]]);
 
     const res  = await getEvent(makeAuthReq('/api/review/events/10'), ctx('10'));
     const data = await res.json();
@@ -377,7 +378,18 @@ describe('Scenario 3 – Approve sends correct CommunityHub payload', () => {
   beforeEach(() => {
     db.default.query.mockReset();
     db.mockConn.query.mockReset();
-    db.mockConn.query.mockResolvedValue([{ affectedRows: 1 }]);
+    db.mockConn.query.mockImplementation((sql: string) => {
+      if (typeof sql === 'string' && sql.includes('FOR UPDATE')) {
+        return Promise.resolve([[RAW_EVENT]]);
+      }
+      if (typeof sql === 'string' && sql.includes('reviewer_sources')) {
+        return Promise.resolve([[{ allowed: 1 }]]);
+      }
+      if (typeof sql === 'string' && sql.includes('SELECT id FROM users')) {
+        return Promise.resolve([[{ id: 5 }]]);
+      }
+      return Promise.resolve([{ affectedRows: 1 }]);
+    });
     db.mockConn.beginTransaction = jest.fn().mockResolvedValue(undefined);
     db.mockConn.commit           = jest.fn().mockResolvedValue(undefined);
     db.mockConn.rollback         = jest.fn().mockResolvedValue(undefined);

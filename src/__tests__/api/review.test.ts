@@ -11,6 +11,7 @@ const db         = require('@/lib/db');
 const mockVerify = adminAuth.verifyIdToken as jest.Mock;
 
 const ADMIN = { id: 1, email: 'admin@oberlin.edu', role: 'admin', full_name: 'Admin', active: 1, firebase_uid: 'uid-admin' };
+const REVIEWER = { id: 2, email: 'reviewer@oberlin.edu', role: 'reviewer', full_name: 'Reviewer', active: 1, firebase_uid: 'uid-reviewer' };
 const PENDING = {
   id: 10, title: 'Jazz Night', status: 'pending', event_type: 'ot',
   description: 'A great jazz show',
@@ -37,7 +38,15 @@ function makeReq(path: string, body?: any) {
 beforeEach(() => {
   db.default.query.mockReset();
   db.mockConn.query.mockReset();
-  db.mockConn.query.mockResolvedValue([{ affectedRows: 1 }]);
+  db.mockConn.query.mockImplementation((sql: string) => {
+    if (typeof sql === 'string' && sql.includes('FOR UPDATE')) {
+      return Promise.resolve([[PENDING]]);
+    }
+    if (typeof sql === 'string' && sql.includes('SELECT id FROM users')) {
+      return Promise.resolve([[{ id: 1 }]]);
+    }
+    return Promise.resolve([{ affectedRows: 1 }]);
+  });
   db.mockConn.beginTransaction = jest.fn().mockResolvedValue(undefined);
   db.mockConn.commit           = jest.fn().mockResolvedValue(undefined);
   db.mockConn.rollback         = jest.fn().mockResolvedValue(undefined);
@@ -105,9 +114,10 @@ describe('POST /api/review/events/:id/action', () => {
 
   it('returns 409 when event already reviewed', async () => {
     db.default.query
-      .mockResolvedValueOnce([[ADMIN]])
-      .mockResolvedValueOnce([[{ ...PENDING, status: 'approved' }]])
-      .mockResolvedValueOnce([[{ id: 1 }]]);
+      .mockResolvedValueOnce([[ADMIN]]);
+    db.mockConn.query.mockImplementationOnce(() => Promise.resolve([[
+      { ...PENDING, status: 'approved' },
+    ]]));
 
     const res = await POST(
       makeReq('/api/review/events/10/action', { action: 'reject', edits: { reason_codes: ['other'] } }),
@@ -118,9 +128,8 @@ describe('POST /api/review/events/:id/action', () => {
 
   it('returns 404 when event not found', async () => {
     db.default.query
-      .mockResolvedValueOnce([[ADMIN]])
-      .mockResolvedValueOnce([[]])
-      .mockResolvedValueOnce([[{ id: 1 }]]);
+      .mockResolvedValueOnce([[ADMIN]]);
+    db.mockConn.query.mockImplementationOnce(() => Promise.resolve([[]]));
 
     const res = await POST(
       makeReq('/api/review/events/999/action', { action: 'reject', edits: { reason_codes: ['other'] } }),
@@ -222,6 +231,58 @@ describe('POST /api/review/events/:id/action — approve path', () => {
       ctx('10')
     );
     expect(res.status).toBe(500);
+    expect(db.mockConn.rollback).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns 409 without posting when approving an already approved event', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]]);
+    db.mockConn.query.mockImplementationOnce(() => Promise.resolve([[
+      { ...PENDING, status: 'approved', communityhub_post_id: 'existing_post' },
+    ]]));
+
+    const res = await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve' }),
+      ctx('10')
+    );
+
+    expect(res.status).toBe(409);
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(db.mockConn.rollback).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns 409 without posting when approving an event pending correction', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]]);
+    db.mockConn.query.mockImplementationOnce(() => Promise.resolve([[
+      { ...PENDING, status: 'pending_fix' },
+    ]]));
+
+    const res = await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve' }),
+      ctx('10')
+    );
+
+    expect(res.status).toBe(409);
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(db.mockConn.rollback).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns 403 without posting when reviewer is not assigned to the event source', async () => {
+    mockVerify.mockResolvedValueOnce({ uid: 'uid-reviewer', email: 'reviewer@oberlin.edu' });
+    db.default.query
+      .mockResolvedValueOnce([[REVIEWER]]);
+    db.mockConn.query
+      .mockImplementationOnce(() => Promise.resolve([[{ ...PENDING, source_id: 99 }]]))
+      .mockImplementationOnce(() => Promise.resolve([[{ allowed: 0 }]]));
+
+    const res = await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve' }),
+      ctx('10')
+    );
+
+    expect(res.status).toBe(403);
+    expect(mockFetch).not.toHaveBeenCalled();
     expect(db.mockConn.rollback).toHaveBeenCalledTimes(1);
   });
 

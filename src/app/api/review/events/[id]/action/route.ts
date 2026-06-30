@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
-import { getAuthUser, unauthorized, forbidden } from '@/lib/auth';
+import { canReviewSource, getAuthUser, unauthorized, forbidden } from '@/lib/auth';
 
 const CH_BASE = 'https://oberlin.communityhub.cloud/api/legacy/calendar';
 
@@ -30,18 +30,26 @@ export async function POST(
     if (!reason_codes?.length) return Response.json({ error: 'reason_codes required' }, { status: 400 });
   }
 
-  const [[event]] = await pool.query('SELECT * FROM raw_events WHERE id = ?', [eventId]) as any;
-  if (!event) return Response.json({ error: 'Not found' }, { status: 404 });
-  if (action === 'reject' && event.status !== 'pending') {
-    return Response.json({ error: 'Can only reject pending events' }, { status: 409 });
-  }
-
-  const [[dbUser]] = await pool.query('SELECT id FROM users WHERE firebase_uid = ?', [user.uid]) as any;
-  const reviewerId = dbUser?.id;
-
   const conn = await pool.getConnection();
   try {
     await (conn as any).beginTransaction();
+
+    const [[event]] = await conn.query('SELECT * FROM raw_events WHERE id = ? FOR UPDATE', [eventId]) as any;
+    if (!event) {
+      await (conn as any).rollback();
+      return Response.json({ error: 'Not found' }, { status: 404 });
+    }
+    if (!(await canReviewSource(user, event.source_id, conn as any))) {
+      await (conn as any).rollback();
+      return forbidden();
+    }
+    if (event.status !== 'pending') {
+      await (conn as any).rollback();
+      return Response.json({ error: 'Can only review pending events' }, { status: 409 });
+    }
+
+    const [[dbUser]] = await conn.query('SELECT id FROM users WHERE firebase_uid = ?', [user.uid]) as any;
+    const reviewerId = dbUser?.id;
 
     if (action === 'reject') {
       const { reason_codes, reviewer_note = '' } = edits;
