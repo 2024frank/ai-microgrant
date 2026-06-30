@@ -63,13 +63,19 @@ Never invent movies, dates, or showtimes. The feed is the single source of truth
 
 async function main() {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  if (!INGEST_SECRET) { console.error('INGEST_SECRET env var is required'); process.exit(1); }
-
-  const prompt = buildPrompt(APP_URL, INGEST_SECRET);
 
   console.log('Fetching current agent...');
   const current = await (client.beta.agents as any).retrieve(AGENT_ID);
-  console.log(`Current version: ${current.version}  model: ${typeof current.model === 'string' ? current.model : current.model?.id}`);
+
+  // Preserve the ingest secret that already works against production — the live
+  // prompt embeds it; the local .env may be stale (it was, here).
+  const existingSecret = (String(current.system ?? '').match(/x-ingest-secret:\s*([^\s]+)/) || [])[1];
+  const ingestSecret = existingSecret || INGEST_SECRET;
+  if (!ingestSecret) { console.error('No ingest secret found (live prompt or INGEST_SECRET env)'); process.exit(1); }
+
+  const prompt = buildPrompt(APP_URL, ingestSecret);
+
+  console.log(`Current version: ${current.version}  model: ${typeof current.model === 'string' ? current.model : current.model?.id}  secret: ${existingSecret ? 'preserved from live prompt' : 'from env'}`);
   console.log('Updating system prompt → feed-based (no Veezi scraping)...');
 
   const updated = await (client.beta.agents as any).update(AGENT_ID, {
