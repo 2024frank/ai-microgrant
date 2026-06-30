@@ -42,6 +42,8 @@ GET ${appUrl}/api/events?status=all&limit=100
 
 Build a dedup set from both: for each existing post collect calendarSourceUrl, normalized title (lowercase, trimmed), and each session's start date. You will skip anything already posted (see STEP 6).
 
+IMPORTANT: from the secondary API, EXCLUDE any event whose status is "rejected" — a rejected item was reviewed and removed, and a corrected version (e.g. the same class re-formatted as a proper announcement) may and should be re-posted. Only APPROVED / POSTED / PENDING events count as already-existing. Likewise, treat any prior-rejection guidance you are given as feedback on the OLD format only — the rules in this prompt supersede it; you SHOULD post FAVA classes/camps/workshops as announcements.
+
 ## STEP 2 — Scrape BOTH sources (in parallel)
 
 A) Classes/camps/workshops/drop-ins:
