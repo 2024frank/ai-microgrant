@@ -52,6 +52,10 @@ export async function triggerAgentRun(
       environment_id: environmentId,
     } as any);
 
+    // Persist the session id so a stop request can tear it down API-side
+    // (the SDK has no cancel — delete is the only teardown). Best-effort.
+    await pool.query('UPDATE agent_runs SET session_id = ? WHERE id = ?', [session.id, runId]).catch(() => {});
+
     // 2. Send the user message to trigger the agent
     await client.beta.sessions.events.send(session.id, {
       events: [{ type: 'user.message', content: [{ type: 'text', text: userMessage }] }],
