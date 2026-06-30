@@ -9,6 +9,10 @@ export interface AuthUser {
   name:  string;
 }
 
+type Queryable = {
+  query: (sql: string, values?: any[]) => Promise<any>;
+};
+
 export async function getAuthUser(req: NextRequest): Promise<AuthUser | null> {
   const header = req.headers.get('authorization');
   if (!header?.startsWith('Bearer ')) return null;
@@ -46,4 +50,30 @@ export function unauthorized() {
 
 export function forbidden() {
   return Response.json({ error: 'Forbidden' }, { status: 403 });
+}
+
+export async function canReviewSource(
+  user: AuthUser,
+  sourceId: number | string | null | undefined,
+  db: Queryable = pool
+): Promise<boolean> {
+  if (user.role === 'admin') return true;
+
+  const [[row]] = await db.query(
+    `SELECT CASE WHEN (
+       NOT EXISTS (
+         SELECT 1 FROM reviewer_sources rs
+         JOIN users u ON u.id = rs.reviewer_id
+         WHERE u.firebase_uid = ?
+       )
+       OR EXISTS (
+         SELECT 1 FROM reviewer_sources rs
+         JOIN users u ON u.id = rs.reviewer_id
+         WHERE u.firebase_uid = ? AND rs.source_id = ?
+       )
+     ) THEN 1 ELSE 0 END AS allowed`,
+    [user.uid, user.uid, sourceId]
+  ) as any;
+
+  return Number(row?.allowed) === 1;
 }
