@@ -152,3 +152,20 @@ export function buildApolloAnnouncements(films: VeeziFilm[], now: Date = new Dat
 
   return out;
 }
+
+export interface FilmRun { key: string; title: string; openedOn: string; lastSeenOn: string }
+
+/** Per-film run rows (ISO dates) for disappearance-based end tracking: opened_on
+ *  = earliest visible date, last_seen_on = latest visible date this run. When a
+ *  film stops appearing, last_seen_on becomes its real end. */
+export function filmRunsForTracking(films: VeeziFilm[], now: Date = new Date()): FilmRun[] {
+  const today = todayInET(now);
+  const iso = (x: Day) => `${x.y}-${String(x.mo + 1).padStart(2, '0')}-${String(x.d).padStart(2, '0')}`;
+  const out: FilmRun[] = [];
+  for (const f of films) {
+    const nums = f.showtimes.map(s => parseVeeziDay(s.date, today)).filter((x): x is Day => !!x).map(dayNum).sort((a, b) => a - b);
+    if (!nums.length) continue;
+    out.push({ key: f.code ?? f.title.toLowerCase().trim(), title: f.title, openedOn: iso(fromNum(nums[0])), lastSeenOn: iso(fromNum(nums[nums.length - 1])) });
+  }
+  return out;
+}
