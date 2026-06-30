@@ -2,6 +2,8 @@ import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
 import { sendReviewNotification } from '@/lib/email';
 import { mergePosterImages } from '@/lib/mergePosters';
+import { computeDedupKey } from '@/lib/eventDedup';
+import { getAdminContact } from '@/lib/adminContact';
 
 const MAX_EVENTS_PER_INGEST = 200;
 
@@ -75,8 +77,10 @@ export async function POST(
   const runId = runRes.insertId;
 
   // Write events inside a transaction
+  const adminContact = await getAdminContact();
   const conn = await pool.getConnection();
   let inserted = 0;
+  let skipped = 0;
   try {
     await (conn as any).beginTransaction();
 
@@ -103,6 +107,18 @@ export async function POST(
         fixEntry = row || null;
       }
 
+      // Skip a non-correction event already ingested for this source with the
+      // same title + session window (agent re-scraped something already in).
+      const storedTitle = san(ev.title, 200) || 'Untitled';
+      const dedupKey = computeDedupKey(storedTitle, ev.sessions, ev.eventType, ev.description, ev.extendedDescription);
+      if (!fixedFromId) {
+        const [dupRows] = await conn.query(
+          "SELECT id FROM raw_events WHERE source_id = ? AND dedup_key = ? AND status IN ('pending','approved','pending_fix') LIMIT 1",
+          [source.id, dedupKey]
+        ) as any;
+        if (Array.isArray(dupRows) && dupRows.length > 0) { skipped++; continue; }
+      }
+
       // Merge poster URLs into a single base64 image, or use image_cdn_url if provided.
       // image_data stores the base64 for our serving endpoint (/api/events/{id}/poster.jpg).
       // image_cdn_url is set after INSERT to the serving URL with a .jpg extension so
@@ -126,12 +142,12 @@ export async function POST(
           url_link, display, screen_ids, buttons, contact_email, email,
           phone, website, image_cdn_url, image_data, calendar_source_name,
           calendar_source_url, geo_scope, geo_json,
-          corrected_from_id, sent_for_fix_by, status
+          corrected_from_id, sent_for_fix_by, dedup_key, status
         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')`,
         [
           source.id, runId,
           ['ot','ev','cl','ex','vt','sp','pe','wk','ms','ws','an'].includes(ev.eventType) ? ev.eventType : 'ot',
-          san(ev.title, 200)           || 'Untitled',
+          storedTitle,
           san(ev.description, 2000)    || '',
           san(ev.extendedDescription, 5000),
           JSON.stringify(Array.isArray(ev.sponsors)   ? ev.sponsors.slice(0,20)   : []),
@@ -146,8 +162,8 @@ export async function POST(
           ['all','screen','none'].includes(ev.display) ? ev.display : 'all',
           JSON.stringify(Array.isArray(ev.screensIds) ? ev.screensIds.slice(0,20) : []),
           JSON.stringify(Array.isArray(ev.buttons)    ? ev.buttons.slice(0,10)    : []),
-          san(ev.contactEmail, 150),
-          san(ev.email, 150)           || 'fkusiapp@Oberlin.edu',
+          adminContact || san(ev.contactEmail, 150),
+          adminContact || san(ev.email, 150),
           san(ev.phone,   30),
           san(ev.website, 500),
           imageCdnUrl,
@@ -158,12 +174,13 @@ export async function POST(
           ev.geo ? JSON.stringify(ev.geo) : null,
           fixedFromId,
           san(fixEntry?.sent_by_email, 150),
+          dedupKey,
         ]
       ) as any;
 
       const eventId = res.insertId;
       const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://ai-microgrant-research-oberlin.vercel.app';
-      const ingestedPostUrl = `${appUrl}/events/${eventId}`;
+      const ingestedPostUrl = `${appUrl}/reviewer/events/${eventId}`;
       // Set image_cdn_url to the serving URL with .jpg extension — CH validates the extension
       const servingImageUrl = imageData ? `${appUrl}/api/events/${eventId}/poster.jpg` : null;
       await conn.query(
@@ -208,8 +225,8 @@ export async function POST(
   // Mark this run complete
   await pool.query(
     `UPDATE agent_runs SET status='completed', finished_at=NOW(),
-     events_found=?, events_extracted=? WHERE id=?`,
-    [agentCount, inserted, runId]
+     events_found=?, events_extracted=?, events_skipped_dup=? WHERE id=?`,
+    [agentCount, inserted, skipped, runId]
   );
 
   // Close any other stale running sessions for this source (agent is done)

@@ -70,7 +70,7 @@ export default function Sidebar({ role, name, email, token }: SidebarProps) {
     }
     if (n.raw_event_id) {
       setNotifOpen(false);
-      router.push(`/events/${n.raw_event_id}`);
+      router.push(`/reviewer/events/${n.raw_event_id}`);
     }
   }
 

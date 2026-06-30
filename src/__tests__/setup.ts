@@ -8,6 +8,7 @@ process.env.NEXT_PUBLIC_APP_URL        = 'http://localhost:3000';
 process.env.SOURCE_BUILDER_ENVIRONMENT_ID = 'env-test';
 process.env.SOURCE_BUILDER_VAULT_ID       = 'vault-test';
 process.env.CRON_SECRET                = 'test-cron-secret';
+process.env.ADMIN_EMAIL                = 'admin@test.local';
 
 jest.mock('@/lib/firebase-admin', () => ({
   adminAuth: { verifyIdToken: jest.fn() },

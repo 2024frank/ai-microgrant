@@ -184,15 +184,20 @@ describe('Scenario 1 – Agent run writes events with schema-correct structure',
     db.default.query.mockReset();
     db.mockConn.query.mockReset();
 
-    db.default.query
-      .mockResolvedValueOnce([[SOURCE]])          // SELECT sources
-      .mockResolvedValueOnce([{ insertId: 99 }]) // INSERT agent_runs
-      .mockResolvedValueOnce([{ affectedRows: 1 }]); // UPDATE agent_runs completed
+    // Query-aware pool.query so call order doesn't matter: the stop-fix added a
+    // session-id UPDATE and a per-poll `SELECT status FROM agent_runs` stop-check.
+    // The stop-check must return a non-stopped row or the [[row]] destructure throws.
+    db.default.query.mockImplementation((sql: unknown) =>
+      typeof sql === 'string' && /SELECT status FROM agent_runs/i.test(sql)
+        ? Promise.resolve([[{ status: 'running' }]])
+        : typeof sql === 'string' && /FROM sources/i.test(sql)
+        ? Promise.resolve([[SOURCE]])
+        : Promise.resolve([{ affectedRows: 1 }]));
 
-    // conn queries: 2 per event (INSERT raw_events + UPDATE ingested_post_url)
+    // conn queries: 3 per event (dedup SELECT + INSERT raw_events + UPDATE ingested_post_url)
     db.mockConn.query
-      .mockResolvedValueOnce([{ insertId: 10 }]).mockResolvedValueOnce([{ affectedRows: 1 }])
-      .mockResolvedValueOnce([{ insertId: 11 }]).mockResolvedValueOnce([{ affectedRows: 1 }]);
+      .mockResolvedValueOnce([[]]).mockResolvedValueOnce([{ insertId: 10 }]).mockResolvedValueOnce([{ affectedRows: 1 }])
+      .mockResolvedValueOnce([[]]).mockResolvedValueOnce([{ insertId: 11 }]).mockResolvedValueOnce([{ affectedRows: 1 }]);
 
     mockSessionsCreate.mockResolvedValue({ id: 'sess_xyz' });
     mockSessionsEventsSend.mockResolvedValue({});
@@ -254,14 +259,14 @@ describe('Scenario 1 – Agent run writes events with schema-correct structure',
     });
   });
 
-  it('writes ingestedPostUrl = APP_URL/events/{insertId}', async () => {
+  it('writes ingestedPostUrl = APP_URL/reviewer/events/{insertId}', async () => {
     await triggerAgentRun(1, 99, 'test-key', 'test-env');
     const urlUpdateCalls = db.mockConn.query.mock.calls.filter(
       (c: any[]) => typeof c[0] === 'string' && c[0].includes('ingested_post_url')
     );
     expect(urlUpdateCalls).toHaveLength(2);
-    expect(urlUpdateCalls[0][1][0]).toBe('http://localhost:3000/events/10');
-    expect(urlUpdateCalls[1][1][0]).toBe('http://localhost:3000/events/11');
+    expect(urlUpdateCalls[0][1][0]).toBe('http://localhost:3000/reviewer/events/10');
+    expect(urlUpdateCalls[1][1][0]).toBe('http://localhost:3000/reviewer/events/11');
   });
 
   it('updates agent_run with events_found=2 and events_extracted=2', async () => {
@@ -269,7 +274,7 @@ describe('Scenario 1 – Agent run writes events with schema-correct structure',
     const finalUpdate = db.default.query.mock.calls.find(
       (c: any[]) => typeof c[0] === 'string' && c[0].includes('events_found')
     );
-    expect(finalUpdate[1]).toEqual([2, 2, 99]);
+    expect(finalUpdate[1]).toEqual([2, 2, 0, 99]);
   });
 
   it('returns event list containing id and ingestedPostUrl for each event', async () => {
@@ -277,11 +282,11 @@ describe('Scenario 1 – Agent run writes events with schema-correct structure',
     expect(result.events[0]).toMatchObject({
       id:                10,
       title:             'Jazz Ensemble Concert',
-      ingested_post_url: 'http://localhost:3000/events/10',
+      ingested_post_url: 'http://localhost:3000/reviewer/events/10',
     });
     expect(result.events[1]).toMatchObject({
       id:                11,
-      ingested_post_url: 'http://localhost:3000/events/11',
+      ingested_post_url: 'http://localhost:3000/reviewer/events/11',
     });
   });
 });

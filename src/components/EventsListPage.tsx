@@ -129,10 +129,7 @@ export default function EventsListPage({ status, title, emptyMsg }: EventsListPa
                   const st = STATUS_STYLES[ev.status] || STATUS_STYLES.pending;
                   return (
                     <tr key={ev.id}
-                      onClick={() => {
-                        if (status === 'pending') router.push(`/reviewer/events/${ev.id}`);
-                        else router.push(`/events/${ev.id}/detail`);
-                      }}
+                      onClick={() => router.push(`/reviewer/events/${ev.id}`)}
                       style={{ borderBottom: '1px solid #f5f5f5', cursor: 'pointer' }}
                       onMouseEnter={e => { e.currentTarget.style.background = '#f8fff8'; }}
                       onMouseLeave={e => { e.currentTarget.style.background = ''; }}>

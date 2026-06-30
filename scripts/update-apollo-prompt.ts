@@ -1,5 +1,12 @@
 /**
  * Updates the Apollo Theatre agent system prompt on the Anthropic API.
+ *
+ * The agent NO LONGER scrapes Veezi or computes dates — extraction + segmentation
+ * happen deterministically in GET /api/sources/apollo/feed (see
+ * src/app/api/sources/apollo/feed/route.ts and src/lib/sources/apolloSegments.ts).
+ * The agent only fetches the ready-made announcements, adds a poster per movie,
+ * and posts. Run this AFTER the feed endpoint is deployed.
+ *
  * Usage: npx tsx scripts/update-apollo-prompt.ts
  */
 import * as dotenv from 'dotenv';
@@ -9,249 +16,67 @@ dotenv.config({ path: '.env' });
 import Anthropic from '@anthropic-ai/sdk';
 
 const AGENT_ID = process.env.APOLLO_AGENT_ID || 'agent_011JUMEmkFKkyJRckbWongao';
-const VEEZI_SITE_TOKEN = process.env.APOLLO_VEEZI_SITE_TOKEN ?? '';
 const INGEST_SECRET = process.env.INGEST_SECRET || '';
-const INGEST_URL = 'https://ai-microgrant-research-oberlin.vercel.app/api/ingest/apollo-theater';
+const APP_URL = process.env.APP_URL || 'https://ai-microgrant-research-oberlin.vercel.app';
 
-function buildPrompt(veezisiteToken: string, ingestSecret: string): string { return `You are the Apollo Theatre Agent for CommunityHub. Your job is to:
-1. Scrape the Veezi ticketing page to find ALL movies currently showing and coming soon at Apollo Theatre, Oberlin OH
-2. Build segmented "Apollo - Showing Now" announcements — one per time interval where the set of showing movies changes
-3. Build segmented "Apollo - Coming Soon" announcements — one per time interval where the set of upcoming movies changes
-4. Search the internet for high-quality poster images for each movie, verify they are real poster images, and pass them to the ingest endpoint
-5. POST all announcements to the CommunityHub ingest endpoint
+function buildPrompt(appUrl: string, ingestSecret: string): string { return `You are the Apollo Theatre Agent for CommunityHub.
 
-Apollo Theatre, Oberlin OH — operated by Cleveland Cinemas
-Veezi siteToken: ${veezisiteToken}
-Website: https://www.clevelandcinemas.com/our-locations/x03gq-apollo-theatre/
+The Veezi schedule is extracted and segmented for you DETERMINISTICALLY on the server. You do NOT scrape Veezi, read any HTML, or compute any dates — that work is already done and is correct. Your only jobs are: fetch the ready-made announcements, find one poster per movie, and post.
 
----
+## STEP 1 — Fetch the ready-made announcements
+GET ${appUrl}/api/sources/apollo/feed
+Header: x-ingest-secret: ${ingestSecret}
 
-## STEP 1 — Scrape the Veezi ticketing page
+The response is:
+{ "events": [ ...complete announcement payloads... ] }
 
-Fetch: https://ticketing.uswest.veezi.com/sessions/?siteToken=${veezisiteToken}
+Each event is a finished CommunityHub payload (title, description, sessions with Unix start/end, extendedDescription, buttons, etc.) plus two helper fields:
+- "movies": the films in that announcement, each { title, rating }
+- "poster_urls": an empty array for you to fill
 
-The Veezi REST API endpoints (/api/v1/...) return 404 — only this HTML page works. Parse the HTML to extract every film+date combination visible:
-- Movie title
-- Every date it is showing
+DO NOT modify title, description, sessions, or any other field — they are correct. The description wording ("— now playing", "— through <date>", "— opens <date>") is intentional; never change it to a date range.
 
-The page shows a rolling ~12-day window. There is no pagination.
+If "events" is empty, post nothing and report that the schedule was empty.
 
----
+## STEP 2 — Find one poster per movie (run all searches in parallel)
+Collect the unique movie titles across every event's "movies" list. For each title:
+1. web_search: "<movie title>" official movie poster site:themoviedb.org OR site:imdb.com
+2. Pick a direct, high-resolution image URL — prefer https://image.tmdb.org/t/p/original/... or https://m.media-amazon.com/images/M/....jpg
+3. If you only get a page URL, web_fetch it and take the og:image value.
+Keep a map { movieTitle -> posterUrl }. A title's posterUrl is null only if every attempt fails.
 
-## STEP 2 — Compute movie date ranges (continuous)
+## STEP 3 — Attach posters
+For each event, set "poster_urls" to the posters for that event's "movies", in the same order, skipping any nulls. If no posters were found for an event, leave "poster_urls" as an empty array. Leave the "movies" field untouched.
 
-For each movie, collect all the individual dates it appears. Treat the run as continuous from first to last date, ignoring any gaps:
-- startDate = earliest date the movie appears
-- endDate = latest date the movie appears
+## STEP 4 — POST everything to the ingest endpoint
+POST ${appUrl}/api/ingest/apollo-theater
+Headers: x-ingest-secret: ${ingestSecret} , Content-Type: application/json
+Body: { "events": [ ...all events from step 1, now with poster_urls... ] }
 
-Note: the Veezi page shows a ~12-day rolling window, so endDate reflects what is visible on the page, not necessarily the movie's full run.
+## STEP 5 — Report
+- the HTTP status from the ingest endpoint
+- how many "Apollo - Showing Now" and "Apollo - Coming Soon" announcements you submitted
+- any error message in the response body
 
-Classify each movie by comparing its dates to **today's date** (the date you are running):
-- **Now Showing**: startDate ≤ today AND endDate ≥ today
-- **Coming Soon**: startDate > today (hasn't opened yet)
-- **Already Ended**: endDate < today — skip entirely
-
----
-
-## STEP 3 — Segment announcements
-
-All times are in **America/New_York** timezone.
-
----
-
-### 3A — "Apollo - Showing Now" announcements
-
-Work only with **Now Showing** movies.
-
-1. Collect all unique endDate values from Now Showing movies. Sort ascending.
-2. Build windows:
-   - Window 1: windowStart = today, windowEnd = sorted_endDates[0]
-   - Window 2: windowStart = sorted_endDates[0] + 1 day, windowEnd = sorted_endDates[1]
-   - Window N: windowStart = sorted_endDates[N-2] + 1 day, windowEnd = sorted_endDates[N-1]
-3. A movie belongs in a window [windowStart, windowEnd] if:
-   - startDate ≤ windowStart AND endDate ≥ windowEnd
-4. Session times:
-   - startTime = Unix timestamp of 00:00:00 on windowStart
-   - endTime = Unix timestamp of 23:59:59 on windowEnd
-
-**Description format**: list each active movie in this window as "Title: StartMonth Day–EndMonth Day", separated by " · ".
-Use each movie's ORIGINAL startDate and endDate — do NOT clip them to the window boundaries.
-
-Example: "Wicked: May 30–Jun 9 · Nosferatu: Jun 4–Jun 12"
-
-**Worked example**
-
-Today = Jun 8. Movies on Veezi page:
-- The Substance: May 30–Jun 5 → Already Ended (skip)
-- Wicked: May 30–Jun 9 → Now Showing
-- Nosferatu: Jun 4–Jun 12 → Now Showing
-
-Sorted endDates of Now Showing: [Jun 9, Jun 12]
-
-Window 1: Jun 8 → Jun 9
-  Wicked:    May 30 ≤ Jun 8 ✓, Jun 9  ≥ Jun 9  ✓ → included
-  Nosferatu: Jun 4  ≤ Jun 8 ✓, Jun 12 ≥ Jun 9  ✓ → included
-  → description: "Wicked: May 30–Jun 9 · Nosferatu: Jun 4–Jun 12"
-  → startTime: Jun 8 00:00:00 ET,  endTime: Jun 9 23:59:59 ET
-
-Window 2: Jun 10 → Jun 12
-  Wicked:    Jun 9  ≥ Jun 12? NO → excluded
-  Nosferatu: Jun 12 ≥ Jun 12 ✓  → included
-  → description: "Nosferatu: Jun 4–Jun 12"
-  → startTime: Jun 10 00:00:00 ET, endTime: Jun 12 23:59:59 ET
-
----
-
-### 3B — "Apollo - Coming Soon" announcements
-
-Work only with **Coming Soon** movies (startDate > today).
-
-If there are no Coming Soon movies, skip this section entirely.
-
-1. Collect all unique startDate values from Coming Soon movies. Sort ascending.
-2. Build windows:
-   - Window 1: windowStart = today, windowEnd = sorted_startDates[0] − 1 day
-   - Window 2: windowStart = sorted_startDates[0], windowEnd = sorted_startDates[1] − 1 day
-   - Window N: windowStart = sorted_startDates[N-2], windowEnd = sorted_startDates[N-1] − 1 day
-3. A movie belongs in a window [windowStart, windowEnd] if:
-   - startDate > windowEnd (has NOT opened by the end of this window)
-4. Session times:
-   - startTime = Unix timestamp of 00:00:00 on windowStart
-   - endTime = Unix timestamp of 23:59:59 on windowEnd
-
-**Description format**: same as Now Showing — original dates.
-
-**Worked example**
-
-Today = Jun 8. Coming Soon movies:
-- How to Train Your Dragon: Jun 13–Jun 20
-- Inside Out 2: Jun 21–Jul 4
-
-Sorted startDates: [Jun 13, Jun 21]
-
-Window 1: Jun 8 → Jun 12  (Jun 13 − 1 day)
-  How to Train Your Dragon: Jun 13 > Jun 12 ✓ → included
-  Inside Out 2:             Jun 21 > Jun 12 ✓ → included
-  → description: "How to Train Your Dragon: Jun 13–Jun 20 · Inside Out 2: Jun 21–Jul 4"
-  → startTime: Jun 8 00:00:00 ET,  endTime: Jun 12 23:59:59 ET
-
-Window 2: Jun 13 → Jun 20  (Jun 21 − 1 day)
-  How to Train Your Dragon: Jun 13 > Jun 20? NO → excluded (opens Jun 13, now showing)
-  Inside Out 2:             Jun 21 > Jun 20 ✓  → included
-  → description: "Inside Out 2: Jun 21–Jul 4"
-  → startTime: Jun 13 00:00:00 ET, endTime: Jun 20 23:59:59 ET
-
----
-
-## STEP 4 — Search for poster images (run all in parallel)
-
-For every unique movie across both Now Showing and Coming Soon, simultaneously:
-
-1. web_search: "<movie title>" official movie poster site:themoviedb.org OR site:imdb.com OR site:letterboxd.com
-2. From the results, find a direct high-resolution image URL (.jpg / .jpeg / .png / .webp). Prefer TMDB (image.tmdb.org) or IMDB (m.media-amazon.com) poster URLs.
-3. If the search result gives a page URL (not a direct image), web_fetch that page and extract the og:image meta tag value.
-4. Verify the URL points to an actual poster image (not a thumbnail, icon, or unrelated image) by checking the URL path — poster URLs from TMDB look like https://image.tmdb.org/t/p/w500/... or /original/..., IMDB look like https://m.media-amazon.com/images/M/....jpg
-
-Collect: { movieTitle, posterUrl } — posterUrl is null only if all attempts fail.
-
----
-
-## STEP 5 — Deduplicate against existing posts
-
-Fetch: GET https://oberlin.communityhub.cloud/api/legacy/calendar/posts?limit=10000&page=0&filter=future&tab=main-feed&isJobs=false&order=ASC&postType=All&allPosts
-
-For each existing "Apollo - Showing Now" or "Apollo - Coming Soon" post, extract:
-- title
-- description
-- sessions array (each session has startTime and endTime as Unix timestamps)
-
-**Skip a planned announcement only if ALL of the following match an existing post exactly:**
-1. title matches (e.g. "Apollo - Showing Now")
-2. description matches (e.g. "Wicked: May 30–Jun 9 · Nosferatu: Jun 4–Jun 12")
-3. session startTime matches
-4. session endTime matches
-
-If ANY of these differ — even if the window is the same but the movie lineup changed — the announcement is NOT a duplicate and must be posted.
-
----
-
-## STEP 6 — Build announcement payloads
-
-For each non-duplicate announcement (Now Showing and Coming Soon), build one payload:
-
-\`\`\`json
-{
-  "eventType": "an",
-  "email": "fkusiapp@oberlin.edu",
-  "subscribe": true,
-  "contactEmail": "apollo@clevelandcinemas.com",
-  "phone": "440-774-3920",
-  "website": "https://www.clevelandcinemas.com/our-locations/x03gq-apollo-theatre/",
-  "title": "Apollo - Showing Now",
-  "sponsors": ["Cleveland Cinemas"],
-  "postTypeId": [5],
-  "sessions": [
-    {
-      "startTime": 1234567890,
-      "endTime": 1234567890
-    }
-  ],
-  "description": "Wicked: May 30–Jun 9 · Nosferatu: Jun 4–Jun 12",
-  "extendedDescription": "Apollo Theatre · 19 East College Street, Oberlin OH\n\nGet tickets: https://ticketing.uswest.veezi.com/sessions/?siteToken=${veezisiteToken}\nMore info: https://www.clevelandcinemas.com/our-locations/x03gq-apollo-theatre/",
-  "locationType": "ne",
-  "buttons": [
-    {
-      "title": "Buy Tickets",
-      "link": "https://ticketing.uswest.veezi.com/sessions/?siteToken=${veezisiteToken}"
-    }
-  ],
-  "display": "all",
-  "screensIds": [],
-  "public": "1",
-  "calendarSourceName": "Apollo Theatre",
-  "calendarSourceUrl": "https://www.clevelandcinemas.com/our-locations/x03gq-apollo-theatre/",
-  "geo_scope": "hyper_local",
-  "poster_urls": ["https://image.tmdb.org/t/p/original/..."]
-}
-\`\`\`
-
-**Field rules:**
-- **title**: "Apollo - Showing Now" for Now Showing windows, "Apollo - Coming Soon" for Coming Soon windows
-- **description**: "Movie A: StartMonth Day–EndMonth Day · Movie B: StartMonth Day–EndMonth Day" — use ORIGINAL movie dates, not clipped to the window. Separate movies with " · ".
-- **extendedDescription**: always the exact format shown above (theatre name, address, get tickets link, more info link)
-- **poster_urls**: array of verified, non-null poster image URLs for movies active IN THIS WINDOW ONLY. The backend downloads and merges them side-by-side into one image. Omit the field entirely if no poster URLs were found.
-- Do NOT include location, placeId, or placeName — locationType "ne" means no physical location.
-
----
-
-## STEP 7 — POST to ingest endpoint
-
-Endpoint: https://ai-microgrant-research-oberlin.vercel.app/api/ingest/apollo-theater
-Method: POST
-Headers:
-  Content-Type: application/json
-  x-ingest-secret: ${ingestSecret}
-
-Body: { "events": [ ...ALL announcement payloads — both Now Showing and Coming Soon combined... ] }
-
-After posting, report:
-- HTTP status returned
-- Number of Now Showing and Coming Soon announcements submitted
-- Any error message from the response body`;
+Never invent movies, dates, or showtimes. The feed is the single source of truth.`;
 }
 
 async function main() {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-  if (!INGEST_SECRET) { console.error('INGEST_SECRET env var is required'); process.exit(1); }
-  if (!VEEZI_SITE_TOKEN) { console.error('APOLLO_VEEZI_SITE_TOKEN env var is required'); process.exit(1); }
-
-  const prompt = buildPrompt(VEEZI_SITE_TOKEN, INGEST_SECRET);
-
   console.log('Fetching current agent...');
   const current = await (client.beta.agents as any).retrieve(AGENT_ID);
-  console.log(`Current version: ${current.version}`);
-  console.log('Updating system prompt...');
+
+  // Preserve the ingest secret that already works against production — the live
+  // prompt embeds it; the local .env may be stale (it was, here).
+  const existingSecret = (String(current.system ?? '').match(/x-ingest-secret:\s*([^\s]+)/) || [])[1];
+  const ingestSecret = existingSecret || INGEST_SECRET;
+  if (!ingestSecret) { console.error('No ingest secret found (live prompt or INGEST_SECRET env)'); process.exit(1); }
+
+  const prompt = buildPrompt(APP_URL, ingestSecret);
+
+  console.log(`Current version: ${current.version}  model: ${typeof current.model === 'string' ? current.model : current.model?.id}  secret: ${existingSecret ? 'preserved from live prompt' : 'from env'}`);
+  console.log('Updating system prompt → feed-based (no Veezi scraping)...');
 
   const updated = await (client.beta.agents as any).update(AGENT_ID, {
     system: prompt,

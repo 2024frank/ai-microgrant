@@ -19,8 +19,14 @@ export default function LoginPage() {
       const token = await cred.user.getIdToken();
       const res   = await fetch('/api/auth/me', { headers: { Authorization: `Bearer ${token}` } });
       if (!res.ok) {
+        let reason = '';
+        try { reason = (await res.json())?.error || ''; } catch {}
         await signOut(auth);
-        setError(`${cred.user.email} is not authorized. Contact your admin.`);
+        setError(
+          res.status === 403
+            ? `${cred.user.email} is not on the approved list. Contact your admin.`
+            : `Sign-in rejected (HTTP ${res.status}${reason ? `: ${reason}` : ''}). The server couldn't verify your token — usually a missing/invalid FIREBASE_SERVICE_ACCOUNT on the server.`
+        );
         setLoading(false);
         return;
       }
@@ -30,7 +36,13 @@ export default function LoginPage() {
       if (user.role === 'admin') router.push('/admin/stats');
       else router.push('/reviewer/dashboard');
     } catch (err: any) {
-      if (err.code !== 'auth/popup-closed-by-user') setError('Sign-in failed. Please try again.');
+      if (err.code === 'auth/popup-closed-by-user') { setLoading(false); return; }
+      const hint =
+        err.code === 'auth/unauthorized-domain' ? ' — this site’s domain is not in the Firebase authorized-domains list.'
+        : err.code === 'auth/popup-blocked'      ? ' — the browser blocked the sign-in popup.'
+        : err.code === 'auth/operation-not-allowed' ? ' — Google sign-in is not enabled for this Firebase project.'
+        : '';
+      setError(`Sign-in failed: ${err.code || err.message || 'unknown error'}${hint}`);
       setLoading(false);
     }
   }

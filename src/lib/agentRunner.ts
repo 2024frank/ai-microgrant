@@ -1,6 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk';
 import pool from './db';
 import { getRejectionHistory } from './rejectionHistory';
+import { computeDedupKey } from './eventDedup';
+import { getAdminContact } from './adminContact';
 
 function getClient(apiKey: string) {
   // In test env the SDK is mocked — don't throw on missing key
@@ -49,6 +51,10 @@ export async function triggerAgentRun(
       agent:          source.agent_id,
       environment_id: environmentId,
     } as any);
+
+    // Persist the session id so a stop request can tear it down API-side
+    // (the SDK has no cancel — delete is the only teardown). Best-effort.
+    await pool.query('UPDATE agent_runs SET session_id = ? WHERE id = ?', [session.id, runId]).catch(() => {});
 
     // 2. Send the user message to trigger the agent
     await client.beta.sessions.events.send(session.id, {
@@ -143,18 +149,18 @@ export async function triggerAgentRun(
     }
 
     // Write events to MySQL
-    const inserted = await writeEvents(events, sourceId, runId, source.calendar_source_name);
+    const { inserted, skipped } = await writeEvents(events, sourceId, runId, source.calendar_source_name);
 
     // Close run with stats
     await pool.query(
       `UPDATE agent_runs SET
          status='completed', finished_at=NOW(),
-         events_found=?, events_extracted=?
+         events_found=?, events_extracted=?, events_skipped_dup=?
        WHERE id=?`,
-      [events.length, inserted.length, runId]
+      [events.length, inserted.length, skipped, runId]
     );
 
-    return { run_id: runId, inserted: inserted.length, events: inserted };
+    return { run_id: runId, inserted: inserted.length, skipped, events: inserted };
 
   } catch (err: any) {
     await pool.query(
@@ -166,12 +172,23 @@ export async function triggerAgentRun(
 }
 
 async function writeEvents(events: any[], sourceId: number, runId: number, calendarSourceName: string) {
+  const adminContact = await getAdminContact();
   const inserted: any[] = [];
+  let skipped = 0;
   const conn = await pool.getConnection();
   try {
     await (conn as any).beginTransaction();
 
     for (const ev of events) {
+      // Skip an event already ingested for this source with the same title +
+      // session window (agent re-scraped something already in the system).
+      const dedupKey = computeDedupKey(ev.title, ev.sessions, ev.eventType, ev.description, ev.extendedDescription);
+      const [dupRows] = await conn.query(
+        "SELECT id FROM raw_events WHERE source_id = ? AND dedup_key = ? AND status IN ('pending','approved','pending_fix') LIMIT 1",
+        [sourceId, dedupKey]
+      ) as any;
+      if (Array.isArray(dupRows) && dupRows.length > 0) { skipped++; continue; }
+
       // image_data stores base64; image_cdn_url will be set to /api/events/{id}/poster.jpg after INSERT
       const rawImageUrl: string | null = ev.image_cdn_url || null;
       const rawImageData: string | null = rawImageUrl?.startsWith('data:') ? rawImageUrl : null;
@@ -185,7 +202,7 @@ async function writeEvents(events: any[], sourceId: number, runId: number, calen
           location_type, location, place_id, place_name, room_num,
           url_link, display, screen_ids, buttons, contact_email, email,
           phone, website, image_cdn_url, image_data, calendar_source_name,
-          calendar_source_url, geo_scope, geo_json, status
+          calendar_source_url, geo_scope, geo_json, dedup_key, status
         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')`,
         [
           sourceId, runId,
@@ -205,8 +222,8 @@ async function writeEvents(events: any[], sourceId: number, runId: number, calen
           ev.display          || 'all',
           JSON.stringify(ev.screensIds   || []),
           JSON.stringify(ev.buttons      || []),
-          ev.contactEmail     || null,
-          ev.email            || 'fkusiapp@Oberlin.edu',
+          adminContact        || ev.contactEmail || null,
+          adminContact        || ev.email        || null,
           ev.phone            || null,
           ev.website          || null,
           storedCdnUrl,
@@ -215,13 +232,14 @@ async function writeEvents(events: any[], sourceId: number, runId: number, calen
           ev.calendarSourceUrl  || null,
           ev.geo_scope        || null,
           ev.geo ? JSON.stringify(ev.geo) : null,
+          dedupKey,
         ]
       ) as any;
 
       const eventId = res.insertId;
       const appUrl = process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'https://ai-microgrant-research-oberlin.vercel.app';
 
-      const ingestedPostUrl = `${appUrl}/events/${eventId}`;
+      const ingestedPostUrl = `${appUrl}/reviewer/events/${eventId}`;
       // Set image_cdn_url to serving URL with .jpg extension — CH validates the extension
       const servingImageUrl = rawImageData ? `${appUrl}/api/events/${eventId}/poster.jpg` : null;
       await conn.query(
@@ -233,7 +251,7 @@ async function writeEvents(events: any[], sourceId: number, runId: number, calen
     }
 
     await (conn as any).commit();
-    return inserted;
+    return { inserted, skipped };
   } catch (e) {
     await (conn as any).rollback();
     throw e;

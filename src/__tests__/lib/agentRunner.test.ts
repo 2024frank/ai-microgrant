@@ -77,7 +77,20 @@ beforeEach(() => {
   mockSessionsEventsSend.mockResolvedValue({});
   mockSessionsEventsList.mockResolvedValue(makeSessionEvents());
 
+  // Fallback for pool.query once a test's ordered mockResolvedValueOnce values
+  // are exhausted: the stop-fix added a session-id UPDATE and a per-poll
+  // `SELECT status FROM agent_runs` stop-check. The stop-check must return a
+  // non-stopped row (not undefined) or the destructure throws before extraction.
+  db.default.query.mockImplementation((sql: unknown) =>
+    typeof sql === 'string' && /SELECT status FROM agent_runs/i.test(sql)
+      ? Promise.resolve([[{ status: 'running' }]])
+      : typeof sql === 'string' && /FROM sources/i.test(sql)
+      ? Promise.resolve([[SOURCE]])
+      : Promise.resolve([{ affectedRows: 1 }]),
+  );
+
   db.mockConn.query
+    .mockResolvedValueOnce([[]])                 // dedup SELECT — no existing dup
     .mockResolvedValueOnce([{ insertId: 42 }])
     .mockResolvedValueOnce([{ affectedRows: 1 }]);
   db.mockConn.beginTransaction = jest.fn().mockResolvedValue(undefined);
@@ -186,9 +199,9 @@ describe('triggerAgentRun — multiple events', () => {
 
     db.mockConn.query
       .mockReset()
-      .mockResolvedValueOnce([{ insertId: 10 }]).mockResolvedValueOnce([{ affectedRows: 1 }])
-      .mockResolvedValueOnce([{ insertId: 11 }]).mockResolvedValueOnce([{ affectedRows: 1 }])
-      .mockResolvedValueOnce([{ insertId: 12 }]).mockResolvedValueOnce([{ affectedRows: 1 }]);
+      .mockResolvedValueOnce([[]]).mockResolvedValueOnce([{ insertId: 10 }]).mockResolvedValueOnce([{ affectedRows: 1 }])
+      .mockResolvedValueOnce([[]]).mockResolvedValueOnce([{ insertId: 11 }]).mockResolvedValueOnce([{ affectedRows: 1 }])
+      .mockResolvedValueOnce([[]]).mockResolvedValueOnce([{ insertId: 12 }]).mockResolvedValueOnce([{ affectedRows: 1 }]);
 
     db.default.query
       .mockResolvedValueOnce([[SOURCE]])

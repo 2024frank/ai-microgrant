@@ -205,7 +205,7 @@ Every event extracted by any agent. Moves through the review lifecycle.
 |---|---|---|
 | `status` | ENUM | `pending` → `approved` / `rejected` / `pending_fix` |
 | `sessions` | JSON | `[{ startTime, endTime, ... }]` |
-| `geo_scope` | ENUM | `hyper_local`, `city_wide`, `county`, `regional` |
+| `geo_scope` | ENUM | `local`, `hyper_local`, `city_wide`, `county`, `regional`, `national` |
 | `sent_for_correction` | TINYINT | 1 when reviewer sent back for AI fix |
 | `corrected_from_id` | INT | Links fixed event back to original |
 | `calendar_source_url` | TEXT | Source page URL — used as fallback for fix matching |
@@ -249,9 +249,18 @@ Full execution log per agent invocation.
 | `prompt_tokens` / `completion_tokens` | Token usage tracking |
 | `error_log` | JSON array of error messages |
 
+### `event_stats_archive`
+Per-source counts snapshotted before the cleanup cron deletes past-date events, so historical stats survive expiry. Intentionally has no foreign keys, so archived rows outlive the sources they came from.
+
+| Column | Notes |
+|---|---|
+| `source_id` / `source_name` | Denormalized source identity (kept even if the source is later deleted) |
+| `total` / `approved` / `rejected` / `edited` | Counts for the events being expired |
+| `snapshotted_at` | When the snapshot was taken |
+
 ### Indexes (performance)
 
-All hot query paths use composite indexes:
+Composite indexes for hot query paths are applied by [`migrations/0003_performance_indexes.sql`](migrations/0003_performance_indexes.sql):
 
 ```sql
 raw_events(status, created_at)              -- queue sort + filter
@@ -483,10 +492,21 @@ Create `.env` in the project root with all values from the [Environment Variable
 
 ### 3. Initialize the database
 
+The schema is managed by ordered migrations in [`migrations/`](migrations/), applied by a small runner that records what it has run. The same command initializes a fresh database and upgrades an existing one — each migration is idempotent and runs exactly once.
+
 ```bash
-mysql -h HOST -P PORT -u USER -p DATABASE < schema.sql
-npx tsx scripts/seed-admins.ts
+npm run db:migrate      # create/upgrade all tables
+npm run db:seed         # seed the initial admin users
 ```
+
+Useful companions:
+
+```bash
+npm run db:migrate:status   # show applied vs pending migrations
+npm run db:dump-schema      # capture the live DB's real DDL → schema.snapshot.sql
+```
+
+> Adopting an existing database (e.g. a deployment created before migrations existed)? Just run `npm run db:migrate` — `0001_baseline` is `CREATE TABLE IF NOT EXISTS` so it skips tables you already have, and `0002_reconcile` brings any drifted ENUM columns up to date without touching your data.
 
 ### 4. Run locally
 
