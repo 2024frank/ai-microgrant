@@ -110,7 +110,7 @@ export async function POST(
       // Skip a non-correction event already ingested for this source with the
       // same title + session window (agent re-scraped something already in).
       const storedTitle = san(ev.title, 200) || 'Untitled';
-      const dedupKey = computeDedupKey(storedTitle, ev.sessions, ev.eventType, ev.description);
+      const dedupKey = computeDedupKey(storedTitle, ev.sessions, ev.eventType, ev.description, ev.extendedDescription);
       if (!fixedFromId) {
         const [dupRows] = await conn.query(
           "SELECT id FROM raw_events WHERE source_id = ? AND dedup_key = ? AND status IN ('pending','approved','pending_fix') LIMIT 1",

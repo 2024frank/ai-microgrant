@@ -178,7 +178,7 @@ async function writeEvents(events: any[], sourceId: number, runId: number, calen
     for (const ev of events) {
       // Skip an event already ingested for this source with the same title +
       // session window (agent re-scraped something already in the system).
-      const dedupKey = computeDedupKey(ev.title, ev.sessions, ev.eventType, ev.description);
+      const dedupKey = computeDedupKey(ev.title, ev.sessions, ev.eventType, ev.description, ev.extendedDescription);
       const [dupRows] = await conn.query(
         "SELECT id FROM raw_events WHERE source_id = ? AND dedup_key = ? AND status IN ('pending','approved','pending_fix') LIMIT 1",
         [sourceId, dedupKey]
