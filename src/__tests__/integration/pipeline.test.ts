@@ -189,10 +189,10 @@ describe('Scenario 1 – Agent run writes events with schema-correct structure',
       .mockResolvedValueOnce([{ insertId: 99 }]) // INSERT agent_runs
       .mockResolvedValueOnce([{ affectedRows: 1 }]); // UPDATE agent_runs completed
 
-    // conn queries: 2 per event (INSERT raw_events + UPDATE ingested_post_url)
+    // conn queries: 3 per event (dedup SELECT + INSERT raw_events + UPDATE ingested_post_url)
     db.mockConn.query
-      .mockResolvedValueOnce([{ insertId: 10 }]).mockResolvedValueOnce([{ affectedRows: 1 }])
-      .mockResolvedValueOnce([{ insertId: 11 }]).mockResolvedValueOnce([{ affectedRows: 1 }]);
+      .mockResolvedValueOnce([[]]).mockResolvedValueOnce([{ insertId: 10 }]).mockResolvedValueOnce([{ affectedRows: 1 }])
+      .mockResolvedValueOnce([[]]).mockResolvedValueOnce([{ insertId: 11 }]).mockResolvedValueOnce([{ affectedRows: 1 }]);
 
     mockSessionsCreate.mockResolvedValue({ id: 'sess_xyz' });
     mockSessionsEventsSend.mockResolvedValue({});
@@ -269,7 +269,7 @@ describe('Scenario 1 – Agent run writes events with schema-correct structure',
     const finalUpdate = db.default.query.mock.calls.find(
       (c: any[]) => typeof c[0] === 'string' && c[0].includes('events_found')
     );
-    expect(finalUpdate[1]).toEqual([2, 2, 99]);
+    expect(finalUpdate[1]).toEqual([2, 2, 0, 99]);
   });
 
   it('returns event list containing id and ingestedPostUrl for each event', async () => {

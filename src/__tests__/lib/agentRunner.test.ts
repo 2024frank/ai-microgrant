@@ -78,6 +78,7 @@ beforeEach(() => {
   mockSessionsEventsList.mockResolvedValue(makeSessionEvents());
 
   db.mockConn.query
+    .mockResolvedValueOnce([[]])                 // dedup SELECT — no existing dup
     .mockResolvedValueOnce([{ insertId: 42 }])
     .mockResolvedValueOnce([{ affectedRows: 1 }]);
   db.mockConn.beginTransaction = jest.fn().mockResolvedValue(undefined);
@@ -186,9 +187,9 @@ describe('triggerAgentRun — multiple events', () => {
 
     db.mockConn.query
       .mockReset()
-      .mockResolvedValueOnce([{ insertId: 10 }]).mockResolvedValueOnce([{ affectedRows: 1 }])
-      .mockResolvedValueOnce([{ insertId: 11 }]).mockResolvedValueOnce([{ affectedRows: 1 }])
-      .mockResolvedValueOnce([{ insertId: 12 }]).mockResolvedValueOnce([{ affectedRows: 1 }]);
+      .mockResolvedValueOnce([[]]).mockResolvedValueOnce([{ insertId: 10 }]).mockResolvedValueOnce([{ affectedRows: 1 }])
+      .mockResolvedValueOnce([[]]).mockResolvedValueOnce([{ insertId: 11 }]).mockResolvedValueOnce([{ affectedRows: 1 }])
+      .mockResolvedValueOnce([[]]).mockResolvedValueOnce([{ insertId: 12 }]).mockResolvedValueOnce([{ affectedRows: 1 }]);
 
     db.default.query
       .mockResolvedValueOnce([[SOURCE]])
