@@ -63,12 +63,14 @@ describe('getAuthUser', () => {
 
   it('queries DB with correct email (lowercased)', async () => {
     mockVerify.mockResolvedValueOnce({ uid: 'uid-x', email: 'User@Oberlin.EDU' });
-    db.default.query.mockResolvedValueOnce([[{
+    db.default.query
+      .mockResolvedValueOnce([[]])
+      .mockResolvedValueOnce([[{
       id: 3, email: 'user@oberlin.edu', role: 'reviewer', full_name: 'User X', active: 1, firebase_uid: 'uid-x',
     }]]);
 
     await getAuthUser(makeReq('valid-token'));
-    const queryCall = db.default.query.mock.calls[0];
+    const queryCall = db.default.query.mock.calls[1];
     expect(queryCall[1][0]).toBe('user@oberlin.edu');
   });
 });
