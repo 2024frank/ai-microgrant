@@ -66,6 +66,15 @@ async function main() {
     console.log(`  "${f.title}"  rating=${f.rating ?? '—'}  (${f.showtimes.length} showtimes)`);
     console.log(`     dates: ${dates.join(' | ')}`);
   }
+
+  const { buildApolloAnnouncements } = await import('../src/lib/sources/apolloSegments');
+  const anns = buildApolloAnnouncements(films, new Date());
+  console.log(`\n=== NEW deterministic announcements (${anns.length}) — exactly what gets posted ===\n`);
+  for (const a of anns) {
+    const fmt = (t: number) => new Date(t * 1000).toLocaleDateString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' });
+    console.log(`[${a.kind}]  ${a.title}   (${fmt(a.startTime)} → ${fmt(a.endTime)})`);
+    console.log(`   ${a.description}\n`);
+  }
 }
 
 main().catch(e => { console.error('apollo-debug failed:', e.message); process.exit(1); });
