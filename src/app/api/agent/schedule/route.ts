@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
 import { triggerAgentRun } from '@/lib/agentRunner';
 import { sendAgentRunSummary, sendReviewNotification } from '@/lib/email';
+import { shouldRunToday } from '@/lib/schedule';
 
 // Vercel Cron hits this — Authorization: Bearer <CRON_SECRET>
 export async function GET(req: NextRequest) {
@@ -10,9 +11,14 @@ export async function GET(req: NextRequest) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const [sources] = await pool.query(
-    'SELECT id, name FROM sources WHERE active = 1'
+  const [allSources] = await pool.query(
+    'SELECT id, name, schedule_cron FROM sources WHERE active = 1'
   ) as any;
+  // Respect each source's cron schedule. The daily trigger only checks the date
+  // fields, so e.g. FAVA '0 6 * * 1' runs Mondays while Apollo '0 6 * * *' runs
+  // daily. Each run only ingests NEW events (existing ones are de-duplicated),
+  // so "every week" and "when new events appear" are the same scheduled pass.
+  const sources = (allSources as any[]).filter((s: any) => shouldRunToday(s.schedule_cron));
 
   const results: { source: string; status: string; inserted: number; error?: string }[] = [];
   let totalNew = 0;
