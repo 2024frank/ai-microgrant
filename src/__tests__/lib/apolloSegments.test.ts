@@ -4,19 +4,7 @@ const film = (title: string, rating: string | null, dates: string[]) => ({
   title, code: null, rating,
   showtimes: dates.map((date, i) => ({ date, time: '7:00 PM', sessionId: String(i) })),
 });
-
-// Today's real Apollo lineup (run date 2026-06-30):
-//   Disclosure Day      Jun 30 only      (ends today)
-//   Toy Story 5         Jun 30 → Jul 9   (now showing, at the horizon → ongoing)
-//   Minions & Monsters  Jul 1  → Jul 9   (opens tomorrow → folds into Showing Now)
-//   Spider-Man          Jul 30 only      (far pre-sale → Coming Soon, open-ended)
-const FILMS = [
-  film('Disclosure Day', 'PG-13', ['Tuesday 30, June']),
-  film('Toy Story 5', 'PG', ['Tuesday 30, June', 'Thursday 9, July']),
-  film('Minions & Monsters', 'PG', ['Wednesday 1, July', 'Thursday 9, July']),
-  film('Spider-Man: Brand New Day', 'PG-13', ['Thursday 30, July']),
-];
-const NOON_ET_JUN30 = new Date('2026-06-30T16:00:00Z');
+const NOON_ET_JUN30 = new Date('2026-06-30T16:00:00Z'); // run date = Jun 30
 
 describe('parseVeeziDay', () => {
   const today = { y: 2026, mo: 5, d: 30 };
@@ -29,31 +17,59 @@ describe('parseVeeziDay', () => {
   });
 });
 
-describe('buildApolloAnnouncements', () => {
+describe('buildApolloAnnouncements — today\'s real lineup', () => {
+  // Disclosure Day (Jun 30 only), Toy Story 5 (Jun 30–Jul 9),
+  // Minions & Monsters (Jul 1–Jul 9), Spider-Man (Jul 30 only).
+  const FILMS = [
+    film('Disclosure Day', 'PG-13', ['Tuesday 30, June']),
+    film('Toy Story 5', 'PG', ['Tuesday 30, June', 'Thursday 9, July']),
+    film('Minions & Monsters', 'PG', ['Wednesday 1, July', 'Thursday 9, July']),
+    film('Spider-Man: Brand New Day', 'PG-13', ['Thursday 30, July']),
+  ];
   const out = buildApolloAnnouncements(FILMS as any, NOON_ET_JUN30);
   const showing = out.filter(a => a.kind === 'showing_now');
   const soon = out.filter(a => a.kind === 'coming_soon');
 
-  it('produces 2 Showing Now + 2 Coming Soon windows', () => {
-    expect(showing).toHaveLength(2);
-    expect(soon).toHaveLength(2);
-  });
-
-  it('window 1: ending film gets a real end, ongoing film is open-ended', () => {
-    expect(showing[0].description).toBe('Disclosure Day — through Jun 30 · Toy Story 5 — now playing');
-  });
-
-  it('folds the soon-film (Minions, opens Jul 1) into the Jul 1–9 Showing Now window', () => {
-    expect(showing[1].description).toBe('Minions & Monsters — now playing · Toy Story 5 — now playing');
+  it('Showing Now starts a day ahead (Jul 1) — today-only Disclosure Day drops off', () => {
+    expect(showing).toHaveLength(1);
+    expect(showing[0].description).toBe('Minions & Monsters — now playing · Toy Story 5 — now playing');
+    expect(showing[0].startTime).toBe(Math.floor(Date.UTC(2026, 6, 1, 4, 0, 0) / 1000)); // Jul 1 00:00 EDT
+    expect(out.every(a => !a.description.includes('Disclosure'))).toBe(true);
   });
 
   it('Coming Soon is open-ended "opens <date>", never a closed single-day range', () => {
     expect(soon[0].description).toBe('Minions & Monsters — opens Jul 1 · Spider-Man: Brand New Day — opens Jul 30');
-    expect(soon[1].description).toBe('Spider-Man: Brand New Day — opens Jul 30');
-    expect(out.every(a => !/(\w+ \d+)\s*[–-]\s*\1/.test(a.description))).toBe(true); // no "Jul 30–Jul 30"
+    expect(soon[soon.length - 1].description).toBe('Spider-Man: Brand New Day — opens Jul 30');
+    expect(out.every(a => !/(\w+ \d+)\s*[–-]\s*\1/.test(a.description))).toBe(true);
+  });
+});
+
+describe('buildApolloAnnouncements — the chained worked example', () => {
+  // Toy Story 5 (–Jul 8), Minions (Jul 1–9), Moana (Jul 9–20), Ghostbusters (Jul 12–20)
+  const FILMS = [
+    film('Toy Story 5', 'PG', ['Tuesday 30, June', 'Tuesday 8, July']),
+    film('Minions & Monsters', 'PG', ['Wednesday 1, July', 'Thursday 9, July']),
+    film('Moana', 'PG', ['Thursday 9, July', 'Sunday 20, July']),
+    film('Ghostbusters (1984)', 'PG', ['Saturday 12, July', 'Sunday 20, July']),
+  ];
+  const showing = buildApolloAnnouncements(FILMS as any, NOON_ET_JUN30).filter(a => a.kind === 'showing_now');
+
+  it('chains forward, cutting a window at every lineup change', () => {
+    expect(showing.map(a => a.description)).toEqual([
+      'Toy Story 5 — through Jul 8 · Minions & Monsters — through Jul 9', // [Jul 1–8]
+      'Minions & Monsters — through Jul 9 · Moana — now playing',         // [Jul 9]
+      'Moana — now playing',                                             // [Jul 10–11]
+      'Ghostbusters (1984) — now playing · Moana — now playing',          // [Jul 12–20]
+    ]);
   });
 
-  it('Showing Now window 1 starts at ET midnight today (matches existing payloads)', () => {
-    expect(showing[0].startTime).toBe(Math.floor(Date.UTC(2026, 5, 30, 4, 0, 0) / 1000)); // 00:00 EDT
+  it('window boundaries match the example (ends on a film\'s last day / day before an opening)', () => {
+    const span = (a: any) => [
+      new Date(a.startTime * 1000).toLocaleDateString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' }),
+      new Date(a.endTime * 1000).toLocaleDateString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' }),
+    ];
+    expect(showing.map(span)).toEqual([
+      ['Jul 1', 'Jul 8'], ['Jul 9', 'Jul 9'], ['Jul 10', 'Jul 11'], ['Jul 12', 'Jul 20'],
+    ]);
   });
 });

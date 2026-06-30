@@ -6,17 +6,25 @@
  * Soon" announcement payloads — no LLM, no hand-reading of HTML, no date math by
  * the model. The agent only adds posters and POSTs.
  *
- * Rules (agreed with the product owner):
- *  - Showing Now windows are FORWARD-LOOKING: a new window begins at every lineup
- *    change (a film ends OR a soon-film opens within the current run's horizon),
- *    so a film that opens mid-window folds into Showing Now from its opening day.
- *  - Ends are observed, never invented. The Veezi page is a rolling ~2-week
- *    window, so a film still on sale at the horizon has NO known end → "now
- *    playing". A film whose last visible date falls before the horizon genuinely
- *    leaves while others continue → "through <last day>". A film's true end is
- *    only known once it disappears from a later (weekly) run — that's tracked
- *    server-side, not here.
- *  - Coming Soon films are "opens <date>" (open-ended) — never a closed range.
+ * Rules (from the product owner's worked example):
+ *  - The agent fetches a day ahead, so Showing Now windows START at today + 1.
+ *    A movie that only plays today is not announced.
+ *  - Showing Now is forward-looking and chains: a new window begins at every
+ *    lineup change — when a film ENDS (window ends on its last day) AND when a
+ *    new film OPENS (window ends the day before it opens). Films fold in as they
+ *    open and drop as they end, for as long as the schedule is contiguous. A gap
+ *    in coverage stops the chain (a far pre-sale after a gap is Coming Soon only).
+ *      e.g. ToyStory(–Jul8), Minions(–Jul9), Moana(Jul9–), Ghostbusters(Jul12–):
+ *        [Jul1–8] Toy Story·Minions → [Jul9] Minions·Moana
+ *        [Jul10–11] Moana → [Jul12–…] Ghostbusters·Moana
+ *  - Ends are observed, never invented. A film at the far edge of the contiguous
+ *    run (its last visible date == the horizon) is still on sale → "now playing".
+ *    A film that ends earlier while others continue → "through <last day>". Its
+ *    true end is only confirmed once it disappears from a later weekly run
+ *    (tracked server-side, not here).
+ *  - Coming Soon announces upcoming films from the run date, segmented by opening
+ *    date, each window ending the day before a film opens — "opens <date>"
+ *    (open-ended, never a closed single-day range).
  */
 import type { VeeziFilm } from './veezi';
 
@@ -86,33 +94,37 @@ function toRun(f: VeeziFilm, today: Day): Run | null {
 export function buildApolloAnnouncements(films: VeeziFilm[], now: Date = new Date()): ApolloAnnouncement[] {
   const today = todayInET(now);
   const T = dayNum(today);
-
-  const runs = films.map(f => toRun(f, today)).filter((r): r is Run => !!r && dayNum(r.end) >= T);
-  const nowShowing = runs.filter(r => dayNum(r.start) <= T);
-  const comingSoon = runs.filter(r => dayNum(r.start) > T);
-
+  const allRuns = films.map(f => toRun(f, today)).filter((r): r is Run => !!r);
   const out: ApolloAnnouncement[] = [];
 
-  // ── Showing Now ──────────────────────────────────────────────────────────
-  // Horizon = furthest a currently-playing film is on sale. A film at the
-  // horizon is still selling → open-ended ("now playing"). Soon-films that open
-  // within the horizon fold into the forward windows; far-out pre-sales stay in
-  // Coming Soon only.
-  if (nowShowing.length) {
-    const horizon = Math.max(...nowShowing.map(r => dayNum(r.end)));
-    const candidates = [...nowShowing, ...comingSoon.filter(r => dayNum(r.start) <= horizon)];
-    const maxEnd = Math.max(...candidates.map(r => dayNum(r.end)));
+  // ── Showing Now ────────────────────────────────────────────────────────────
+  // Start a day ahead and chain forward through the contiguous run.
+  const showStart = T + 1;
+  const showRuns = allRuns.filter(r => dayNum(r.end) >= showStart);
 
+  // Contiguous coverage from showStart → lastCovered (stop at the first gap).
+  const covered = new Set<number>();
+  for (const r of showRuns) {
+    for (let d = Math.max(dayNum(r.start), showStart); d <= dayNum(r.end); d++) covered.add(d);
+  }
+  let lastCovered = showStart - 1;
+  if (covered.has(showStart)) { let d = showStart; while (covered.has(d)) d++; lastCovered = d - 1; }
+
+  if (lastCovered >= showStart) {
+    const cands = showRuns.filter(r => dayNum(r.start) <= lastCovered && dayNum(r.end) >= showStart);
+    const horizon = lastCovered; // films still on sale at the run's edge are "now playing"
+
+    // Cut points: today+1, every opening within the run, every (end + 1).
     const points = [...new Set([
-      T,
-      ...candidates.filter(r => dayNum(r.start) > T).map(r => dayNum(r.start)),
-      ...candidates.map(r => dayNum(r.end) + 1),
-    ])].filter(p => p >= T && p <= maxEnd + 1).sort((a, b) => a - b);
+      showStart,
+      ...cands.filter(r => dayNum(r.start) > showStart).map(r => dayNum(r.start)),
+      ...cands.map(r => dayNum(r.end) + 1),
+    ])].filter(p => p >= showStart && p <= lastCovered + 1).sort((a, b) => a - b);
 
     for (let i = 0; i < points.length - 1; i++) {
       const ws = points[i], we = points[i + 1] - 1;
-      if (we < ws) continue;
-      const lineup = candidates
+      if (we < ws || we > lastCovered) continue;
+      const lineup = cands
         .filter(r => dayNum(r.start) <= ws && dayNum(r.end) >= we)
         .sort((a, b) => dayNum(a.end) - dayNum(b.end) || a.title.localeCompare(b.title));
       if (!lineup.length) continue;
@@ -127,12 +139,13 @@ export function buildApolloAnnouncements(films: VeeziFilm[], now: Date = new Dat
     }
   }
 
-  // ── Coming Soon ──────────────────────────────────────────────────────────
-  // One window per opening boundary: [today, firstOpen-1], [firstOpen, nextOpen-1]…
-  // A film belongs while it hasn't opened by the window's end. "opens <date>".
+  // ── Coming Soon ────────────────────────────────────────────────────────────
+  // From the run date, one window per opening; each ends the day before a film
+  // opens. A film here also folds into Showing Now once it has opened.
+  const comingSoon = allRuns.filter(r => dayNum(r.start) > T);
   if (comingSoon.length) {
     const starts = [...new Set(comingSoon.map(r => dayNum(r.start)))].sort((a, b) => a - b);
-    let prev = T;
+    let prev = T; // coming-soon announcements start on the run date
     for (const s of starts) {
       const ws = prev, we = s - 1;
       prev = s;
