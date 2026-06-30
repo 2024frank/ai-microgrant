@@ -27,10 +27,13 @@ function decode(s: string): string {
 /** Parse all films + showtimes from a Veezi sessions page's HTML. */
 export function parseVeeziSessions(html: string): VeeziFilm[] {
   const films: VeeziFilm[] = [];
-  for (const block of html.split(/class="film\s*"/i).slice(1)) {
+  // Tolerate extra classes on the film container (e.g. class="film featured").
+  for (const block of html.split(/class="film(?:\s[^"]*)?"/i).slice(1)) {
     const title = decode(block.match(/class="title"[^>]*>\s*([^<]+?)\s*</i)?.[1] ?? '');
     if (!title) continue;
-    const code = block.match(/code=0*([0-9]+)/i)?.[1] ?? null;
+    // Stable per-film id from a poster `code=` or a `purchase?filmId=` link, so
+    // dedupeFilms keys on identity and never merges two distinct same-title films.
+    const code = block.match(/(?:code=0*|filmId=0*)([0-9]+)/i)?.[1] ?? null;
     const rating = decode(block.match(/class="censor"[^>]*>\s*([^<]+?)\s*</i)?.[1] ?? '') || null;
 
     const showtimes: VeeziShowtime[] = [];

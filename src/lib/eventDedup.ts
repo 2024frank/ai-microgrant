@@ -35,8 +35,16 @@ export function computeDedupKey(
   const windows = sessionWindows(sessions);
 
   if (eventType === 'an') {
+    // Key on the window END only. The feed runs "a day ahead", so an unchanged
+    // lineup's leading window advances its START by one day every run; including
+    // the start would mint a new dedup key daily and pile up near-duplicate review
+    // rows. The end is fixed by a film's last day / the next opening, so it is
+    // stable run-to-run, while a changed lineup still changes the description.
+    const endWindows = Array.isArray(sessions)
+      ? sessions.map(s => String(s?.endTime ?? '')).sort().join(',')
+      : '';
     return createHash('sha1')
-      .update(`an::${normTitle}::${norm(description)}::${norm(extendedDescription)}::${windows}`)
+      .update(`an::${normTitle}::${norm(description)}::${norm(extendedDescription)}::${endWindows}`)
       .digest('hex');
   }
 

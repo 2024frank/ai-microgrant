@@ -1,0 +1,36 @@
+.spinner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  vertical-align: middle;
+  color: currentColor;
+}
+
+.ring {
+  display: block;
+  width: var(--spinner-size, 18px);
+  height: var(--spinner-size, 18px);
+  border: var(--spinner-stroke, 2px) solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  opacity: 0.85;
+  animation: spinner-rotate 0.6s linear infinite;
+}
+
+.sm { --spinner-size: 14px; --spinner-stroke: 2px; }
+.md { --spinner-size: 18px; --spinner-stroke: 2px; }
+.lg { --spinner-size: 28px; --spinner-stroke: 3px; }
+
+@keyframes spinner-rotate {
+  to { transform: rotate(360deg); }
+}
+
+/* Respect users who prefer reduced motion: show a static, dimmed ring. */
+@media (prefers-reduced-motion: reduce) {
+  .ring {
+    animation: none;
+    border-top-color: currentColor;
+    opacity: 0.4;
+  }
+}

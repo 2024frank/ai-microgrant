@@ -43,38 +43,61 @@ interface Run { title: string; rating: string | null; start: Day; end: Day }
 const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june',
   'july', 'august', 'september', 'october', 'november', 'december'];
 
+// A merely-stale past date (≤ this many days behind today) is kept in the current
+// year, NOT rolled forward a year; only a true calendar wrap (a date far in the
+// past) becomes next year. Guards the parseVeeziDay → toRun phantom-run bug.
+const STALE_TOLERANCE_DAYS = 31;
+// Showing Now may begin after a short dark-house gap right after today (e.g. a
+// dark Monday on a new-release flip). A larger leading gap means the next films
+// are a genuine far pre-sale and stay Coming Soon only.
+const LEADING_GAP_TOLERANCE_DAYS = 2;
+
 const dayNum = (x: Day) => Math.floor(Date.UTC(x.y, x.mo, x.d) / 86400000);
 const fromNum = (n: number): Day => { const t = new Date(n * 86400000); return { y: t.getUTCFullYear(), mo: t.getUTCMonth(), d: t.getUTCDate() }; };
 const fmt = (x: Day) => `${MONTHS[x.mo].slice(0, 3).replace(/^\w/, c => c.toUpperCase())} ${x.d}`;
 
-/** "Tuesday 30, June" → Day. Year inferred from `today` (Veezi shows only
- *  today-forward dates, so any computed past date is next year's). */
+/** "Tuesday 30, June" / "Tue 9th, Jul" → Day. Year inferred from `today`: Veezi
+ *  lists only upcoming dates, so a date computed FAR into the past is a genuine
+ *  calendar wrap (a January date seen in late December) and rolls to next year.
+ *  A merely-stale recent date (yesterday's late show still on the page, or a
+ *  Pacific/Eastern midnight skew — the Veezi host is uswest) must NOT roll a full
+ *  year: toRun() collapses a film to [min,max] visible date, so one rolled date
+ *  becomes a ~365-day phantom run that pins the film "now playing" and chains
+ *  across the entire lineup. Tolerate up to STALE_TOLERANCE_DAYS of staleness. */
 export function parseVeeziDay(s: string, today: Day): Day | null {
-  const m = s.match(/(\d{1,2})\s*,\s*([A-Za-z]+)/);
+  const m = s.match(/(\d{1,2})(?:st|nd|rd|th)?\s*,\s*([A-Za-z]+)/i);
   if (!m) return null;
   const d = parseInt(m[1], 10);
-  const mo = MONTHS.indexOf(m[2].toLowerCase());
+  const tok = m[2].toLowerCase().slice(0, 3);
+  const mo = MONTHS.findIndex(name => name.slice(0, 3) === tok);
   if (mo < 0 || d < 1 || d > 31) return null;
   let day: Day = { y: today.y, mo, d };
-  if (dayNum(day) < dayNum(today)) day = { y: today.y + 1, mo, d };
+  if (dayNum(day) < dayNum(today) - STALE_TOLERANCE_DAYS) day = { y: today.y + 1, mo, d };
   return day;
 }
 
-// Epoch seconds for a wall-clock America/New_York time on a given day.
-function etOffsetMinutes(day: Day): number {
-  const at = new Date(Date.UTC(day.y, day.mo, day.d, 12, 0, 0));
+// ET UTC-offset (minutes) at a SPECIFIC instant — resolves correctly across DST.
+function etOffsetAt(instant: Date): number {
   const name = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', timeZoneName: 'shortOffset' })
-    .formatToParts(at).find(p => p.type === 'timeZoneName')?.value || 'GMT-5';
+    .formatToParts(instant).find(p => p.type === 'timeZoneName')?.value || 'GMT-5';
   const m = name.match(/GMT([+-]?\d{1,2})(?::?(\d{2}))?/);
   if (!m) return -300;
   const h = parseInt(m[1], 10);
   const min = m[2] ? parseInt(m[2], 10) : 0;
   return h * 60 + (h < 0 ? -min : min);
 }
+// Epoch seconds for a wall-clock America/New_York time on a given day. The offset
+// must be sampled at the TARGET instant, not at noon: on a DST-transition day the
+// noon offset differs from the midnight offset, which would push a window's start
+// onto the wrong calendar day (e.g. a spring-forward Sunday opening at 23:00 the
+// day before). Resolve it with one fixpoint pass (00:00 / 23:59:59 never land in
+// the transition gap, so a single re-resolution is exact).
 function etEpoch(day: Day, endOfDay: boolean): number {
-  const off = etOffsetMinutes(day);
   const [hh, mm, ss] = endOfDay ? [23, 59, 59] : [0, 0, 0];
-  return Math.floor((Date.UTC(day.y, day.mo, day.d, hh, mm, ss) - off * 60000) / 1000);
+  const base = Date.UTC(day.y, day.mo, day.d, hh, mm, ss);
+  let off = etOffsetAt(new Date(base + 300 * 60000)); // seed with an EST (-300) guess
+  off = etOffsetAt(new Date(base - off * 60000));     // re-resolve at the real instant
+  return Math.floor((base - off * 60000) / 1000);
 }
 
 function todayInET(now: Date): Day {
@@ -102,24 +125,32 @@ export function buildApolloAnnouncements(films: VeeziFilm[], now: Date = new Dat
   const showStart = T + 1;
   const showRuns = allRuns.filter(r => dayNum(r.end) >= showStart);
 
-  // Contiguous coverage from showStart → lastCovered (stop at the first gap).
+  // Contiguous coverage at/after showStart.
   const covered = new Set<number>();
   for (const r of showRuns) {
     for (let d = Math.max(dayNum(r.start), showStart); d <= dayNum(r.end); d++) covered.add(d);
   }
-  let lastCovered = showStart - 1;
-  if (covered.has(showStart)) { let d = showStart; while (covered.has(d)) d++; lastCovered = d - 1; }
+  // Anchor at the first covered day at/after showStart, tolerating a short
+  // dark-house gap right after today. A larger leading gap → the next run is a
+  // far pre-sale (Coming Soon only), so the chain does not start. Anchoring at
+  // exactly showStart (the common case) keeps behaviour identical.
+  const firstCovered = [...covered].filter(d => d >= showStart).sort((a, b) => a - b)[0];
+  const anchor = (firstCovered !== undefined && firstCovered - showStart <= LEADING_GAP_TOLERANCE_DAYS)
+    ? firstCovered : undefined;
 
-  if (lastCovered >= showStart) {
-    const cands = showRuns.filter(r => dayNum(r.start) <= lastCovered && dayNum(r.end) >= showStart);
+  let lastCovered = showStart - 1;
+  if (anchor !== undefined) { let d = anchor; while (covered.has(d)) d++; lastCovered = d - 1; }
+
+  if (anchor !== undefined && lastCovered >= anchor) {
+    const cands = showRuns.filter(r => dayNum(r.start) <= lastCovered && dayNum(r.end) >= anchor);
     const horizon = lastCovered; // films still on sale at the run's edge are "now playing"
 
-    // Cut points: today+1, every opening within the run, every (end + 1).
+    // Cut points: the anchor, every opening within the run, every (end + 1).
     const points = [...new Set([
-      showStart,
-      ...cands.filter(r => dayNum(r.start) > showStart).map(r => dayNum(r.start)),
+      anchor,
+      ...cands.filter(r => dayNum(r.start) > anchor).map(r => dayNum(r.start)),
       ...cands.map(r => dayNum(r.end) + 1),
-    ])].filter(p => p >= showStart && p <= lastCovered + 1).sort((a, b) => a - b);
+    ])].filter(p => p >= anchor && p <= lastCovered + 1).sort((a, b) => a - b);
 
     for (let i = 0; i < points.length - 1; i++) {
       const ws = points[i], we = points[i + 1] - 1;

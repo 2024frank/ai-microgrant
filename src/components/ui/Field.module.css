@@ -1,0 +1,96 @@
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* The bordered box wrapping the input + any affixes. */
+.control {
+  position: relative;
+  display: flex;
+  align-items: center;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.control:focus-within {
+  border-color: var(--green-primary);
+  box-shadow: var(--ring);
+}
+.control.invalid {
+  border-color: var(--danger);
+}
+.control.invalid:focus-within {
+  box-shadow: var(--ring-danger);
+}
+.control.disabled {
+  background: var(--gray-light);
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 0.85rem;
+  color: var(--text-strong);
+  padding: 0.5rem 0.7rem;
+}
+.input::placeholder { color: var(--text-faint); }
+.input:disabled { cursor: not-allowed; }
+
+/* Affixes (icons) sit inside the control; padding shifts when present. */
+.affix {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+  pointer-events: none;
+}
+.left  { padding-left: 0.6rem; }
+.right { padding-right: 0.6rem; }
+
+.left ~ .input { padding-left: 0.4rem; }
+
+/* ── Select-specific ── */
+.select {
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  padding-right: 1.9rem; /* room for the chevron */
+}
+.select.placeholder { color: var(--text-faint); }
+.chevron {
+  position: absolute;
+  right: 0;
+  pointer-events: none;
+}
+
+/* ── Messages ── */
+.hint {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+.error {
+  font-size: 0.72rem;
+  color: var(--danger);
+  margin: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .control { transition: none; }
+}

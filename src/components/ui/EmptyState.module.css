@@ -1,0 +1,37 @@
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--text-faint);
+}
+
+.sm { padding: 2rem 1rem; }
+.md { padding: 4rem 1.5rem; }
+
+.icon {
+  font-size: 2rem;
+  line-height: 1;
+  margin-bottom: 0.75rem;
+  display: inline-flex;
+  color: var(--text-faint);
+}
+
+.title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+}
+
+.description {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  margin: 0.25rem 0 0;
+  max-width: 38ch;
+}
+
+.action {
+  margin-top: 1.25rem;
+}

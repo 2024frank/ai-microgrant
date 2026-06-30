@@ -1,0 +1,24 @@
+.avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 50%;
+  font-weight: 700;
+  line-height: 1;
+  overflow: hidden;
+  user-select: none;
+}
+
+.sm { width: 24px; height: 24px; font-size: 0.62rem; }
+.md { width: 30px; height: 30px; font-size: 0.75rem; }
+.lg { width: 40px; height: 40px; font-size: 0.95rem; }
+
+.solid  { background: var(--green-primary); color: #fff; }
+.subtle { background: var(--green-light);   color: var(--green-primary); }
+
+.img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}

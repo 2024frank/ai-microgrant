@@ -1,0 +1,75 @@
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1.5px solid transparent;
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease,
+    box-shadow 0.15s ease, opacity 0.15s ease;
+}
+
+.btn:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+.btn:disabled,
+.btn[aria-busy='true'] {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* ── Sizes ── */
+.sm { padding: 0.35rem 0.75rem; font-size: 0.78rem; }
+.md { padding: 0.5rem 1.25rem;  font-size: 0.9rem; }
+.lg { padding: 0.7rem 1.6rem;   font-size: 1rem; }
+
+.fullWidth { width: 100%; }
+
+/* ── Variants ── */
+.primary {
+  background: var(--green-primary);
+  color: #fff;
+}
+.primary:not(:disabled):hover { background: var(--green-dark); }
+
+.ghost {
+  background: transparent;
+  color: var(--green-primary);
+  border-color: var(--green-primary);
+}
+.ghost:not(:disabled):hover { background: var(--green-light); }
+
+.danger {
+  background: var(--danger);
+  color: #fff;
+}
+.danger:not(:disabled):hover { background: #a93226; }
+.danger:focus-visible { box-shadow: var(--ring-danger); }
+
+.subtle {
+  background: var(--gray-light);
+  color: var(--text);
+}
+.subtle:not(:disabled):hover { background: #ececec; }
+
+/* ── Slots ── */
+.affix {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.label {
+  display: inline-flex;
+  align-items: center;
+}
+.label:empty { display: none; }
