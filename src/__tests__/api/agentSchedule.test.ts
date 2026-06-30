@@ -29,9 +29,13 @@ function makeReq(secret = 'test-cron-secret') {
 function mockForSources(sources: any[], triggerResults: any[], reviewerPending = 0) {
   db.default.query.mockReset();
   db.default.query.mockResolvedValueOnce([sources]); // active sources query
-  // INSERT agent_runs — one per source
+  // INSERT agent_runs — one per source. Failed triggers are followed by the
+  // route's best-effort UPDATE that marks the pre-created run failed.
   for (let i = 0; i < sources.length; i++) {
     db.default.query.mockResolvedValueOnce([{ insertId: i + 1 }]);
+    if (triggerResults[i] instanceof Error) {
+      db.default.query.mockResolvedValueOnce([{ affectedRows: 1 }]);
+    }
   }
   // reviewers + pending (only if at least one source succeeds)
   const totalNew = triggerResults.reduce((s, r) => s + (r?.inserted || 0), 0);
