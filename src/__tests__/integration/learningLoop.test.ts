@@ -151,7 +151,12 @@ beforeEach(() => {
   db.mockConn.rollback         = jest.fn().mockResolvedValue(undefined);
   db.mockConn.release          = jest.fn();
   db.mockConn.query.mockReset();
-  db.mockConn.query.mockResolvedValue([{ affectedRows: 1 }]);
+  db.mockConn.query.mockImplementation((query: string) => {
+    if (typeof query === 'string' && query.includes('FOR UPDATE')) {
+      return Promise.resolve([[PENDING_EVENT]]);
+    }
+    return Promise.resolve([{ affectedRows: 1 }]);
+  });
 });
 
 // ===========================================================================
@@ -163,6 +168,7 @@ describe('Stage 1 – Reject action writes a rejection_log row', () => {
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_USER]])
       .mockResolvedValueOnce([[PENDING_EVENT]])
+      .mockResolvedValueOnce([[{ total: 1, matched: 1 }]])
       .mockResolvedValueOnce([[{ id: 5 }]]);
 
     await postAction(
@@ -201,6 +207,7 @@ describe('Stage 1 – Reject action writes a rejection_log row', () => {
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_USER]])
       .mockResolvedValueOnce([[PENDING_EVENT]])
+      .mockResolvedValueOnce([[{ total: 1, matched: 1 }]])
       .mockResolvedValueOnce([[{ id: 5 }]]);
 
     await postAction(
@@ -222,6 +229,7 @@ describe('Stage 1 – Reject action writes a rejection_log row', () => {
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_USER]])
       .mockResolvedValueOnce([[PENDING_EVENT]])
+      .mockResolvedValueOnce([[{ total: 1, matched: 1 }]])
       .mockResolvedValueOnce([[{ id: 5 }]]);
 
     await postAction(
