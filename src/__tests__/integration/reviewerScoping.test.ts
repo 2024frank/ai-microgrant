@@ -18,6 +18,7 @@
 
 import { NextRequest } from 'next/server';
 import { GET as getQueue }      from '@/app/api/review/queue/route';
+import { GET as getReviewEvent } from '@/app/api/review/events/[id]/route';
 import { GET as getPublicEvents } from '@/app/api/events/route';
 import { adminAuth } from '@/lib/firebase-admin';
 
@@ -81,6 +82,16 @@ function makeAuthReq(userEmail: string, params: Record<string, string> = {}) {
   return new NextRequest(url, {
     headers: { Authorization: `Bearer ${userEmail}`, 'Content-Type': 'application/json' },
   });
+}
+
+function makeReviewEventReq(userEmail: string) {
+  return new NextRequest('http://localhost/api/review/events/200', {
+    headers: { Authorization: `Bearer ${userEmail}`, 'Content-Type': 'application/json' },
+  });
+}
+
+function eventCtx(id: string) {
+  return { params: Promise.resolve({ id }) };
 }
 
 function makePublicReq(params: Record<string, string> = {}) {
@@ -162,6 +173,49 @@ describe('Review Queue — source assignment scoping', () => {
     expect(data.events).toHaveLength(1);
     expect(data.events[0].source_id).toBe(2);
     expect(data.events[0].source_name).toBe('Oberlin College');
+  });
+});
+
+// ===========================================================================
+// Review Detail — Source Scoping
+// ===========================================================================
+describe('Review Detail — source assignment scoping', () => {
+  it('returns 403 when an assigned reviewer requests an event from another source', async () => {
+    mockVerify.mockResolvedValue({ uid: 'uid-alice', email: 'alice@oberlin.edu' });
+    db.default.query
+      .mockResolvedValueOnce([[REVIEWER_A]])
+      .mockResolvedValueOnce([[OBERLIN_EVENT_1]])
+      .mockResolvedValueOnce([[{ total: 1, matched: 0 }]]);
+
+    const res = await getReviewEvent(makeReviewEventReq('alice@oberlin.edu'), eventCtx('200'));
+
+    expect(res.status).toBe(403);
+  });
+
+  it('allows an assigned reviewer to request an event from their source', async () => {
+    mockVerify.mockResolvedValue({ uid: 'uid-alice', email: 'alice@oberlin.edu' });
+    db.default.query
+      .mockResolvedValueOnce([[REVIEWER_A]])
+      .mockResolvedValueOnce([[APOLLO_EVENT_1]])
+      .mockResolvedValueOnce([[{ total: 1, matched: 1 }]]);
+
+    const res  = await getReviewEvent(makeReviewEventReq('alice@oberlin.edu'), eventCtx('100'));
+    const data = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(data.id).toBe(100);
+  });
+
+  it('allows admins without adding reviewer source scope queries', async () => {
+    mockVerify.mockResolvedValue({ uid: 'uid-admin', email: 'admin@oberlin.edu' });
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[OBERLIN_EVENT_1]]);
+
+    const res = await getReviewEvent(makeReviewEventReq('admin@oberlin.edu'), eventCtx('200'));
+
+    expect(res.status).toBe(200);
+    expect(db.default.query).toHaveBeenCalledTimes(2);
   });
 });
 

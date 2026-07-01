@@ -36,8 +36,14 @@ function makeReq(path: string, body?: any) {
 
 beforeEach(() => {
   db.default.query.mockReset();
+  db.default.getConnection.mockClear();
   db.mockConn.query.mockReset();
-  db.mockConn.query.mockResolvedValue([{ affectedRows: 1 }]);
+  db.mockConn.query.mockImplementation((query: string) => {
+    if (typeof query === 'string' && query.includes('FOR UPDATE')) {
+      return Promise.resolve([[PENDING]]);
+    }
+    return Promise.resolve([{ affectedRows: 1 }]);
+  });
   db.mockConn.beginTransaction = jest.fn().mockResolvedValue(undefined);
   db.mockConn.commit           = jest.fn().mockResolvedValue(undefined);
   db.mockConn.rollback         = jest.fn().mockResolvedValue(undefined);
@@ -72,6 +78,18 @@ describe('GET /api/review/queue', () => {
 });
 
 describe('POST /api/review/events/:id/action', () => {
+  it('returns 400 for unsupported actions', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]]);
+
+    const res = await POST(
+      makeReq('/api/review/events/10/action', { action: 'publish', edits: {} }),
+      ctx('10')
+    );
+    expect(res.status).toBe(400);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it('rejects event successfully', async () => {
     db.default.query
       .mockResolvedValueOnce([[ADMIN]])
@@ -146,6 +164,38 @@ describe('POST /api/review/events/:id/action — approve path', () => {
     expect(res.status).toBe(200);
     expect(data.ok).toBe(true);
     expect(data.communityhub).toEqual({ id: 'ch_post_abc123' });
+  });
+
+  it('returns 409 and does not publish an already-approved event', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[{ ...PENDING, status: 'approved' }]]);
+
+    const res = await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve', time_spent_sec: 55 }),
+      ctx('10')
+    );
+
+    expect(res.status).toBe(409);
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(db.default.getConnection).not.toHaveBeenCalled();
+  });
+
+  it('re-checks pending status under a row lock before publishing', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[PENDING]])
+      .mockResolvedValueOnce([[{ id: 1 }]]);
+    db.mockConn.query.mockResolvedValueOnce([[{ ...PENDING, status: 'approved' }]]);
+
+    const res = await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve' }),
+      ctx('10')
+    );
+
+    expect(res.status).toBe(409);
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(db.mockConn.rollback).toHaveBeenCalledTimes(1);
   });
 
   it('POSTs correct payload to CommunityHub including ingestedPostUrl', async () => {
