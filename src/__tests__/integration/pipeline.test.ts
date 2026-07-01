@@ -300,7 +300,12 @@ describe('Scenario 2 – Reviewer queue serves events with correct structure', (
   beforeEach(() => {
     db.default.query.mockReset();
     db.mockConn.query.mockReset();
-    db.mockConn.query.mockResolvedValue([{ affectedRows: 1 }]);
+    db.mockConn.query.mockImplementation((query: string) => {
+      if (typeof query === 'string' && query.includes('FOR UPDATE')) {
+        return Promise.resolve([[RAW_EVENT]]);
+      }
+      return Promise.resolve([{ affectedRows: 1 }]);
+    });
   });
 
   it('pending events from agent run appear in reviewer queue', async () => {
@@ -350,7 +355,8 @@ describe('Scenario 2 – Reviewer queue serves events with correct structure', (
   it('full event detail includes all fields needed for the review card', async () => {
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_USER]])
-      .mockResolvedValueOnce([[{ ...RAW_EVENT, source_name: SOURCE.name, calendar_source_name: SOURCE.calendar_source_name }]]);
+      .mockResolvedValueOnce([[{ ...RAW_EVENT, source_name: SOURCE.name, calendar_source_name: SOURCE.calendar_source_name }]])
+      .mockResolvedValueOnce([[{ total: 1, matched: 1 }]]);
 
     const res  = await getEvent(makeAuthReq('/api/review/events/10'), ctx('10'));
     const data = await res.json();
@@ -382,7 +388,12 @@ describe('Scenario 3 – Approve sends correct CommunityHub payload', () => {
   beforeEach(() => {
     db.default.query.mockReset();
     db.mockConn.query.mockReset();
-    db.mockConn.query.mockResolvedValue([{ affectedRows: 1 }]);
+    db.mockConn.query.mockImplementation((query: string) => {
+      if (typeof query === 'string' && query.includes('FOR UPDATE')) {
+        return Promise.resolve([[RAW_EVENT]]);
+      }
+      return Promise.resolve([{ affectedRows: 1 }]);
+    });
     db.mockConn.beginTransaction = jest.fn().mockResolvedValue(undefined);
     db.mockConn.commit           = jest.fn().mockResolvedValue(undefined);
     db.mockConn.rollback         = jest.fn().mockResolvedValue(undefined);
@@ -391,6 +402,7 @@ describe('Scenario 3 – Approve sends correct CommunityHub payload', () => {
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_USER]])
       .mockResolvedValueOnce([[RAW_EVENT]])
+      .mockResolvedValueOnce([[{ total: 1, matched: 1 }]])
       .mockResolvedValueOnce([[{ id: 5 }]]); // reviewer db id
   });
 

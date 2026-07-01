@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
-import { getAuthUser, unauthorized, forbidden } from '@/lib/auth';
+import { canReviewSource, getAuthUser, unauthorized, forbidden } from '@/lib/auth';
 
 const CH_BASE = 'https://oberlin.communityhub.cloud/api/legacy/calendar';
 
@@ -23,6 +23,9 @@ export async function POST(
 
   const { edits = {}, time_spent_sec = null, action } = await req.json();
   const { id: eventId } = await context.params;
+  if (action !== 'approve' && action !== 'reject') {
+    return Response.json({ error: 'Unsupported review action' }, { status: 400 });
+  }
 
   // Validate reject payload before acquiring a connection
   if (action === 'reject') {
@@ -32,8 +35,9 @@ export async function POST(
 
   const [[event]] = await pool.query('SELECT * FROM raw_events WHERE id = ?', [eventId]) as any;
   if (!event) return Response.json({ error: 'Not found' }, { status: 404 });
-  if (action === 'reject' && event.status !== 'pending') {
-    return Response.json({ error: 'Can only reject pending events' }, { status: 409 });
+  if (!(await canReviewSource(user, event.source_id))) return forbidden();
+  if (event.status !== 'pending') {
+    return Response.json({ error: 'Can only review pending events' }, { status: 409 });
   }
 
   const [[dbUser]] = await pool.query('SELECT id FROM users WHERE firebase_uid = ?', [user.uid]) as any;
@@ -42,6 +46,16 @@ export async function POST(
   const conn = await pool.getConnection();
   try {
     await (conn as any).beginTransaction();
+    const [[lockedEvent]] = await conn.query('SELECT * FROM raw_events WHERE id = ? FOR UPDATE', [eventId]) as any;
+    if (!lockedEvent) {
+      await (conn as any).rollback();
+      return Response.json({ error: 'Not found' }, { status: 404 });
+    }
+    if (lockedEvent.status !== 'pending') {
+      await (conn as any).rollback();
+      return Response.json({ error: 'Can only review pending events' }, { status: 409 });
+    }
+    const event = lockedEvent;
 
     if (action === 'reject') {
       const { reason_codes, reviewer_note = '' } = edits;
