@@ -32,10 +32,18 @@ export async function DELETE(
   if (user.role !== 'admin') return forbidden();
   const { id } = await context.params;
 
-  await pool.query('DELETE FROM agent_runs WHERE source_id = ?', [id]);
+  const [[counts]] = await pool.query(
+    'SELECT COUNT(*) AS total_events FROM raw_events WHERE source_id = ?',
+    [id]
+  ) as any;
+  if (Number(counts?.total_events) > 0) {
+    return Response.json(
+      { error: 'Cannot delete a source that has events. Deactivate it instead to preserve review history.' },
+      { status: 409 }
+    );
+  }
+
   await pool.query('DELETE FROM reviewer_sources WHERE source_id = ?', [id]);
-  // Orphan events — keep them but detach from source
-  await pool.query('UPDATE raw_events SET source_id = NULL WHERE source_id = ?', [id]);
   await pool.query('DELETE FROM sources WHERE id = ?', [id]);
 
   return Response.json({ ok: true });

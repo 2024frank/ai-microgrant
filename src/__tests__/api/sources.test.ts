@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { GET, POST } from '@/app/api/sources/route';
+import { DELETE as DELETE_SOURCE } from '@/app/api/sources/[id]/route';
 import { adminAuth } from '@/lib/firebase-admin';
 
 jest.mock('@/lib/agentRunner', () => ({
@@ -18,6 +19,10 @@ function req(method = 'GET', body?: any) {
     headers: { Authorization: 'Bearer valid', 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
   });
+}
+
+function ctx(id: string) {
+  return { params: Promise.resolve({ id }) };
 }
 
 beforeEach(() => {
@@ -87,5 +92,39 @@ describe('POST /api/sources', () => {
     const res = await POST(req('POST', { name: 'X' }));
     expect(res.status).toBe(400);
     expect((await res.json()).error).toContain('agent_id');
+  });
+});
+
+describe('DELETE /api/sources/:id', () => {
+  it('refuses to delete a source with existing events to preserve review history', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[{ total_events: 3 }]]);
+
+    const res = await DELETE_SOURCE(req('DELETE'), ctx('1'));
+    const data = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(data.error).toContain('Cannot delete');
+    expect(db.default.query.mock.calls.some(
+      (c: any[]) => typeof c[0] === 'string' && c[0].includes('DELETE FROM agent_runs')
+    )).toBe(false);
+    expect(db.default.query.mock.calls.some(
+      (c: any[]) => typeof c[0] === 'string' && c[0].includes('UPDATE raw_events SET source_id = NULL')
+    )).toBe(false);
+  });
+
+  it('deletes source assignments and the source when no events exist', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[{ total_events: 0 }]])
+      .mockResolvedValueOnce([{ affectedRows: 1 }])
+      .mockResolvedValueOnce([{ affectedRows: 1 }]);
+
+    const res = await DELETE_SOURCE(req('DELETE'), ctx('1'));
+
+    expect(res.status).toBe(200);
+    expect(db.default.query.mock.calls[2][0]).toContain('DELETE FROM reviewer_sources');
+    expect(db.default.query.mock.calls[3][0]).toContain('DELETE FROM sources');
   });
 });
