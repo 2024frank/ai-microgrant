@@ -139,6 +139,15 @@ function ctx(id: string) {
   return { params: Promise.resolve({ id }) };
 }
 
+function mockRejectActionEvent() {
+  db.default.query
+    .mockResolvedValueOnce([[REVIEWER_USER]])
+    .mockResolvedValueOnce([[{ id: 5 }]]);
+  db.mockConn.query
+    .mockResolvedValueOnce([[PENDING_EVENT]])
+    .mockResolvedValueOnce([[{ has_assignments: 0, is_assigned: 0 }]]);
+}
+
 // ---------------------------------------------------------------------------
 // Setup
 // ---------------------------------------------------------------------------
@@ -160,10 +169,7 @@ beforeEach(() => {
 describe('Stage 1 – Reject action writes a rejection_log row', () => {
   it('writes event title, reason_codes, reviewer_note, and event_snapshot', async () => {
     db.default.query.mockReset();
-    db.default.query
-      .mockResolvedValueOnce([[REVIEWER_USER]])
-      .mockResolvedValueOnce([[PENDING_EVENT]])
-      .mockResolvedValueOnce([[{ id: 5 }]]);
+    mockRejectActionEvent();
 
     await postAction(
       makeAuthReq('/api/review/events/10/action', {
@@ -198,10 +204,7 @@ describe('Stage 1 – Reject action writes a rejection_log row', () => {
 
   it('sets event status to "rejected" after rejection', async () => {
     db.default.query.mockReset();
-    db.default.query
-      .mockResolvedValueOnce([[REVIEWER_USER]])
-      .mockResolvedValueOnce([[PENDING_EVENT]])
-      .mockResolvedValueOnce([[{ id: 5 }]]);
+    mockRejectActionEvent();
 
     await postAction(
       makeAuthReq('/api/review/events/10/action', {
@@ -219,10 +222,7 @@ describe('Stage 1 – Reject action writes a rejection_log row', () => {
 
   it('records time_spent_sec in review_sessions for research benchmarking', async () => {
     db.default.query.mockReset();
-    db.default.query
-      .mockResolvedValueOnce([[REVIEWER_USER]])
-      .mockResolvedValueOnce([[PENDING_EVENT]])
-      .mockResolvedValueOnce([[{ id: 5 }]]);
+    mockRejectActionEvent();
 
     await postAction(
       makeAuthReq('/api/review/events/10/action', {
