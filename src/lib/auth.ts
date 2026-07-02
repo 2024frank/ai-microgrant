@@ -47,3 +47,28 @@ export function unauthorized() {
 export function forbidden() {
   return Response.json({ error: 'Forbidden' }, { status: 403 });
 }
+
+export async function canReviewSource(
+  user: AuthUser,
+  sourceId: number | string,
+  queryer: { query: typeof pool.query } = pool
+): Promise<boolean> {
+  if (user.role === 'admin') return true;
+
+  const [[scope]] = await queryer.query(
+    `SELECT
+       EXISTS (
+         SELECT 1 FROM reviewer_sources rs
+         JOIN users u ON u.id = rs.reviewer_id
+         WHERE u.firebase_uid = ?
+       ) AS has_assignments,
+       EXISTS (
+         SELECT 1 FROM reviewer_sources rs
+         JOIN users u ON u.id = rs.reviewer_id
+         WHERE u.firebase_uid = ? AND rs.source_id = ?
+       ) AS is_assigned`,
+    [user.uid, user.uid, sourceId]
+  ) as any;
+
+  return !Boolean(Number(scope?.has_assignments)) || Boolean(Number(scope?.is_assigned));
+}
