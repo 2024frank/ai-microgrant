@@ -390,8 +390,8 @@ describe('Scenario 3 – Approve sends correct CommunityHub payload', () => {
 
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_USER]])
-      .mockResolvedValueOnce([[RAW_EVENT]])
       .mockResolvedValueOnce([[{ id: 5 }]]); // reviewer db id
+    db.mockConn.query.mockResolvedValueOnce([[RAW_EVENT]]); // locked event row
   });
 
   it('submits event to CommunityHub endpoint', async () => {
