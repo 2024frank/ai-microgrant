@@ -29,7 +29,8 @@ export async function POST(req: NextRequest) {
      FROM raw_events re
      JOIN sources s ON s.id = re.source_id
      LEFT JOIN field_edit_log fel ON fel.raw_event_id = re.id
-     WHERE (
+     WHERE re.status IN ('approved','rejected')
+       AND (
        (JSON_LENGTH(re.sessions) > 0 AND (
          SELECT MAX(CAST(jt.endTime AS UNSIGNED))
          FROM JSON_TABLE(re.sessions, '$[*]' COLUMNS (endTime VARCHAR(20) PATH '$.endTime')) jt
@@ -47,6 +48,7 @@ export async function POST(req: NextRequest) {
   const [eventsResult] = await pool.query(
     `DELETE FROM raw_events
      WHERE JSON_LENGTH(sessions) > 0
+       AND status IN ('approved','rejected')
        AND (
          SELECT MAX(CAST(jt.endTime AS UNSIGNED))
          FROM JSON_TABLE(sessions, '$[*]' COLUMNS (endTime VARCHAR(20) PATH '$.endTime')) jt
@@ -57,6 +59,7 @@ export async function POST(req: NextRequest) {
   const [noSessionResult] = await pool.query(
     `DELETE FROM raw_events
      WHERE (sessions IS NULL OR JSON_LENGTH(sessions) = 0)
+       AND status IN ('approved','rejected')
        AND created_at < DATE_SUB(NOW(), INTERVAL 30 DAY)`,
   ) as any;
 

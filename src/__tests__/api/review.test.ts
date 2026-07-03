@@ -34,6 +34,13 @@ function makeReq(path: string, body?: any) {
   });
 }
 
+function mockActionSetup(event: any = PENDING, reviewer: any = { id: 1 }) {
+  db.default.query
+    .mockResolvedValueOnce([[ADMIN]])       // auth
+    .mockResolvedValueOnce([[reviewer]]);   // reviewer db id
+  db.mockConn.query.mockResolvedValueOnce([event ? [event] : []]); // locked event row
+}
+
 beforeEach(() => {
   db.default.query.mockReset();
   db.mockConn.query.mockReset();
@@ -73,10 +80,7 @@ describe('GET /api/review/queue', () => {
 
 describe('POST /api/review/events/:id/action', () => {
   it('rejects event successfully', async () => {
-    db.default.query
-      .mockResolvedValueOnce([[ADMIN]])
-      .mockResolvedValueOnce([[PENDING]])
-      .mockResolvedValueOnce([[{ id: 1 }]]);
+    mockActionSetup();
 
     const res = await POST(
       makeReq('/api/review/events/10/action', {
@@ -92,9 +96,7 @@ describe('POST /api/review/events/:id/action', () => {
 
   it('returns 400 when reason_codes empty', async () => {
     db.default.query
-      .mockResolvedValueOnce([[ADMIN]])
-      .mockResolvedValueOnce([[PENDING]])
-      .mockResolvedValueOnce([[{ id: 1 }]]);
+      .mockResolvedValueOnce([[ADMIN]]);
 
     const res = await POST(
       makeReq('/api/review/events/10/action', { action: 'reject', edits: { reason_codes: [] } }),
@@ -104,10 +106,7 @@ describe('POST /api/review/events/:id/action', () => {
   });
 
   it('returns 409 when event already reviewed', async () => {
-    db.default.query
-      .mockResolvedValueOnce([[ADMIN]])
-      .mockResolvedValueOnce([[{ ...PENDING, status: 'approved' }]])
-      .mockResolvedValueOnce([[{ id: 1 }]]);
+    mockActionSetup({ ...PENDING, status: 'approved' });
 
     const res = await POST(
       makeReq('/api/review/events/10/action', { action: 'reject', edits: { reason_codes: ['other'] } }),
@@ -117,10 +116,7 @@ describe('POST /api/review/events/:id/action', () => {
   });
 
   it('returns 404 when event not found', async () => {
-    db.default.query
-      .mockResolvedValueOnce([[ADMIN]])
-      .mockResolvedValueOnce([[]])
-      .mockResolvedValueOnce([[{ id: 1 }]]);
+    mockActionSetup(null);
 
     const res = await POST(
       makeReq('/api/review/events/999/action', { action: 'reject', edits: { reason_codes: ['other'] } }),
@@ -132,10 +128,7 @@ describe('POST /api/review/events/:id/action', () => {
 
 describe('POST /api/review/events/:id/action — approve path', () => {
   it('approves event, calls CommunityHub, stores post_id', async () => {
-    db.default.query
-      .mockResolvedValueOnce([[ADMIN]])
-      .mockResolvedValueOnce([[PENDING]])
-      .mockResolvedValueOnce([[{ id: 1 }]]);   // reviewer db id
+    mockActionSetup();
 
     const res  = await POST(
       makeReq('/api/review/events/10/action', { action: 'approve', time_spent_sec: 55 }),
@@ -149,10 +142,7 @@ describe('POST /api/review/events/:id/action — approve path', () => {
   });
 
   it('POSTs correct payload to CommunityHub including ingestedPostUrl', async () => {
-    db.default.query
-      .mockResolvedValueOnce([[ADMIN]])
-      .mockResolvedValueOnce([[PENDING]])
-      .mockResolvedValueOnce([[{ id: 1 }]]);
+    mockActionSetup();
 
     await POST(
       makeReq('/api/review/events/10/action', { action: 'approve' }),
@@ -168,10 +158,7 @@ describe('POST /api/review/events/:id/action — approve path', () => {
   });
 
   it('logs field edits when reviewer sends modified fields', async () => {
-    db.default.query
-      .mockResolvedValueOnce([[ADMIN]])
-      .mockResolvedValueOnce([[PENDING]])
-      .mockResolvedValueOnce([[{ id: 1 }]]);
+    mockActionSetup();
 
     await POST(
       makeReq('/api/review/events/10/action', {
@@ -190,10 +177,7 @@ describe('POST /api/review/events/:id/action — approve path', () => {
   });
 
   it('does not log field edit when value is unchanged', async () => {
-    db.default.query
-      .mockResolvedValueOnce([[ADMIN]])
-      .mockResolvedValueOnce([[PENDING]])
-      .mockResolvedValueOnce([[{ id: 1 }]]);
+    mockActionSetup();
 
     await POST(
       makeReq('/api/review/events/10/action', {
@@ -210,10 +194,7 @@ describe('POST /api/review/events/:id/action — approve path', () => {
   });
 
   it('rolls back and returns 500 when CommunityHub call throws', async () => {
-    db.default.query
-      .mockResolvedValueOnce([[ADMIN]])
-      .mockResolvedValueOnce([[PENDING]])
-      .mockResolvedValueOnce([[{ id: 1 }]]);
+    mockActionSetup();
 
     mockFetch.mockRejectedValueOnce(new Error('Network error'));
 
@@ -226,10 +207,7 @@ describe('POST /api/review/events/:id/action — approve path', () => {
   });
 
   it('stores communityhub_post_id returned from CH API', async () => {
-    db.default.query
-      .mockResolvedValueOnce([[ADMIN]])
-      .mockResolvedValueOnce([[PENDING]])
-      .mockResolvedValueOnce([[{ id: 1 }]]);
+    mockActionSetup();
 
     mockFetch.mockResolvedValueOnce({
       ok: true,
@@ -249,10 +227,7 @@ describe('POST /api/review/events/:id/action — approve path', () => {
   });
 
   it('sets submitted_to_ch=1 in review_sessions on approval', async () => {
-    db.default.query
-      .mockResolvedValueOnce([[ADMIN]])
-      .mockResolvedValueOnce([[PENDING]])
-      .mockResolvedValueOnce([[{ id: 1 }]]);
+    mockActionSetup();
 
     await POST(
       makeReq('/api/review/events/10/action', { action: 'approve', time_spent_sec: 30 }),
@@ -266,5 +241,20 @@ describe('POST /api/review/events/:id/action — approve path', () => {
     expect(sessionInsert[0]).toContain("'approved'");
     // submitted_to_ch = 1
     expect(sessionInsert[1]).toContain(1);
+  });
+
+  it('does not resubmit an already-approved event to CommunityHub', async () => {
+    mockActionSetup({ ...PENDING, status: 'approved', communityhub_post_id: 'ch_existing' });
+
+    const res = await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve' }),
+      ctx('10')
+    );
+    const data = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(data.error).toBe('Can only approve pending events');
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(db.mockConn.rollback).toHaveBeenCalledTimes(1);
   });
 });
