@@ -43,21 +43,11 @@ export async function GET(
   }
 
   // Always re-encode as JPEG — CommunityHub rejects WebP even behind a .jpg URL
+  const headers = { 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=86400' };
   try {
     const jpegBuf = await sharp(rawBuf).jpeg({ quality: 92 }).toBuffer();
-    return new Response(jpegBuf, {
-      headers: {
-        'Content-Type': 'image/jpeg',
-        'Cache-Control': 'public, max-age=86400',
-      },
-    });
+    return new Response(new Uint8Array(jpegBuf), { headers });
   } catch {
-    // If sharp can't decode it, serve raw and hope for the best
-    return new Response(rawBuf, {
-      headers: {
-        'Content-Type': 'image/jpeg',
-        'Cache-Control': 'public, max-age=86400',
-      },
-    });
+    return new Response(new Uint8Array(rawBuf), { headers });
   }
 }

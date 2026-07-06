@@ -5,6 +5,7 @@
 
 import * as dotenv from 'dotenv';
 dotenv.config({ path: '.env.local' });
+dotenv.config({ path: '.env' });
 
 import mysql from 'mysql2/promise';
 
@@ -15,7 +16,7 @@ async function main() {
     user:     process.env.DATABASE_USERNAME,
     password: process.env.DATABASE_PASSWORD,
     database: process.env.DATABASE_NAME,
-    ssl:      { rejectUnauthorized: true },
+    ssl:      { rejectUnauthorized: false },
   });
 
   const [sources] = await conn.query(
