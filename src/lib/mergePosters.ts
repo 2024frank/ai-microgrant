@@ -14,7 +14,10 @@ export async function mergePosterImages(urls: string[]): Promise<string | null> 
     urls.map(async (url) => {
       try {
         const res = await fetch(url, {
-          headers: { 'User-Agent': 'Mozilla/5.0' },
+          headers: {
+            'Accept': 'image/jpeg,image/png,image/gif,*/*;q=0.5',
+            'User-Agent': 'CommunityHub-ImageProxy/1.0',
+          },
           signal: AbortSignal.timeout(10_000),
         });
         if (!res.ok) return null;
