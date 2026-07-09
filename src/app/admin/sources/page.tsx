@@ -2,7 +2,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import Sidebar from '@/components/layout/Sidebar';
-import { Plus, Play, Square, Trash2, ToggleLeft, ToggleRight, CheckCircle, XCircle, Loader, Copy, Check, Pencil, Wrench, FileText, X } from 'lucide-react';
+import { Plus, Play, Square, Trash2, ToggleLeft, ToggleRight, CheckCircle, XCircle, Loader, Copy, Check, Pencil, Wrench, FileText, X, Mail } from 'lucide-react';
 
 const SCHEDULE_OPTIONS = [
   { label: 'Every hour',    value: '0 * * * *'   },
@@ -263,33 +263,49 @@ export default function SourcesPage() {
                     const run = latestRunBySource[s.id];
                     const isRunning = run?.status === 'running';
                     const isFixAgent = s.slug === 'fixed-events';
+                    const isEmail = s.source_type === 'email';
 
                     return (
-                      <tr key={s.id} style={{ borderBottom: '1px solid #f0f0f0', background: isFixAgent ? '#fffdf7' : undefined }}>
+                      <tr key={s.id} style={{ borderBottom: '1px solid #f0f0f0', background: isFixAgent ? '#fffdf7' : isEmail ? '#f0f4ff' : undefined }}>
                         <td style={{ padding: '0.875rem 1rem', fontWeight: 600 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                             {isFixAgent && <Wrench size={13} color="#c05e00"/>}
+                            {isEmail && <Mail size={13} color="#4a6cf7"/>}
                             {s.name}
                             {isFixAgent && (
                               <span style={{ fontSize: 9, fontWeight: 700, padding: '1px 6px', borderRadius: 10, background: '#fff3e0', color: '#c05e00', letterSpacing: 0.5, textTransform: 'uppercase' }}>
                                 Correction Agent
                               </span>
                             )}
+                            {isEmail && (
+                              <span style={{ fontSize: 9, fontWeight: 700, padding: '1px 6px', borderRadius: 10, background: '#e8eeff', color: '#4a6cf7', letterSpacing: 0.5, textTransform: 'uppercase' }}>
+                                Email
+                              </span>
+                            )}
                           </div>
                         </td>
 
-                        {/* Ingest endpoint — copy button */}
+                        {/* Ingest endpoint or inbox address */}
                         <td style={{ padding: '0.875rem 1rem' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <code style={{ fontSize: 11, color: '#666', background: '#f5f5f5', padding: '2px 6px', borderRadius: 4, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>
-                              /api/ingest/{s.slug}
-                            </code>
-                            <button onClick={() => copyEndpoint(s.slug)}
-                              title="Copy full URL"
-                              style={{ background: 'none', border: 'none', cursor: 'pointer', color: copiedSlug === s.slug ? '#3a8c3f' : '#aaa', padding: 0, flexShrink: 0 }}>
-                              {copiedSlug === s.slug ? <Check size={14}/> : <Copy size={14}/>}
-                            </button>
-                          </div>
+                          {isEmail ? (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                              <Mail size={11} color="#4a6cf7"/>
+                              <span style={{ fontSize: 12, color: '#4a6cf7', fontFamily: 'monospace' }}>
+                                {process.env.NEXT_PUBLIC_SMTP_USER || 'eve@communityhub.cloud'}
+                              </span>
+                            </div>
+                          ) : (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <code style={{ fontSize: 11, color: '#666', background: '#f5f5f5', padding: '2px 6px', borderRadius: 4, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>
+                                /api/ingest/{s.slug}
+                              </code>
+                              <button onClick={() => copyEndpoint(s.slug)}
+                                title="Copy full URL"
+                                style={{ background: 'none', border: 'none', cursor: 'pointer', color: copiedSlug === s.slug ? '#3a8c3f' : '#aaa', padding: 0, flexShrink: 0 }}>
+                                {copiedSlug === s.slug ? <Check size={14}/> : <Copy size={14}/>}
+                              </button>
+                            </div>
+                          )}
                         </td>
 
                         {/* Schedule — inline editable */}
@@ -373,13 +389,15 @@ export default function SourcesPage() {
                         </td>
                         <td style={{ padding: '0.875rem 0.5rem', whiteSpace: 'nowrap' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <button onClick={() => openPromptDrawer(s)}
-                              title="View / edit system prompt"
-                              style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#bbb', padding: 0 }}
-                              onMouseEnter={e => (e.currentTarget.style.color = '#3a8c3f')}
-                              onMouseLeave={e => (e.currentTarget.style.color = '#bbb')}>
-                              <FileText size={15}/>
-                            </button>
+                            {!isEmail && (
+                              <button onClick={() => openPromptDrawer(s)}
+                                title="View / edit system prompt"
+                                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#bbb', padding: 0 }}
+                                onMouseEnter={e => (e.currentTarget.style.color = '#3a8c3f')}
+                                onMouseLeave={e => (e.currentTarget.style.color = '#bbb')}>
+                                <FileText size={15}/>
+                              </button>
+                            )}
                             <button onClick={() => deleteSource(s)}
                               title="Delete source"
                               style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ddd', padding: 0 }}
