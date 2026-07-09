@@ -3,6 +3,7 @@ import pool from './db';
 import { getRejectionHistory } from './rejectionHistory';
 import { computeDedupKey } from './eventDedup';
 import { getAdminContact } from './adminContact';
+import { fetchUnreadEmails, extractEventsFromEmail, markEmailsRead } from './emailFetch';
 
 function getClient(apiKey: string) {
   // In test env the SDK is mocked — don't throw on missing key
@@ -257,5 +258,65 @@ async function writeEvents(events: any[], sourceId: number, runId: number, calen
     throw e;
   } finally {
     (conn as any).release();
+  }
+}
+
+/**
+ * Email-based ingestion: fetch unread emails → Claude extraction → DB write.
+ * Called from the schedule route when source_type = 'email'.
+ */
+export async function triggerEmailIngest(sourceId: number, runId: number): Promise<{ run_id: number; inserted: number; skipped: number }> {
+  try {
+    const [[source]] = await pool.query(
+      'SELECT * FROM sources WHERE id = ?', [sourceId]
+    ) as any;
+
+    const emails = await fetchUnreadEmails();
+    console.log(`[emailIngest] run=${runId} fetched ${emails.length} unread emails`);
+
+    if (emails.length === 0) {
+      await pool.query(
+        `UPDATE agent_runs SET status='completed', finished_at=NOW(), events_found=0, events_extracted=0 WHERE id=?`,
+        [runId]
+      );
+      return { run_id: runId, inserted: 0, skipped: 0 };
+    }
+
+    const allEvents: any[] = [];
+    const processedUids: number[] = [];
+
+    for (const email of emails) {
+      try {
+        const events = await extractEventsFromEmail(email);
+        // Tag each event with where it came from
+        for (const ev of events) {
+          if (!ev.calendarSourceName) ev.calendarSourceName = email.from || source.name;
+        }
+        allEvents.push(...events);
+        processedUids.push(email.uid);
+        console.log(`[emailIngest] run=${runId} email uid=${email.uid} subject="${email.subject}" → ${events.length} events`);
+      } catch (err: any) {
+        console.error(`[emailIngest] run=${runId} email uid=${email.uid} failed:`, err.message);
+      }
+    }
+
+    // Write all extracted events to DB
+    const { inserted, skipped } = await writeEvents(allEvents, sourceId, runId, source.calendar_source_name || source.name);
+
+    // Mark successfully processed emails as read
+    await markEmailsRead(processedUids).catch(e => console.error('[emailIngest] markRead failed:', e.message));
+
+    await pool.query(
+      `UPDATE agent_runs SET status='completed', finished_at=NOW(), events_found=?, events_extracted=?, events_skipped_dup=? WHERE id=?`,
+      [allEvents.length, inserted.length, skipped, runId]
+    );
+
+    return { run_id: runId, inserted: inserted.length, skipped };
+  } catch (err: any) {
+    await pool.query(
+      `UPDATE agent_runs SET status='failed', finished_at=NOW(), error_log=? WHERE id=?`,
+      [JSON.stringify([err.message]), runId]
+    );
+    throw err;
   }
 }

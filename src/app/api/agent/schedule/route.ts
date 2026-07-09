@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
-import { triggerAgentRun } from '@/lib/agentRunner';
+import { triggerAgentRun, triggerEmailIngest } from '@/lib/agentRunner';
 import { sendAgentRunSummary, sendReviewNotification } from '@/lib/email';
 import { shouldRunToday } from '@/lib/schedule';
 
@@ -12,7 +12,7 @@ export async function GET(req: NextRequest) {
   }
 
   const [allSources] = await pool.query(
-    'SELECT id, name, schedule_cron FROM sources WHERE active = 1'
+    'SELECT id, name, schedule_cron, source_type FROM sources WHERE active = 1'
   ) as any;
   // Respect each source's cron schedule. The daily trigger only checks the date
   // fields, so e.g. FAVA '0 6 * * 1' runs Mondays while Apollo '0 6 * * *' runs
@@ -35,7 +35,9 @@ export async function GET(req: NextRequest) {
     const runId = runRes.insertId;
 
     try {
-      const result = await triggerAgentRun(source.id, runId, anthropicKey, environmentId);
+      const result = source.source_type === 'email'
+        ? await triggerEmailIngest(source.id, runId)
+        : await triggerAgentRun(source.id, runId, anthropicKey, environmentId);
       results.push({ source: source.name, status: 'ok', inserted: result.inserted });
       totalNew += result.inserted;
     } catch (err: any) {
