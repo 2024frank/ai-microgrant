@@ -4,10 +4,11 @@ import nodemailer from 'nodemailer';
 let _transporter: nodemailer.Transporter | null = null;
 function getTransporter(): nodemailer.Transporter {
   if (!_transporter) {
+    const port = parseInt(process.env.SMTP_PORT || '465');
     _transporter = nodemailer.createTransport({
       host: process.env.SMTP_HOST || 'smtp.hostinger.com',
-      port: parseInt(process.env.SMTP_PORT || '587'),
-      secure: false, // STARTTLS
+      port,
+      secure: port === 465,
       auth: {
         user: process.env.SMTP_USER,
         pass: process.env.SMTP_PASS,
