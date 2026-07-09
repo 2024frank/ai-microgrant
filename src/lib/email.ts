@@ -1,14 +1,24 @@
-import { Resend } from 'resend';
+import nodemailer from 'nodemailer';
 
-// Lazy init — don't crash at build time without RESEND_API_KEY
-let _resend: Resend | null = null;
-function getResend(): Resend {
-  if (!_resend) _resend = new Resend(process.env.RESEND_API_KEY || 'placeholder');
-  return _resend;
+// Lazy init — transporter is reused across calls
+let _transporter: nodemailer.Transporter | null = null;
+function getTransporter(): nodemailer.Transporter {
+  if (!_transporter) {
+    _transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST || 'smtp.hostinger.com',
+      port: parseInt(process.env.SMTP_PORT || '587'),
+      secure: false, // STARTTLS
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+      },
+    });
+  }
+  return _transporter;
 }
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-const FROM    = 'AI Events Ingestion Software <support@uhurued.com>';
+const FROM    = `AI Events Ingestion Software <${process.env.SMTP_USER || 'eve@communityhub.cloud'}>`;
 
 export async function sendReviewNotification(opts: {
   reviewerEmail:  string;
@@ -111,12 +121,7 @@ export async function sendReviewNotification(opts: {
 </table>
 </body></html>`;
 
-  return getResend().emails.send({
-    from:    FROM,
-    to:      reviewerEmail,
-    subject,
-    html,
-  });
+  return getTransporter().sendMail({ from: FROM, to: reviewerEmail, subject, html });
 }
 
 export async function sendWelcomeEmail(opts: { email: string; name: string; role: string; pendingCount?: number }) {
@@ -195,7 +200,7 @@ export async function sendWelcomeEmail(opts: { email: string; name: string; role
 </table>
 </body></html>`;
 
-  return getResend().emails.send({
+  return getTransporter().sendMail({
     from:    FROM,
     to:      email,
     subject: pendingCount > 0
@@ -255,7 +260,7 @@ export async function sendAgentRunSummary(opts: {
 </table>
 </body></html>`;
 
-  return getResend().emails.send({
+  return getTransporter().sendMail({
     from:    FROM,
     to:      adminEmail,
     subject: `Agent run: ${totalNew} new event${totalNew !== 1 ? 's' : ''} ready for review`,
