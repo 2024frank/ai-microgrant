@@ -45,7 +45,7 @@ For each event found, produce one object with these fields:
 **Required:**
 - eventType — "ev" for a single-day event with a specific date/time; "an" for a multi-day program, retreat, or open registration period
 - title — the event or program name (≤ 60 chars)
-- sessions — array of { startTime, endTime } in ISO 8601 UTC. Convert from Eastern Time (ET). For an announcement spanning a date range, use one session covering the full range (start 00:00 ET, end 23:59 ET). If no specific time is given, use 09:00 ET as start.
+- sessions — array of { startTime, endTime } as Unix timestamps in SECONDS (integer). Convert from Eastern Time (ET). Example: Sep 19 2026 6:30 PM ET = 1758313800. For an announcement spanning a date range, use one session covering the full range (start 00:00 ET, end 23:59 ET). If no specific time is given, use 09:00 ET as start.
 - description — (≤ 200 chars, complete sentence, no trailing "…"): one-sentence teaser of what the event is.
 - extendedDescription — (≤ 1000 chars): full details — date/time, location on site, cost/registration, who it's for, what happens. Faithful to the page; no invented details.
 
@@ -95,7 +95,7 @@ For each upcoming show, produce one object:
 **Required:**
 - eventType — "ev" (each show is a single dated event)
 - title — artist name(s), e.g. "The Rough & Tumble" or "Naomi Schag + Townline 26" (≤ 60 chars)
-- sessions — [{ startTime, endTime }] in ISO 8601 UTC. Convert from Eastern Time. Shows start at 7:30 PM ET; set endTime to 10:00 PM ET unless stated otherwise.
+- sessions — [{ startTime, endTime }] as Unix timestamps in SECONDS (integer). Convert from Eastern Time. Example: Jul 11 2026 7:30 PM ET = 1752283800. Shows start at 7:30 PM ET; set endTime to 10:00 PM ET unless stated otherwise.
 - description — (≤ 200 chars, complete sentence, no trailing "…"): one sentence about the artist/show. E.g., "Americana duo The Rough & Tumble performs at Riverdog, a historic barn concert venue near Oberlin."
 - extendedDescription — (≤ 1000 chars): artist bio, genre, what to expect, ticket/donation info ($22 donation, cash preferred), venue details, any age info or parking notes from the page.
 

@@ -1,16 +1,21 @@
 /**
- * Format a Unix timestamp (seconds) to a human-readable string
+ * Format a Unix timestamp (seconds) or ISO 8601 string to a human-readable string
  * in the viewer's LOCAL timezone — auto-detected by the browser.
  */
 
-export function formatDateTime(unixSeconds: number, opts?: {
+function toDate(value: number | string): Date {
+  if (typeof value === 'string') return new Date(value);
+  return new Date(value * 1000);
+}
+
+export function formatDateTime(unixSeconds: number | string, opts?: {
   includeYear?: boolean;
   timeOnly?: boolean;
   dateOnly?: boolean;
   short?: boolean;
 }): string {
   if (!unixSeconds) return '—';
-  const date = new Date(unixSeconds * 1000);
+  const date = toDate(unixSeconds);
 
   if (opts?.timeOnly) {
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -38,10 +43,10 @@ export function formatDateTime(unixSeconds: number, opts?: {
   });
 }
 
-export function formatSessionRange(startTime: number, endTime: number): string {
+export function formatSessionRange(startTime: number | string, endTime: number | string): string {
   if (!startTime) return '—';
-  const start = new Date(startTime * 1000);
-  const end   = new Date(endTime   * 1000);
+  const start = toDate(startTime);
+  const end   = toDate(endTime);
   const sameDay = start.toDateString() === end.toDateString();
 
   const date = start.toLocaleDateString([], {

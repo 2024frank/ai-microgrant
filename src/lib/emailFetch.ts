@@ -95,7 +95,7 @@ export async function fetchUnreadEmails(): Promise<FetchedEmail[]> {
       // Fetch all unseen messages
       const uids: number[] = [];
       for await (const msg of client.fetch('1:*', { flags: true })) {
-        if (!msg.flags.has('\\Seen')) uids.push(msg.uid);
+        if (!msg.flags?.has('\\Seen')) uids.push(msg.uid);
       }
 
       for (const uid of uids) {

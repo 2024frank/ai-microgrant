@@ -47,7 +47,7 @@ For each event found, produce one object with these fields:
 **Required:**
 - eventType — "ev" for a dated talk/tour/opening; "ex" for an ongoing exhibition with a date range; "an" for a registration-open announcement
 - title — event name (≤ 60 chars)
-- sessions — array of { startTime, endTime } in ISO 8601 UTC. Convert from Eastern Time (ET). For exhibitions spanning a date range, use one session covering the full range. If no specific time is given, use 10:00 AM ET as start and 5:00 PM ET as end.
+- sessions — array of { startTime, endTime } as Unix timestamps in SECONDS (integer). Convert from Eastern Time (ET). Example: Aug 2 2026 10:00 AM ET = 1754139600. For exhibitions spanning a date range, use one session covering the full range. If no specific time is given, use 10:00 AM ET as start and 5:00 PM ET as end.
 - description — (≤ 200 chars, complete sentence, no trailing "…"): one-sentence teaser.
 - extendedDescription — (≤ 1000 chars): full details — artist/topic, date/time, admission (usually free), who it's for, registration if required.
 
@@ -95,7 +95,7 @@ For each event found, produce one object:
 **Required:**
 - eventType — "ev" for a specific dated event or distribution
 - title — event name (≤ 60 chars). For weekly Farm Friday distributions, use "Farm Friday — [Month Day]" if separate dates are listed, or "Farm Friday (Weekly)" if listed as recurring.
-- sessions — array of { startTime, endTime } in ISO 8601 UTC. Convert from Eastern Time. Farm Fridays are typically 3:00–6:00 PM ET unless otherwise noted.
+- sessions — array of { startTime, endTime } as Unix timestamps in SECONDS (integer). Convert from Eastern Time. Farm Fridays are typically 3:00–6:00 PM ET unless otherwise noted.
 - description — (≤ 200 chars, complete sentence, no trailing "…"): one-sentence description of the event.
 - extendedDescription — (≤ 1000 chars): full details — what happens, location, cost/free, who can attend, CSA share pickup info if applicable.
 
@@ -144,7 +144,7 @@ For each concert/event found, produce one object:
 **Required:**
 - eventType — "ev" for a specific concert or event date
 - title — concert name (≤ 60 chars), e.g. "NOYO Spring Concert" or "NOYO Summer Symphony"
-- sessions — [{ startTime, endTime }] in ISO 8601 UTC. Convert from Eastern Time. Typical concert duration is 2 hours; if end time not given, add 2 hours to start.
+- sessions — [{ startTime, endTime }] as Unix timestamps in SECONDS (integer). Convert from Eastern Time. Example: Aug 2 2026 2:00 PM ET = 1754157600. Typical concert duration is 2 hours; if end time not given, add 2 hours to start.
 - description — (≤ 200 chars, complete sentence, no trailing "…"): one-sentence teaser about the concert.
 - extendedDescription — (≤ 1000 chars): program details, featured soloists, conductor, venue, ticket price, how to buy tickets, who the orchestra is.
 
@@ -192,7 +192,7 @@ Read all upcoming events listed.
 **Required:**
 - eventType — "ev" for a specific dated event; "an" for a registration/announcement with a date range
 - title — event name (≤ 60 chars)
-- sessions — [{ startTime, endTime }] in ISO 8601 UTC. Convert from Eastern Time. If end time not given, estimate 2 hours.
+- sessions — [{ startTime, endTime }] as Unix timestamps in SECONDS (integer). Convert from Eastern Time. If end time not given, estimate 2 hours.
 - description — (≤ 200 chars, complete sentence, no trailing "…"): one-sentence teaser.
 - extendedDescription — (≤ 1000 chars): full details — what it is, who it's for, cost/free, registration if needed.
 
@@ -240,7 +240,7 @@ For each event found, produce one object:
 **Required:**
 - eventType — "ev" for a specific dated event; "an" for a multi-day festival or open registration
 - title — event name (≤ 60 chars)
-- sessions — [{ startTime, endTime }] in ISO 8601 UTC. Convert from Eastern Time. For multi-day events use one session spanning the full range.
+- sessions — [{ startTime, endTime }] as Unix timestamps in SECONDS (integer). Convert from Eastern Time. For multi-day events use one session spanning the full range.
 - description — (≤ 200 chars, complete sentence, no trailing "…"): one-sentence teaser.
 - extendedDescription — (≤ 1000 chars): full details — what it is, location, cost, who organizes it, what to bring/expect.
 

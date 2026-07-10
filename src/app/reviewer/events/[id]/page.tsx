@@ -43,9 +43,9 @@ const POST_TYPES = [
   { id:89, label:'Other' },
 ];
 
-function toDatetimeLocal(unixSeconds: number): string {
+function toDatetimeLocal(unixSeconds: number | string): string {
   if (!unixSeconds) return '';
-  const d = new Date(unixSeconds * 1000);
+  const d = typeof unixSeconds === 'string' ? new Date(unixSeconds) : new Date(unixSeconds * 1000);
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
