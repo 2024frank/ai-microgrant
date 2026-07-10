@@ -167,8 +167,9 @@ async function main() {
     console.log(`Creating agent for ${src.name}...`);
     const agent = await (client.beta.agents as any).create({
       name:   src.name,
-      model:  'claude-sonnet-5',
+      model:  'claude-sonnet-4-6',
       system: src.system,
+      tools:  [{ type: 'agent_toolset_20260401', configs: [], default_config: { enabled: true, permission_policy: { type: 'always_allow' } } }],
     });
     console.log(`  ✓ agent_id = ${agent.id}`);
 
