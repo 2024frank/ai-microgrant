@@ -100,7 +100,7 @@ export async function fetchUnreadEmails(): Promise<FetchedEmail[]> {
 
       for (const uid of uids) {
         const msg = await client.fetchOne(String(uid), { source: true }, { uid: true });
-        if (!msg?.source) continue;
+        if (!msg || !msg.source) continue;
 
         const parsed = await simpleParser(msg.source);
         const body = parsed.text
