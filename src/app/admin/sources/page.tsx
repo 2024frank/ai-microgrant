@@ -54,11 +54,7 @@ export default function SourcesPage() {
       .then(r => r.json())
       .then(d => {
         setRuns(d.runs || []);
-        if (d.has_active) {
-          pollRef.current = setTimeout(loadRuns, 1000);
-        } else {
-          loadSources();
-        }
+        if (!d.has_active) loadSources();
       }).catch(() => {});
   }, [token, h, loadSources]);
 
@@ -66,7 +62,8 @@ export default function SourcesPage() {
     if (!ready || !token) return;
     loadSources();
     loadRuns();
-    return () => { if (pollRef.current) clearTimeout(pollRef.current); };
+    pollRef.current = setInterval(loadRuns, 10_000);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [ready, token]); // eslint-disable-line
 
   function showToast(msg: string) { setToast(msg); setTimeout(() => setToast(''), 3000); }
@@ -221,7 +218,7 @@ export default function SourcesPage() {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
           <div>
             <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 2 }}>Event Sources</h1>
-            <p style={{ fontSize: 13, color: '#888' }}>Each source gets a unique ingest endpoint — paste it into your agent's system prompt</p>
+            <p style={{ fontSize: 13, color: '#888' }}>Each source gets a unique ingest endpoint — paste it into your agent&apos;s system prompt</p>
           </div>
           <button onClick={() => setShowAdd(true)} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
             <Plus size={15}/> Add source
@@ -423,9 +420,9 @@ export default function SourcesPage() {
             <div style={{ marginTop: '1.25rem', background: '#e8f5e9', border: '1px solid #c8e6c9', borderRadius: 8, padding: '1rem 1.25rem' }}>
               <div style={{ fontSize: 12, fontWeight: 700, color: '#2a6b2e', marginBottom: 6 }}>How to connect your agent</div>
               <div style={{ fontSize: 12, color: '#3a8c3f', lineHeight: 1.6 }}>
-                Copy the ingest endpoint and paste it into your Claude agent's system prompt:<br/>
+                Copy the ingest endpoint and paste it into your Claude agent&apos;s system prompt:<br/>
                 <code style={{ background: 'rgba(0,0,0,0.06)', padding: '2px 6px', borderRadius: 3 }}>
-                  "When done, POST your JSON events array to: {APP_URL}/api/ingest/your-source-slug"
+                  &quot;When done, POST your JSON events array to: {APP_URL}/api/ingest/your-source-slug&quot;
                 </code>
               </div>
             </div>
@@ -573,7 +570,7 @@ export default function SourcesPage() {
             </select>
 
             <div style={{ background: '#e8f5e9', borderRadius: 8, padding: '0.75rem 0.875rem', fontSize: 13, color: '#2a6b2e', marginBottom: '1.5rem' }}>
-              ✓ Ingest endpoint generated instantly — paste it into your agent's system prompt
+              ✓ Ingest endpoint generated instantly — paste it into your agent&apos;s system prompt
             </div>
 
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>

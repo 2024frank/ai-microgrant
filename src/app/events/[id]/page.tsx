@@ -6,6 +6,7 @@ import { ExternalLink, Pencil, Check, X, BookOpen, Send, RotateCcw } from 'lucid
 import { formatSessionRange, getTimezoneLabel } from '@/lib/timezone';
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import firebaseApp from '@/lib/firebase';
+import EventTypeBadge from '@/components/EventTypeBadge';
 
 const STATUS_STYLES: Record<string, { bg:string; color:string; label:string }> = {
   pending:     { bg:'#fff3e0', color:'#c05e00', label:'Pending review'   },
@@ -133,7 +134,7 @@ export default function EventDeepLinkPage() {
       if (!res.ok) throw new Error(data.error || 'Failed');
       setShowSendBack(false);
       setCorrectionNotes('');
-      setSendBackMsg('✅ Sent for correction — the fix agent will update this event');
+      setSendBackMsg('✅ Queued for an automated correction attempt');
       const r2 = await fetch(`/api/events/${id}`);
       if (r2.ok) setEvent(await r2.json());
     } catch (err: any) {
@@ -198,6 +199,7 @@ export default function EventDeepLinkPage() {
 
         <div style={{ background:'white', borderRadius:12, overflow:'hidden', boxShadow:'0 2px 16px rgba(0,0,0,0.08)' }}>
           {event.image_cdn_url && (
+            // eslint-disable-next-line @next/next/no-img-element -- event images can come from unconfigured third-party hosts
             <img src={event.image_cdn_url} alt={event.title}
               style={{ width:'100%', height:200, objectFit:'cover', display:'block' }}/>
           )}
@@ -209,6 +211,7 @@ export default function EventDeepLinkPage() {
               <span style={{ background:status.bg, color:status.color, fontSize:11, fontWeight:700, padding:'2px 10px', borderRadius:20 }}>
                 {status.label}
               </span>
+              <EventTypeBadge value={event.event_type}/>
               {event.geo_scope && (
                 <span style={{ background:'#e8f5e9', color:'#2a6b2e', fontSize:11, fontWeight:600, padding:'2px 10px', borderRadius:20 }}>
                   {GEO_LABELS[event.geo_scope] || event.geo_scope}
@@ -248,7 +251,7 @@ export default function EventDeepLinkPage() {
                 {/* Reason field — feeds directly into agent learning */}
                 <div style={{ marginTop:4, marginBottom:16 }}>
                   <label style={{ fontSize:11, fontWeight:700, color:'#3a8c3f', textTransform:'uppercase', letterSpacing:0.5, display:'flex', alignItems:'center', gap:4 }}>
-                    <BookOpen size={11}/> Why are you making this correction? (AI will learn from this)
+                    <BookOpen size={11}/> Why are you making this correction? (used as future agent context)
                   </label>
                   <textarea
                     value={note}
@@ -344,7 +347,7 @@ export default function EventDeepLinkPage() {
               <div style={{ marginTop:'1.25rem', padding:'12px 14px', background:'#f0f7f0', border:'1px solid #c8e6c9', borderRadius:8 }}>
                 <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:8 }}>
                   <BookOpen size={13} color="#3a8c3f"/>
-                  <span style={{ fontSize:12, fontWeight:700, color:'#3a8c3f' }}>AI will learn from these corrections next run</span>
+                  <span style={{ fontSize:12, fontWeight:700, color:'#3a8c3f' }}>Saved as feedback for the source agent’s next run</span>
                 </div>
                 <div style={{ display:'flex', flexDirection:'column', gap:5 }}>
                   {lastSaveResult.corrections.map((c, i) => (

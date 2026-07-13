@@ -69,7 +69,7 @@ export default function ReviewerDashboardPage() {
             )}
 
             {/* Row 1: today's numbers */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem', marginBottom: '1rem' }}>
+            <div className="responsive-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem', marginBottom: '1rem' }}>
               <StatCard label="Today approved" value={stats.approved_today || 0} color="#e8f5e9" textColor="#2a6b2e" icon={<CheckCircle size={16} color="#3a8c3f"/>}/>
               <StatCard label="Today rejected" value={stats.rejected_today || 0} color="#fdecea" textColor="#c0392b" icon={<XCircle size={16} color="#c0392b"/>}/>
               <StatCard label="Total reviewed" value={stats.total_reviewed || 0} color="#f8f9fa" textColor="#333" icon={<ClipboardList size={16} color="#666"/>}/>
@@ -77,7 +77,7 @@ export default function ReviewerDashboardPage() {
             </div>
 
             {/* Row 2: correction stats */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
+            <div className="responsive-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
               <StatCard label="You approved"       value={stats.total_approved || 0}            color="#e8f5e9" textColor="#2a6b2e" icon={<CheckCircle size={16} color="#3a8c3f"/>}/>
               <StatCard label="You rejected"        value={stats.total_rejected || 0}            color="#fdecea" textColor="#c0392b" icon={<XCircle size={16} color="#c0392b"/>}/>
               <StatCard label="Sent for correction" value={stats.total_sent_for_correction || 0} color="#fff8f0" textColor="#c05e00" icon={<Wrench size={16} color="#e67e22"/>}/>
@@ -98,7 +98,7 @@ export default function ReviewerDashboardPage() {
               </div>
             )}
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }}>
+            <div className="responsive-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }}>
               {/* Sources — shared queue breakdown */}
               <div className="card">
                 <h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: '1rem' }}>Queue by source</h3>

@@ -20,8 +20,10 @@ export async function GET(req: NextRequest) {
   const to          = searchParams.get('to');
   const q           = searchParams.get('q');
   const order       = searchParams.get('order') === 'asc' ? 'ASC' : 'DESC';
-  const limit       = Math.min(parseInt(searchParams.get('limit') || '50'), 100);
-  const page        = parseInt(searchParams.get('page') || '0');
+  const requestedLimit = Number.parseInt(searchParams.get('limit') || '50', 10);
+  const requestedPage  = Number.parseInt(searchParams.get('page') || '0', 10);
+  const limit       = Number.isFinite(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 100) : 50;
+  const page        = Number.isFinite(requestedPage) ? Math.max(requestedPage, 0) : 0;
 
   const conditions: string[] = [];
   const params: any[]        = [];

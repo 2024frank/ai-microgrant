@@ -5,6 +5,8 @@ import { useParams, useRouter } from 'next/navigation';
 import Sidebar from '@/components/layout/Sidebar';
 import { ExternalLink, Check, X, Plus, Trash2, Save, RotateCcw } from 'lucide-react';
 import { getTimezoneLabel } from '@/lib/timezone';
+import { EVENT_TYPES } from '@/lib/eventTypes';
+import EventTypeBadge from '@/components/EventTypeBadge';
 
 const REASON_CODES = [
   { code: 'wrong_audience',           label: 'Wrong audience (staff/students only)' },
@@ -23,7 +25,6 @@ const LOCATION_TYPES  = ['ph2','on','bo','ne'];
 const LOCATION_LABELS: Record<string,string> = { ph2:'In-person', on:'Online', bo:'Hybrid', ne:'None' };
 const GEO_SCOPES      = ['hyper_local','city_wide','county','regional'];
 const GEO_LABELS: Record<string,string> = { hyper_local:'Hyper-local', city_wide:'City-wide', county:'County', regional:'Regional' };
-const EVENT_TYPES     = [['ot','Event'],['an','Announcement'],['jp','Job posting']] as const;
 const DISPLAY_OPTIONS = [['all','All screens'],['ps','Primary'],['sps','Secondary'],['ss','Single']] as const;
 const POST_TYPES = [
   { id:1,  label:'Volunteer Opportunity' },
@@ -160,7 +161,7 @@ export default function ReviewEventPage() {
       body: JSON.stringify({ correction_notes: correctionNotes }),
     });
     if (res.ok) {
-      showToast('Sent for correction — fix agent will pick it up');
+      showToast('Queued for an automated correction attempt');
       setShowSendBack(false);
       setCorrectionNotes('');
       setTimeout(() => router.push('/reviewer/queue'), 1200);
@@ -206,7 +207,7 @@ export default function ReviewEventPage() {
     <div style={{ display:'flex', minHeight:'100vh', background:'#f8f9fa' }}>
       <Sidebar role={user.role} name={user.name} email={user.email} token={authToken}/>
 
-      <main style={{ flex:1, padding:'2rem', maxWidth:840 }}>
+      <main className="page-main" style={{ maxWidth:900 }}>
         {toast && (
           <div style={{ position:'fixed', top:20, right:20, background: toast.startsWith('Error') ? '#c0392b' : '#3a8c3f', color:'white', padding:'0.75rem 1.25rem', borderRadius:8, fontSize:13, fontWeight:500, zIndex:999 }}>
             {toast}
@@ -250,17 +251,16 @@ export default function ReviewEventPage() {
             </a>
           )}
           <span style={{ color:'#666' }}>Received: {new Date(event.created_at).toLocaleDateString()}</span>
+          <EventTypeBadge value={field('event_type')}/>
           {tzLabel && <span style={{ color:'#aaa', marginLeft:'auto', fontSize:11 }}>Times in {tzLabel}</span>}
         </div>
 
         {/* Basic Info */}
         <SectionCard title="Basic Info">
           <Field label="Event type">
-            <div style={{ display:'flex', gap:6 }}>
-              {EVENT_TYPES.map(([val, lbl]) => (
-                <ToggleBtn key={val} active={field('event_type')===val} onClick={()=>set('event_type',val)}>{lbl}</ToggleBtn>
-              ))}
-            </div>
+            <select className="input" value={field('event_type') || 'ot'} onChange={e => set('event_type', e.target.value)}>
+              {EVENT_TYPES.map(type => <option key={type.value} value={type.value}>{type.label}</option>)}
+            </select>
           </Field>
 
           <Field label={`Title (${(field('title')?.length||0)}/60 chars)`}>
@@ -317,7 +317,7 @@ export default function ReviewEventPage() {
             </div>
           </Field>
 
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'1rem' }}>
+          <div className="responsive-grid" style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'1rem' }}>
             <Field label="Place name">
               <input value={field('place_name')||''} onChange={e=>set('place_name',e.target.value)} style={inputStyle} placeholder="Venue name"/>
             </Field>
@@ -391,7 +391,7 @@ export default function ReviewEventPage() {
 
         {/* Contact & Media */}
         <SectionCard title="Contact & Media">
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'1rem' }}>
+          <div className="responsive-grid" style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'1rem' }}>
             <Field label="Email">
               <input value={field('email')||''} onChange={e=>set('email',e.target.value)} style={inputStyle}/>
             </Field>
@@ -399,7 +399,7 @@ export default function ReviewEventPage() {
               <input value={field('contact_email')||''} onChange={e=>set('contact_email',e.target.value)} style={inputStyle}/>
             </Field>
           </div>
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'1rem' }}>
+          <div className="responsive-grid" style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'1rem' }}>
             <Field label="Phone">
               <input value={field('phone')||''} onChange={e=>set('phone',e.target.value)} style={inputStyle}/>
             </Field>
@@ -412,6 +412,7 @@ export default function ReviewEventPage() {
           <Field label="Image URL">
             <input value={field('image_cdn_url')||''} onChange={e=>set('image_cdn_url',e.target.value)} style={inputStyle} placeholder="https://…"/>
             {field('image_cdn_url') && (
+              // eslint-disable-next-line @next/next/no-img-element -- reviewer preview accepts arbitrary source hosts
               <img src={field('image_cdn_url')} alt="preview" style={{ marginTop:8, maxHeight:120, borderRadius:6, objectFit:'cover' }}/>
             )}
           </Field>
@@ -446,7 +447,7 @@ export default function ReviewEventPage() {
 
         {/* Source */}
         <SectionCard title="Source">
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'1rem' }}>
+          <div className="responsive-grid" style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'1rem' }}>
             <Field label="Source name">
               <input value={field('calendar_source_name')||''} onChange={e=>set('calendar_source_name',e.target.value)} style={inputStyle}/>
             </Field>
@@ -500,7 +501,7 @@ export default function ReviewEventPage() {
         <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.4)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:100 }}>
           <div style={{ background:'white', borderRadius:12, padding:'1.75rem', width:'100%', maxWidth:440 }}>
             <h2 style={{ fontSize:17, fontWeight:700, marginBottom:'0.25rem' }}>Reject event</h2>
-            <p style={{ fontSize:13, color:'#888', marginBottom:'1rem' }}>Select all reasons that apply — the agent will learn from this</p>
+            <p style={{ fontSize:13, color:'#888', marginBottom:'1rem' }}>Select all reasons that apply. This feedback is added to future agent context.</p>
             <div style={{ display:'flex', flexDirection:'column', gap:6, marginBottom:'1rem' }}>
               {REASON_CODES.map(({ code, label }) => (
                 <label key={code} style={{ display:'flex', alignItems:'center', gap:8, fontSize:13, cursor:'pointer', padding:'0.4rem 0.5rem', borderRadius:6, background:reasons.includes(code)?'#fdecea':'transparent' }}>

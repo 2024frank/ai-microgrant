@@ -11,6 +11,17 @@ const REASON_CODE_GLOSSARY = `### Reason codes
 - wrong_post_type: postTypeId category incorrect
 - bad_location: location missing or wrong`;
 
+function parseReasonCodes(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(String);
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Build the learning-context block injected into the agent's next run.
  * Two signals, both scoped to this source:
@@ -29,10 +40,11 @@ export async function getRejectionHistory(sourceId: number, limit = 50) {
   ) as any;
 
   const rejectionLines = (Array.isArray(rows) ? rows : []).slice(0, 20).map((r: any) => {
-    const parsed = Array.isArray(r.reason_codes) ? r.reason_codes : JSON.parse(r.reason_codes);
-    const codes = parsed.join(', ');
+    const parsed = parseReasonCodes(r.reason_codes);
+    const codes = parsed.length ? parsed.join(', ') : 'reviewer feedback';
     const note  = r.reviewer_note ? ` — "${r.reviewer_note}"` : '';
-    return `- "${r.event_title}" → REJECTED: ${codes}${note}`;
+    const signal = parsed.includes('field_correction') ? 'CORRECTED' : 'REJECTED';
+    return `- "${r.event_title}" → ${signal}: ${codes}${note}`;
   });
 
   // ── Field corrections (best-effort) ──────────────────────────────────────
@@ -59,12 +71,12 @@ export async function getRejectionHistory(sourceId: number, limit = 50) {
   const sections: string[] = [];
   if (rejectionLines.length) {
     sections.push(
-      `## Rejection history for this source — learn from these\n\n${rejectionLines.join('\n')}\n\n${REASON_CODE_GLOSSARY}`
+      `## Rejection history and recent reviewer feedback — use as examples, not guaranteed rules\n\n${rejectionLines.join('\n')}\n\n${REASON_CODE_GLOSSARY}`
     );
   }
   if (correctionLines.length) {
     sections.push(
-      `## Field corrections reviewers made — get these right the first time\n\n${correctionLines.join('\n')}`
+      `## Recent field corrections reviewers made — apply when relevant\n\n${correctionLines.join('\n')}`
     );
   }
 

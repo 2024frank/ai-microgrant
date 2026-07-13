@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/hooks/useAuth';
-import { Bot, CheckCircle, XCircle, Edit3, Zap, Clock, AlertTriangle, TrendingUp, Activity, Target, RefreshCw } from 'lucide-react';
+import { Bot, CheckCircle, Edit3, Zap, AlertTriangle, TrendingUp, Activity, Target, RefreshCw } from 'lucide-react';
 
 // ─── colour palette ───────────────────────────────────────────────
 const SOURCE_COLORS = ['#3a8c3f','#1565c0','#c05e00','#7b1fa2','#c0392b','#00838f'];
@@ -77,7 +77,7 @@ function Sparkline({data,color='#3a8c3f',width=120,height=36}:{data:number[];col
 }
 
 // ─── SVG grouped bar chart ────────────────────────────────────────
-function GroupedBars({sources,days}:{sources:any[];days:string}) {
+function GroupedBars({sources}:{sources:any[]}) {
   const W=540, H=160, padL=40, padB=28, padT=12, padR=12;
   const inner = {w:W-padL-padR, h:H-padT-padB};
   if (!sources.length) return null;
@@ -137,19 +137,17 @@ function Donut({slices,r=40,stroke=12}:{slices:{value:number;color:string;label:
     </svg>
   );
   const cx=r+stroke/2, cy=r+stroke/2, circ=2*Math.PI*r;
-  let offset=0;
   return (
     <svg width={r*2+stroke} height={r*2+stroke} viewBox={`0 0 ${r*2+stroke} ${r*2+stroke}`} style={{transform:'rotate(-90deg)'}}>
-      {slices.map(sl=>{
+      {slices.map((sl,index)=>{
         const dash=(sl.value/total)*circ;
-        const el=<circle key={sl.label} cx={cx} cy={cy} r={r} fill="none"
+        const offset=slices.slice(0,index).reduce((sum,item)=>sum+(item.value/total)*circ,0);
+        return <circle key={sl.label} cx={cx} cy={cy} r={r} fill="none"
           stroke={sl.color} strokeWidth={stroke}
           strokeDasharray={`${dash} ${circ-dash}`}
           strokeDashoffset={-offset}>
           <title>{sl.label}: {sl.value}</title>
         </circle>;
-        offset+=dash;
-        return el;
       })}
     </svg>
   );
@@ -160,7 +158,7 @@ function RunTimeline({runs}:{runs:any[]}) {
   const last = runs.slice(0,20);
   return (
     <div style={{display:'flex',gap:3,alignItems:'flex-end',height:40}}>
-      {last.reverse().map((r:any,i:number)=>{
+      {last.reverse().map((r:any)=>{
         const h=Math.max(4,Math.min(40, r.events_extracted>0 ? 8+(r.events_extracted/5)*4 : 4));
         const color=r.status==='failed'?'#c0392b':r.events_extracted>0?'#3a8c3f':'#e0e0e0';
         return <div key={r.id} title={`${r.source_name}: ${r.events_extracted} events (${fmtSec(r.duration_sec)})`}
@@ -251,7 +249,7 @@ export default function AgentAnalyticsPage() {
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'1.5rem',flexWrap:'wrap',gap:8}}>
           <div>
             <h1 style={{fontSize:22,fontWeight:700,marginBottom:2}}>AI Agent Intelligence</h1>
-            <p style={{fontSize:13,color:'#888',margin:0}}>Deep analytics on how your agents extract, learn, and improve</p>
+            <p style={{fontSize:13,color:'#888',margin:0}}>Observed extraction, review, and correction outcomes by source agent</p>
           </div>
           <div style={{display:'flex',gap:8,alignItems:'center'}}>
             <select value={days} onChange={e=>setDays(e.target.value)} style={selectStyle}>
@@ -279,7 +277,7 @@ export default function AgentAnalyticsPage() {
         {activeTab==='overview' && (
           <>
             {/* KPI row */}
-            <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'1rem',marginBottom:'1.5rem'}}>
+            <div className="responsive-grid" style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'1rem',marginBottom:'1.5rem'}}>
               <KPI label="Events extracted" value={totals.events} icon={<Zap size={14}/>} color="#3a8c3f"
                 sub={`across ${sources.filter(s=>s.active).length} active agents`}/>
               <KPI label="Agent runs" value={totals.runs} icon={<RefreshCw size={14}/>} color="#1565c0"
@@ -293,11 +291,11 @@ export default function AgentAnalyticsPage() {
                 sub="of reviewed events approved"/>
             </div>
 
-            <div style={{display:'grid',gridTemplateColumns:'1.4fr 1fr',gap:'1.25rem',marginBottom:'1.25rem'}}>
+            <div className="responsive-grid" style={{display:'grid',gridTemplateColumns:'1.4fr 1fr',gap:'1.25rem',marginBottom:'1.25rem'}}>
               {/* Grouped bar chart */}
               <div className="card" style={{padding:'1.25rem'}}>
                 <h3 style={{fontSize:13,fontWeight:700,marginBottom:'1rem',color:'#444'}}>Events by source</h3>
-                <GroupedBars sources={sources} days={days}/>
+                <GroupedBars sources={sources}/>
               </div>
 
               {/* Status donut */}
@@ -399,7 +397,7 @@ export default function AgentAnalyticsPage() {
                 </div>
 
                 {/* Stat grid */}
-                <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'0.75rem',marginBottom:'1rem'}}>
+                <div className="responsive-grid" style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'0.75rem',marginBottom:'1rem'}}>
                   {[
                     {label:'Total runs',    val:s.total_runs,  sub:`${s.productive_runs} productive`,  color:'#1565c0'},
                     {label:'Hit rate',      val:s.hit_rate!==null?`${s.hit_rate}%`:'—', sub:`${s.empty_runs} empty runs`, color:s.hit_rate===null?'#bbb':s.hit_rate>=60?'#3a8c3f':s.hit_rate>=30?'#c05e00':'#c0392b'},
@@ -504,7 +502,7 @@ export default function AgentAnalyticsPage() {
         {/* ═══ FIELDS TAB ══════════════════════════════════════════ */}
         {activeTab==='fields' && (
           <>
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'1.25rem',marginBottom:'1.25rem'}}>
+            <div className="responsive-grid" style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'1.25rem',marginBottom:'1.25rem'}}>
               <div className="card" style={{padding:'1.25rem'}}>
                 <h3 style={{fontSize:13,fontWeight:700,color:'#444',marginBottom:'1rem',display:'flex',alignItems:'center',gap:6}}>
                   <Edit3 size={13} color="#1565c0"/> Most-edited fields
@@ -552,9 +550,9 @@ export default function AgentAnalyticsPage() {
 
             <div className="card" style={{padding:'1.25rem'}}>
               <h3 style={{fontSize:13,fontWeight:700,color:'#444',marginBottom:'0.75rem',display:'flex',alignItems:'center',gap:6}}>
-                <AlertTriangle size={13} color="#e67e22"/> Agent accuracy summary
+                <AlertTriangle size={13} color="#e67e22"/> Review outcome summary
               </h3>
-              <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'0.75rem'}}>
+              <div className="responsive-grid" style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'0.75rem'}}>
                 {sources.filter(s=>s.total>0).map(s=>(
                   <div key={s.id} style={{background:'#f8f9fa',borderRadius:8,padding:'0.875rem'}}>
                     <div style={{fontSize:12,fontWeight:700,marginBottom:8,color:'#444'}}>{s.name}</div>

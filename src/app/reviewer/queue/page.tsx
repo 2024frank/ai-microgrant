@@ -6,6 +6,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { Clock, Globe, Calendar, ArrowUpDown, Filter, RotateCcw, X, Wrench, CheckSquare, Square, CheckCheck } from 'lucide-react';
 
 import { formatDateTime } from '@/lib/timezone';
+import EventTypeBadge from '@/components/EventTypeBadge';
 
 const GEO_COLORS: Record<string,string> = {
   hyper_local: '#e8f5e9|#2a6b2e', city_wide: '#e3f2fd|#1565c0',
@@ -99,9 +100,9 @@ export default function ReviewerQueuePage() {
         }).catch(() => {});
     };
     check();
-    pollRef.current = setInterval(check, 10000);
+    pollRef.current = setInterval(check, 30_000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [ready, token]); // eslint-disable-line
+  }, [ready, token]);
 
   if (!ready || !user) return null;
 
@@ -126,7 +127,8 @@ export default function ReviewerQueuePage() {
     e.stopPropagation();
     setSelected(prev => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   }
@@ -214,7 +216,7 @@ export default function ReviewerQueuePage() {
         </div>
       )}
 
-      <main style={{ flex:1, padding:'2rem' }}>
+      <main className="page-main">
 
         {/* Header */}
         <div style={{ marginBottom:'1.4rem' }}>
@@ -339,6 +341,7 @@ export default function ReviewerQueuePage() {
                     <div style={{ flex:1, minWidth:0 }}>
                       <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:2, flexWrap:'wrap' }}>
                         <span style={{ fontSize:14, fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{ev.title}</span>
+                        <EventTypeBadge value={ev.event_type}/>
                         {ev.geo_scope && (
                           <span style={{ fontSize:10, padding:'1px 8px', borderRadius:20, background:bg, color:fg, fontWeight:600, flexShrink:0 }}>
                             {GEO_LABELS[ev.geo_scope]}

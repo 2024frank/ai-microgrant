@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
 import { getAuthUser, unauthorized, forbidden } from '@/lib/auth';
+import { isEventType } from '@/lib/eventTypes';
 
 const CH_BASE = 'https://oberlin.communityhub.cloud/api/legacy/calendar';
 
@@ -28,6 +29,12 @@ export async function POST(
   if (action === 'reject') {
     const { reason_codes } = edits;
     if (!reason_codes?.length) return Response.json({ error: 'reason_codes required' }, { status: 400 });
+  }
+  if (action !== 'approve' && action !== 'reject') {
+    return Response.json({ error: 'Invalid action' }, { status: 400 });
+  }
+  if (edits.event_type !== undefined && !isEventType(edits.event_type)) {
+    return Response.json({ error: 'Invalid event type' }, { status: 400 });
   }
 
   const [[event]] = await pool.query('SELECT * FROM raw_events WHERE id = ?', [eventId]) as any;
@@ -61,7 +68,7 @@ export async function POST(
     }
 
     // APPROVE
-    const editableFields = ['title','description','extended_description','sessions','location_type',
+    const editableFields = ['event_type','title','description','extended_description','sessions','location_type',
       'location','place_name','room_num','url_link','sponsors','post_type_ids','geo_scope',
       'contact_email','phone','website','image_cdn_url','buttons','display'];
 

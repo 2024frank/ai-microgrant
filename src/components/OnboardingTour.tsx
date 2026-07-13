@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 interface Step {
   title:    string;
@@ -38,7 +38,7 @@ const ADMIN_STEPS: Step[] = [
   },
   {
     title: 'AI Agent analytics',
-    body:  'Deep performance data on each AI agent. See hit rates, extraction accuracy, average run time, which fields get corrected most, and an automatic grade for each agent.',
+    body:  'Operational metrics for each source agent: hit rates, review outcomes, run time, frequently corrected fields, and a simple grade based on those observed results.',
     icon: (
       <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
         <rect x="2" y="2" width="60" height="60" rx="10" fill="#e3f2fd"/>
@@ -137,7 +137,7 @@ const REVIEWER_STEPS: Step[] = [
   },
   {
     title: 'Rejecting an event',
-    body:  'If an event is wrong, spam, or irrelevant, reject it. You will pick a reason code so the AI can learn from it and do better on the next run.',
+    body:  'If an event is wrong, spam, or irrelevant, reject it and choose a reason. Recent feedback is included as context on the source agent’s next run; every result still needs human review.',
     icon: (
       <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
         <rect x="2" y="2" width="60" height="60" rx="10" fill="#fdecea"/>
@@ -148,7 +148,7 @@ const REVIEWER_STEPS: Step[] = [
   },
   {
     title: 'Sending back for correction',
-    body:  'If the AI got something wrong but the event is real, send it back for correction with a note. The AI reads your note, fixes the event, and resubmits it. You will get a bell notification when it is done.',
+    body:  'If the event is real but needs work, send it back with a specific note. A correction agent will attempt the changes and return the result to the review queue; you will get a notification when it finishes.',
     icon: (
       <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
         <rect x="2" y="2" width="60" height="60" rx="10" fill="#fff8e1"/>

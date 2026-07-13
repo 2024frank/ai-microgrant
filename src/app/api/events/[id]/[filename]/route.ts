@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
-import sharp from 'sharp';
+import { getSharp } from '@/lib/sharp';
 
 // Serves event images at any filename (e.g. poster.jpg) so CommunityHub
 // accepts the URL — it validates the URL extension AND sniffs actual image
@@ -45,6 +45,7 @@ export async function GET(
   // Always re-encode as JPEG — CommunityHub rejects WebP even behind a .jpg URL
   const headers = { 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=86400' };
   try {
+    const sharp = getSharp();
     const jpegBuf = await sharp(rawBuf).jpeg({ quality: 92 }).toBuffer();
     return new Response(new Uint8Array(jpegBuf), { headers });
   } catch {

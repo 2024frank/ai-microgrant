@@ -178,6 +178,34 @@ a { color: inherit; }
 .badge-amber { background: var(--warning-light); color: #c05e00; }
 .badge-blue  { background: var(--info-light); color: var(--info); }
 
+.event-type-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 3px 9px;
+  border: 1px solid #d9e4f2;
+  border-radius: 999px;
+  background: #eef5ff;
+  color: #285a92;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+.event-type-an { background: #fff7e8; border-color: #f1dfb7; color: #8a5a00; }
+.event-type-jp { background: #f2ecff; border-color: #ddd0f5; color: #6840a0; }
+.event-type-ex { background: #fff0f4; border-color: #f0d4dc; color: #9b3b59; }
+.event-type-ot { background: var(--gray-100); border-color: var(--gray-200); color: var(--gray-700); }
+
+.page-main { flex: 1; min-width: 0; padding: 2rem; }
+.table-scroll { overflow-x: auto; }
+
+@media (max-width: 760px) {
+  .page-main { padding: 1.25rem 1rem; }
+  .responsive-grid { grid-template-columns: 1fr !important; }
+  .hide-mobile { display: none !important; }
+}
+
 /* ---- Form controls ---------------------------------------- */
 .input,
 input.input,

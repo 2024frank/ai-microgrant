@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/hooks/useAuth';
 import { UserPlus, Shield, Eye, Check, X, Trash2 } from 'lucide-react';
@@ -16,16 +16,16 @@ export default function AdminControlsPage() {
   const [savingId, setSavingId] = useState<number | null>(null);
   const [toast, setToast]     = useState('');
 
-  function load() {
+  const load = useCallback(() => {
     if (!token) return;
     const h = { Authorization: `Bearer ${token}` };
     Promise.all([
       fetch('/api/users',   { headers: h }).then(r => r.json()),
       fetch('/api/sources', { headers: h }).then(r => r.json()),
     ]).then(([u, s]) => { setUsers(Array.isArray(u) ? u : []); setSources(Array.isArray(s) ? s : []); }).finally(() => setLoading(false));
-  }
+  }, [token]);
 
-  useEffect(() => { if (ready && token) load(); }, [ready, token]);
+  useEffect(() => { if (ready && token) load(); }, [ready, token, load]);
 
   function showToast(msg: string) {
     setToast(msg);

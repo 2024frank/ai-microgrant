@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
 import { getAuthUser, unauthorized } from '@/lib/auth';
+import { isEventType } from '@/lib/eventTypes';
 
 /**
  * POST /api/events/:id/edit
@@ -21,6 +22,9 @@ export async function POST(
 
   const { id } = await context.params;
   const { edits = {}, note = '' } = await req.json();
+  if (edits.event_type !== undefined && !isEventType(edits.event_type)) {
+    return Response.json({ error: 'Invalid event type' }, { status: 400 });
+  }
 
   const [[event]] = await pool.query(
     `SELECT re.*, s.agent_id FROM raw_events re
@@ -34,7 +38,7 @@ export async function POST(
   const reviewerId = dbUser?.id;
 
   const editableFields = [
-    'title', 'description', 'extended_description', 'sessions',
+    'event_type', 'title', 'description', 'extended_description', 'sessions',
     'location_type', 'location', 'place_name', 'room_num', 'url_link',
     'sponsors', 'post_type_ids', 'geo_scope', 'contact_email',
     'phone', 'website', 'image_cdn_url', 'buttons', 'display', 'calendar_source_name', 'calendar_source_url',

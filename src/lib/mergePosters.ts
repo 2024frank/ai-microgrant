@@ -1,4 +1,4 @@
-import sharp from 'sharp';
+import { getSharp } from './sharp';
 
 /**
  * Download poster images from `urls`, merge them side-by-side at a fixed height,
@@ -8,6 +8,7 @@ import sharp from 'sharp';
  */
 export async function mergePosterImages(urls: string[]): Promise<string | null> {
   if (!urls || urls.length === 0) return null;
+  const sharp = getSharp();
 
   // Download all posters, skip any that fail
   const results = await Promise.all(

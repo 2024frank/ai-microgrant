@@ -4,6 +4,7 @@ import { sendReviewNotification } from '@/lib/email';
 import { mergePosterImages } from '@/lib/mergePosters';
 import { computeDedupKey } from '@/lib/eventDedup';
 import { getAdminContact } from '@/lib/adminContact';
+import { normalizeEventType } from '@/lib/eventTypes';
 
 const MAX_EVENTS_PER_INGEST = 200;
 
@@ -146,7 +147,7 @@ export async function POST(
         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')`,
         [
           source.id, runId,
-          ['ot','ev','cl','ex','vt','sp','pe','wk','ms','ws','an'].includes(ev.eventType) ? ev.eventType : 'ot',
+          normalizeEventType(ev.eventType),
           storedTitle,
           san(ev.description, 2000)    || '',
           san(ev.extendedDescription, 5000),

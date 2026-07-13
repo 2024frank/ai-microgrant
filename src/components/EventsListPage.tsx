@@ -5,6 +5,8 @@ import { useAuth } from '@/hooks/useAuth';
 import Sidebar from '@/components/layout/Sidebar';
 import { formatDateTime } from '@/lib/timezone';
 import { ExternalLink, Search } from 'lucide-react';
+import EventTypeBadge from '@/components/EventTypeBadge';
+import { EVENT_TYPES } from '@/lib/eventTypes';
 
 const GEO_LABELS: Record<string, string> = {
   hyper_local: 'Hyper-local', city_wide: 'City-wide', county: 'County', regional: 'Regional',
@@ -31,6 +33,7 @@ export default function EventsListPage({ status, title, emptyMsg }: EventsListPa
   const [page, setPage]       = useState(0);
   const [q, setQ]             = useState('');
   const [sourceFilter, setSourceFilter] = useState('');
+  const [typeFilter, setTypeFilter] = useState('');
   const [sources, setSources] = useState<any[]>([]);
   const limit = 25;
 
@@ -48,13 +51,14 @@ export default function EventsListPage({ status, title, emptyMsg }: EventsListPa
     });
     if (q)            params.set('q', q);
     if (sourceFilter) params.set('source_id', sourceFilter);
+    if (typeFilter)   params.set('event_type', typeFilter);
 
     fetch(`/api/events?${params}`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
       .then(d => { setEvents(d.events || []); setTotal(d.pagination?.total || 0); })
       .catch(() => { setEvents([]); setTotal(0); })
       .finally(() => setLoading(false));
-  }, [ready, token, status, page, q, sourceFilter]);
+  }, [ready, token, status, page, q, sourceFilter, typeFilter]);
 
   if (!ready || !user) return null;
 
@@ -67,7 +71,7 @@ export default function EventsListPage({ status, title, emptyMsg }: EventsListPa
     <div style={{ display: 'flex', minHeight: '100vh', background: '#f8f9fa' }}>
       <Sidebar role={user.role} name={user.name} email={user.email} token={token}/>
 
-      <main style={{ flex: 1, padding: '2rem', minWidth: 0 }}>
+      <main className="page-main">
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem', gap: 12, flexWrap: 'wrap' }}>
           <div>
@@ -95,6 +99,12 @@ export default function EventsListPage({ status, title, emptyMsg }: EventsListPa
                 {sources.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
             )}
+            <select value={typeFilter} onChange={e => { setTypeFilter(e.target.value); setPage(0); }}
+              aria-label="Filter by event type"
+              style={{ padding: '0.4rem 0.75rem', border: '1.5px solid #ddd', borderRadius: 6, fontSize: 13, outline: 'none', color: typeFilter ? '#333' : '#777' }}>
+              <option value="">All event types</option>
+              {EVENT_TYPES.map(type => <option key={type.value} value={type.value}>{type.label}</option>)}
+            </select>
           </div>
         </div>
 
@@ -110,12 +120,13 @@ export default function EventsListPage({ status, title, emptyMsg }: EventsListPa
             {q && <div style={{ fontSize: 13 }}>Try clearing your search</div>}
           </div>
         ) : (
-          <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+          <div className="card table-scroll" style={{ padding: 0 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr style={{ background: '#f8f9fa', borderBottom: '1px solid #eee' }}>
                   <th style={th}>Title</th>
                   <th style={th}>Source</th>
+                  <th style={th}>Type</th>
                   <th style={th}>Date</th>
                   <th style={th}>Geo scope</th>
                   <th style={th}>Status</th>
@@ -138,6 +149,7 @@ export default function EventsListPage({ status, title, emptyMsg }: EventsListPa
                         <div style={{ fontSize: 11, color: '#aaa', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2 }}>{ev.description}</div>
                       </td>
                       <td style={{ padding: '0.75rem 1rem', color: '#666', whiteSpace: 'nowrap' }}>{ev.source_name}</td>
+                      <td style={{ padding: '0.75rem 1rem' }}><EventTypeBadge value={ev.event_type}/></td>
                       <td style={{ padding: '0.75rem 1rem', color: '#666', whiteSpace: 'nowrap' }}>
                         {session ? formatDateTime(session.startTime, { short: true, dateOnly: true }) : '—'}
                       </td>

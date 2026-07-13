@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
 import { getAuthUser } from '@/lib/auth';
+import { isEventType } from '@/lib/eventTypes';
 
 const CH_BASE = 'https://oberlin.communityhub.cloud/api/legacy/calendar';
 
@@ -41,13 +42,16 @@ export async function PATCH(
   if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
   const { id } = await context.params;
   const { edits = {} } = await req.json();
+  if (edits.event_type !== undefined && !isEventType(edits.event_type)) {
+    return Response.json({ error: 'Invalid event type' }, { status: 400 });
+  }
 
   const [[event]] = await pool.query('SELECT * FROM raw_events WHERE id = ?', [id]) as any;
   if (!event) return Response.json({ error: 'Not found' }, { status: 404 });
   if (!event.communityhub_post_id) return Response.json({ error: 'Not yet submitted' }, { status: 400 });
 
   const [[dbUser]] = await pool.query('SELECT id FROM users WHERE firebase_uid = ?', [user.uid]) as any;
-  const editableFields = ['title','description','extended_description','sessions','location_type',
+  const editableFields = ['event_type','title','description','extended_description','sessions','location_type',
     'location','place_name','room_num','url_link','sponsors','post_type_ids','geo_scope',
     'contact_email','email','phone','website','image_cdn_url','buttons','display'];
 
@@ -64,7 +68,7 @@ export async function PATCH(
       }
     }
     const fieldMap: Record<string,string> = {
-      title:'title', description:'description', extended_description:'extendedDescription',
+      event_type:'eventType', title:'title', description:'description', extended_description:'extendedDescription',
       sessions:'sessions', location_type:'locationType', location:'location',
       place_name:'placeName', room_num:'roomNum', url_link:'urlLink', sponsors:'sponsors',
       post_type_ids:'postTypeId', contact_email:'contactEmail', phone:'phone',

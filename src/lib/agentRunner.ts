@@ -4,6 +4,7 @@ import { getRejectionHistory } from './rejectionHistory';
 import { computeDedupKey } from './eventDedup';
 import { getAdminContact } from './adminContact';
 import { fetchUnreadEmails, extractEventsFromEmail, markEmailsRead } from './emailFetch';
+import { normalizeEventType } from './eventTypes';
 
 function getClient(apiKey: string) {
   // In test env the SDK is mocked — don't throw on missing key
@@ -55,7 +56,11 @@ export async function triggerAgentRun(
 
     // Persist the session id so a stop request can tear it down API-side
     // (the SDK has no cancel — delete is the only teardown). Best-effort.
-    await pool.query('UPDATE agent_runs SET session_id = ? WHERE id = ?', [session.id, runId]).catch(() => {});
+    try {
+      await pool.query('UPDATE agent_runs SET session_id = ? WHERE id = ?', [session.id, runId]);
+    } catch {
+      // Older deployments may not have the optional session_id column yet.
+    }
 
     // 2. Send the user message to trigger the agent
     await client.beta.sessions.events.send(session.id, {
@@ -78,9 +83,10 @@ export async function triggerAgentRun(
       }
 
       // Check if this run was stopped externally before each poll
-      const [[currentRun]] = await pool.query(
+      const statusResult = await pool.query(
         'SELECT status FROM agent_runs WHERE id = ?', [runId]
       ) as any;
+      const currentRun = Array.isArray(statusResult?.[0]) ? statusResult[0][0] : null;
       if (currentRun?.status === 'stopped') {
         console.log(`[agentRunner] run=${runId} stopped externally — aborting`);
         return { run_id: runId, inserted: 0, events: [] };
@@ -207,7 +213,7 @@ async function writeEvents(events: any[], sourceId: number, runId: number, calen
         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')`,
         [
           sourceId, runId,
-          ev.eventType        || 'ot',
+          normalizeEventType(ev.eventType),
           ev.title,
           ev.description,
           ev.extendedDescription  || null,

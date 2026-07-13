@@ -4,7 +4,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import Sidebar from '@/components/layout/Sidebar';
 import { ExternalLink, Check, ArrowLeft, Cloud, CloudOff, Loader } from 'lucide-react';
-import { formatSessionRange, getTimezoneLabel } from '@/lib/timezone';
+import { getTimezoneLabel } from '@/lib/timezone';
 
 const STATUS_STYLES: Record<string, { bg: string; color: string; label: string }> = {
   pending:     { bg: '#fff3e0', color: '#c05e00', label: 'Pending review' },
@@ -34,6 +34,7 @@ export default function EventDetailPage() {
   const [edits, setEdits]         = useState<Record<string, any>>({});
   const [saveState, setSaveState] = useState<SaveState>('idle');
   const [tzLabel, setTzLabel]     = useState('');
+  const [defaultSessionStart]     = useState(() => Math.floor(Date.now() / 1000));
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
   const pendingEdits = useRef<Record<string, any>>({});
 
@@ -57,7 +58,6 @@ export default function EventDetailPage() {
         body: JSON.stringify({ edits: changes }),
       });
       if (!res.ok) { setSaveState('error'); setTimeout(() => setSaveState('idle'), 3000); return; }
-      const data = await res.json();
       setEvent((e: any) => ({ ...e, ...changes }));
       setEdits({});
       pendingEdits.current = {};
@@ -114,7 +114,6 @@ export default function EventDetailPage() {
   );
 
   const sessions = pj(event.sessions);
-  const sponsors = pj(event.sponsors);
   const st       = STATUS_STYLES[event.status] || STATUS_STYLES.pending;
   const canEdit  = user.role === 'admin' || event.status !== 'approved';
 
@@ -163,7 +162,7 @@ export default function EventDetailPage() {
                 </span>
               ))}
             </div>
-            {rejection.reviewer_note && <div style={{ fontSize: 12, color: '#c0392b', fontStyle: 'italic' }}>"{rejection.reviewer_note}"</div>}
+            {rejection.reviewer_note && <div style={{ fontSize: 12, color: '#c0392b', fontStyle: 'italic' }}>&quot;{rejection.reviewer_note}&quot;</div>}
             <div style={{ fontSize: 11, color: '#aaa', marginTop: 6 }}>{new Date(rejection.created_at).toLocaleDateString()} · {rejection.reviewer_name}</div>
           </div>
         )}
@@ -206,7 +205,7 @@ export default function EventDetailPage() {
             <Field label={`Date & time${tzLabel ? ` · ${tzLabel}` : ''}`}>
               {(() => {
                 const curSessions = edits.sessions ? pj(edits.sessions) : sessions;
-                const rows = curSessions.length > 0 ? curSessions : [{ startTime: Math.floor(Date.now()/1000), endTime: Math.floor(Date.now()/1000) + 7200 }];
+                const rows = curSessions.length > 0 ? curSessions : [{ startTime: defaultSessionStart, endTime: defaultSessionStart + 7200 }];
                 return rows.map((s: any, i: number) => {
                   // handle both camelCase (startTime) and snake_case (start) field names
                   const startTs = s.startTime ?? s.start ?? 0;
@@ -331,6 +330,7 @@ export default function EventDetailPage() {
               <input value={field('image_cdn_url') || ''} onChange={e => set('image_cdn_url', e.target.value)}
                 disabled={!canEdit} style={{ ...inputStyle, marginBottom: 6 }} placeholder="https://…"/>
               {(field('image_cdn_url') || event.image_cdn_url) && (
+                // eslint-disable-next-line @next/next/no-img-element -- reviewer preview accepts arbitrary source hosts
                 <img src={field('image_cdn_url') || event.image_cdn_url} alt="" style={{ maxHeight: 100, borderRadius: 6, objectFit: 'cover', marginTop: 4 }}/>
               )}
             </Field>

@@ -2,13 +2,16 @@
  * POST /api/notifications/review
  *
  * Emails all active reviewers about pending events.
- * Skips reviewers with zero pending. Resend is mocked.
+ * Skips reviewers with zero pending. SMTP is mocked.
  */
 
 const mockSend = jest.fn().mockResolvedValue({ id: 'msg-id' });
 
-jest.mock('resend', () => ({
-  Resend: jest.fn(() => ({ emails: { send: mockSend } })),
+jest.mock('nodemailer', () => ({
+  __esModule: true,
+  default: {
+    createTransport: jest.fn(() => ({ sendMail: mockSend })),
+  },
 }));
 
 import { NextRequest } from 'next/server';
@@ -107,11 +110,11 @@ describe('POST /api/notifications/review', () => {
       .mockResolvedValueOnce([[{ name: 'Apollo', count: 2 }]])
       .mockResolvedValueOnce([[{ created_at: new Date() }]]);
 
-    mockSend.mockRejectedValueOnce(new Error('Resend rate limit'));
+    mockSend.mockRejectedValueOnce(new Error('SMTP rate limit'));
 
     const data = await (await POST(makeReq())).json();
     expect(data.results[0].sent).toBe(false);
-    expect(data.results[0].error).toContain('Resend rate limit');
+    expect(data.results[0].error).toContain('SMTP rate limit');
   });
 
   it('notifies multiple reviewers independently', async () => {

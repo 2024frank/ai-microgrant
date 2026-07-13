@@ -8,8 +8,10 @@ export async function GET(req: NextRequest) {
   if (!user) return unauthorized();
 
   const { searchParams } = new URL(req.url);
-  const page      = parseInt(searchParams.get('page')      || '0');
-  const limit     = parseInt(searchParams.get('limit')     || '20');
+  const requestedPage  = Number.parseInt(searchParams.get('page')  || '0', 10);
+  const requestedLimit = Number.parseInt(searchParams.get('limit') || '20', 10);
+  const page      = Number.isFinite(requestedPage) ? Math.max(requestedPage, 0) : 0;
+  const limit     = Number.isFinite(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 100) : 20;
   const source_id = searchParams.get('source_id');
   const sort      = searchParams.get('sort') || 'ingested_asc';
 

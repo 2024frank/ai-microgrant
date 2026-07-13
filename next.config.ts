@@ -18,6 +18,13 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   compress: true,
   reactStrictMode: true,
+  // node_modules is symlinked to node_modules.nosync in local workspaces.
+  // Make the native sharp addon explicitly external so webpack does not try
+  // to bundle platform-specific optional binaries from the symlink target.
+  serverExternalPackages: ['sharp'],
+  outputFileTracingExcludes: {
+    '/*': ['.claude/**/*', 'coverage/**/*', 'scripts/**/*'],
+  },
   images: {
     formats: ['image/avif', 'image/webp'],
   },

@@ -48,13 +48,13 @@ Built for the **Oberlin Environmental Dashboard** as part of the Oberlin College
  └────────────────────────────────────────┘
          │
          ▼
- Rejection history injected into next agent run
- (agents improve over time without retraining)
+ Recent reviewer feedback injected into the next source-agent run
+ (prompt context only; output still requires human review)
 ```
 
 **Correction loop:** A reviewer sends an event back with a note ("missing phone number"). A dedicated fix agent fetches the event from the public `/api/fix-queue` endpoint, re-scrapes the source URL, and re-submits a corrected version with `fixedFromEventId`. The original reviewer gets a bell notification showing exactly what was asked for and what was changed.
 
-**Learning loop:** On every scheduled run, the last 50 rejections for that source are injected into the agent's prompt, so extraction quality improves with each cycle.
+**Feedback loop:** On every scheduled run, up to 50 recent rejections and field corrections for that source are added to the agent prompt as examples. This can guide later extraction, but it is not model retraining and does not guarantee improvement.
 
 ---
 
@@ -63,7 +63,7 @@ Built for the **Oberlin Environmental Dashboard** as part of the Oberlin College
 ### For Reviewers
 - **Shared queue** — all pending events visible to the whole team, regardless of source; sortable by ingestion date or event date
 - **Inline field editing** — correct any field before approving
-- **Send for correction** — write a note, the AI fixes it and comes back; you get a bell notification with the correction details
+- **Send for correction** — write a note, a correction agent attempts the change and returns the result for review; you get a bell notification when it finishes
 - **Email alerts** — notified by email when new events arrive from any source
 - **Personal dashboard** — total approved, rejected, sent for correction, and how many of your corrections were ultimately approved; today's counts vs. all-time
 - **Queue by source** — see pending counts per source, click to filter
@@ -286,7 +286,7 @@ List events with filtering.
 Query params:
 - `status` — `pending`, `approved`, `rejected`, `all` (default)
 - `source_id`, `source_slug`
-- `event_type` — `ot`, `an`, `jp`
+- `event_type` — `ot`, `an`, `jp`, `ev`, `cl`, `ex`, `vt`, `sp`, `pe`, `wk`, `ms`, `ws`
 - `geo_scope` — `hyper_local`, `city_wide`, `county`, `regional`
 - `from`, `to` — ISO date range on `created_at`
 - `q` — full-text search on title + description

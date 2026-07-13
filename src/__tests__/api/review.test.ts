@@ -189,6 +189,28 @@ describe('POST /api/review/events/:id/action — approve path', () => {
     expect(editLogInsert[1]).toContain('Corrected Title');
   });
 
+  it('submits and stores a corrected event type on approval', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[PENDING]])
+      .mockResolvedValueOnce([[{ id: 1 }]]);
+
+    await POST(
+      makeReq('/api/review/events/10/action', {
+        action: 'approve',
+        edits: { event_type: 'ev' },
+      }),
+      ctx('10')
+    );
+
+    const payload = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(payload.eventType).toBe('ev');
+    const update = db.mockConn.query.mock.calls.find((call: any[]) =>
+      typeof call[0] === 'string' && call[0].includes('UPDATE raw_events SET event_type')
+    );
+    expect(update?.[1]).toContain('ev');
+  });
+
   it('does not log field edit when value is unchanged', async () => {
     db.default.query
       .mockResolvedValueOnce([[ADMIN]])

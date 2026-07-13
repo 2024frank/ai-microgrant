@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Sidebar from '@/components/layout/Sidebar';
 import { useAuth } from '@/hooks/useAuth';
 import { UserPlus, Shield, Eye, Trash2 } from 'lucide-react';
@@ -14,15 +14,15 @@ export default function UsersPage() {
   const [adding, setAdding]   = useState(false);
   const [error, setError]     = useState('');
 
-  function load() {
+  const load = useCallback(() => {
     if (!token) return;
     const h = { Authorization: `Bearer ${token}` };
     Promise.all([
       fetch('/api/users',   { headers: h }).then(r=>r.json()),
       fetch('/api/sources', { headers: h }).then(r=>r.json()),
     ]).then(([u,s]) => { setUsers(u); setSources(s); }).finally(()=>setLoading(false));
-  }
-  useEffect(() => { if (ready && token) load(); }, [ready, token]);
+  }, [token]);
+  useEffect(() => { if (ready && token) load(); }, [ready, token, load]);
 
   async function invite() {
     setAdding(true); setError('');

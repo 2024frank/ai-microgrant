@@ -1,12 +1,13 @@
 // Test email templates render correct content
-// Mock Resend so no real emails are sent
+// Mock SMTP so no real emails are sent
 
 const mockSend = jest.fn().mockResolvedValue({ id: 'mock-email-id' });
 
-jest.mock('resend', () => ({
-  Resend: jest.fn().mockImplementation(() => ({
-    emails: { send: mockSend },
-  })),
+jest.mock('nodemailer', () => ({
+  __esModule: true,
+  default: {
+    createTransport: jest.fn(() => ({ sendMail: mockSend })),
+  },
 }));
 
 beforeEach(() => {

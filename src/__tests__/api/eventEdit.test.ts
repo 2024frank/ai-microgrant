@@ -73,6 +73,30 @@ describe('POST /api/events/:id/edit', () => {
     expect(data.changed_fields).toHaveLength(0);
   });
 
+  it('persists event type edits instead of silently ignoring them', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[MOCK_EVENT]])
+      .mockResolvedValueOnce([[{ id: 1 }]])
+      .mockResolvedValueOnce([[{ ...MOCK_EVENT, event_type: 'ev' }]]);
+
+    const res = await POST(makeReq('10', { edits: { event_type: 'ev' } }), ctx('10'));
+    const data = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(data.changed_fields).toContain('event_type');
+    const update = db.mockConn.query.mock.calls.find((call: any[]) =>
+      typeof call[0] === 'string' && call[0].includes('UPDATE raw_events SET')
+    );
+    expect(update?.[1]).toContain('ev');
+  });
+
+  it('rejects event type values outside the database contract', async () => {
+    db.default.query.mockResolvedValueOnce([[ADMIN]]);
+    const res = await POST(makeReq('10', { edits: { event_type: 'made-up' } }), ctx('10'));
+    expect(res.status).toBe(400);
+  });
+
   it('logs teaching note to rejection_log when note provided', async () => {
     db.default.query
       .mockResolvedValueOnce([[ADMIN]])

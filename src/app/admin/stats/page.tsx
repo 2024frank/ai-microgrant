@@ -67,7 +67,7 @@ export default function AdminStatsPage() {
         )}
 
         {stats && (
-          <div className="stagger" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
+          <div className="stagger responsive-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
             <StatCard label="Extracted"    value={stats.total_extracted || 0} icon={<TrendingUp size={18} color="#3a8c3f"/>} />
             <StatCard label="Approved"     value={stats.total_approved  || 0} icon={<CheckCircle size={18} color="#3a8c3f"/>} color="#e8f5e9" />
             <StatCard label="Rejected"     value={stats.total_rejected  || 0} icon={<XCircle size={18} color="#c0392b"/>}    color="#fdecea" />
@@ -75,7 +75,7 @@ export default function AdminStatsPage() {
           </div>
         )}
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem', marginBottom: '1.25rem' }}>
+        <div className="responsive-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem', marginBottom: '1.25rem' }}>
           <div className="card">
             <h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: '1rem' }}>Approval rate by source</h3>
             {sources.map(s => (
@@ -108,9 +108,9 @@ export default function AdminStatsPage() {
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem', marginBottom: '1.25rem' }}>
+        <div className="responsive-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem', marginBottom: '1.25rem' }}>
           <div className="card">
-            <h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: '1rem' }}>Most-edited fields <span style={{ fontSize: 11, fontWeight: 400, color: '#888' }}>(extraction accuracy)</span></h3>
+            <h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: '1rem' }}>Most-edited fields <span style={{ fontSize: 11, fontWeight: 400, color: '#888' }}>(reviewer corrections)</span></h3>
             {fields.slice(0,7).map((f:any) => (
               <div key={f.field_name} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
                 <span style={{ fontSize: 11, width: 150, color: '#444', fontFamily: 'monospace', flexShrink: 0 }}>{f.field_name}</span>
@@ -141,7 +141,7 @@ export default function AdminStatsPage() {
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }}>
+        <div className="responsive-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }}>
           <div className="card">
             <h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: '1rem' }}>Events over time</h3>
             <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 70 }}>
