@@ -9,6 +9,9 @@ global.fetch = mockFetch;
 
 const db         = require('@/lib/db');
 const mockVerify = adminAuth.verifyIdToken as jest.Mock;
+let lockedEvent: any;
+let unresolvedSubmissions: any[];
+let priorSubmissions: any[];
 
 const ADMIN = { id: 1, email: 'admin@oberlin.edu', role: 'admin', full_name: 'Admin', active: 1, firebase_uid: 'uid-admin' };
 const PENDING = {
@@ -37,7 +40,22 @@ function makeReq(path: string, body?: any) {
 beforeEach(() => {
   db.default.query.mockReset();
   db.mockConn.query.mockReset();
-  db.mockConn.query.mockResolvedValue([{ affectedRows: 1 }]);
+  lockedEvent = PENDING;
+  unresolvedSubmissions = [];
+  priorSubmissions = [];
+  db.mockConn.query.mockImplementation((sql: unknown) => {
+    if (typeof sql !== 'string') return Promise.resolve([{ affectedRows: 1 }]);
+    if (sql.includes('SELECT * FROM raw_events') && sql.includes('FOR UPDATE')) {
+      return Promise.resolve([[lockedEvent]]);
+    }
+    if (sql.includes("status='sending'") && sql.includes('communityhub_submissions')) {
+      return Promise.resolve([unresolvedSubmissions]);
+    }
+    if (sql.includes('payload_hash=?') && sql.includes('communityhub_submissions')) {
+      return Promise.resolve([priorSubmissions]);
+    }
+    return Promise.resolve([{ affectedRows: 1 }]);
+  });
   db.mockConn.beginTransaction = jest.fn().mockResolvedValue(undefined);
   db.mockConn.commit           = jest.fn().mockResolvedValue(undefined);
   db.mockConn.rollback         = jest.fn().mockResolvedValue(undefined);
@@ -167,6 +185,85 @@ describe('POST /api/review/events/:id/action — approve path', () => {
     expect(body.calendarSourceName).toBe(PENDING.calendar_source_name);
   });
 
+  it('returns field-level validation errors without calling CommunityHub', async () => {
+    lockedEvent = { ...PENDING, sponsors: '[]' };
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[{ ...PENDING, sponsors: '[]' }]])
+      .mockResolvedValueOnce([[{ id: 1 }]]);
+
+    const res = await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve' }),
+      ctx('10')
+    );
+    const data = await res.json();
+
+    expect(res.status).toBe(422);
+    expect(data.validation_errors).toContainEqual(expect.objectContaining({ path: 'sponsors' }));
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(db.mockConn.rollback).toHaveBeenCalled();
+  });
+
+  it('ignores non-allow-listed camelCase edit keys at publication', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[PENDING]])
+      .mockResolvedValueOnce([[{ id: 1 }]]);
+
+    await POST(
+      makeReq('/api/review/events/10/action', {
+        action: 'approve',
+        edits: { postTypeId: [89], screensIds: [999] },
+      }),
+      ctx('10')
+    );
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.postTypeId).toEqual([8]);
+    expect(body.screensIds).toEqual([]);
+  });
+
+  it('does not repost while a prior submission outcome is unresolved', async () => {
+    lockedEvent = { ...PENDING, status: 'publishing' };
+    unresolvedSubmissions = [{ id: 77 }];
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[{ ...PENDING, status: 'publishing' }]])
+      .mockResolvedValueOnce([[{ id: 1 }]]);
+    const res = await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve' }),
+      ctx('10'),
+    );
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({
+      submission_state: 'sending',
+      retry_safe: false,
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('does not publish an event while its correction run owns it', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[{ ...PENDING, status: 'pending_fix' }]])
+      .mockResolvedValueOnce([[{ id: 1 }]]);
+    db.mockConn.query.mockImplementation((sql: unknown) => {
+      if (typeof sql === 'string' && sql.includes("SET status='publishing'")) {
+        return Promise.resolve([{ affectedRows: 0 }]);
+      }
+      return Promise.resolve([{ affectedRows: 1 }]);
+    });
+
+    const res = await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve' }),
+      ctx('10'),
+    );
+
+    expect(res.status).toBe(409);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it('logs field edits when reviewer sends modified fields', async () => {
     db.default.query
       .mockResolvedValueOnce([[ADMIN]])
@@ -198,17 +295,17 @@ describe('POST /api/review/events/:id/action — approve path', () => {
     await POST(
       makeReq('/api/review/events/10/action', {
         action: 'approve',
-        edits: { event_type: 'ev' },
+        edits: { event_type: 'an' },
       }),
       ctx('10')
     );
 
     const payload = JSON.parse(mockFetch.mock.calls[0][1].body);
-    expect(payload.eventType).toBe('ev');
+    expect(payload.eventType).toBe('an');
     const update = db.mockConn.query.mock.calls.find((call: any[]) =>
       typeof call[0] === 'string' && call[0].includes('UPDATE raw_events SET event_type')
     );
-    expect(update?.[1]).toContain('ev');
+    expect(update?.[1]).toContain('an');
   });
 
   it('does not log field edit when value is unchanged', async () => {
@@ -231,7 +328,7 @@ describe('POST /api/review/events/:id/action — approve path', () => {
     expect(editLogInsert).toBeUndefined();
   });
 
-  it('rolls back and returns 500 when CommunityHub call throws', async () => {
+  it('blocks unsafe retry when a CommunityHub network result is ambiguous', async () => {
     db.default.query
       .mockResolvedValueOnce([[ADMIN]])
       .mockResolvedValueOnce([[PENDING]])
@@ -243,8 +340,41 @@ describe('POST /api/review/events/:id/action — approve path', () => {
       makeReq('/api/review/events/10/action', { action: 'approve' }),
       ctx('10')
     );
-    expect(res.status).toBe(500);
-    expect(db.mockConn.rollback).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(502);
+    expect(await res.json()).toMatchObject({
+      submission_state: 'unknown',
+      retry_safe: false,
+    });
+    expect(db.default.query.mock.calls.some(
+      ([sql]: [string]) => typeof sql === 'string' && sql.includes('publish_started_at=NULL'),
+    )).toBe(false);
+  });
+
+  it('releases the publishing lease after an explicit CommunityHub rejection', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[PENDING]])
+      .mockResolvedValueOnce([[{ id: 1 }]]);
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 422,
+      text: jest.fn().mockResolvedValue(JSON.stringify({ error: 'invalid payload' })),
+    });
+
+    const res = await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve' }),
+      ctx('10'),
+    );
+
+    expect(res.status).toBe(502);
+    expect(db.default.query).toHaveBeenCalledWith(
+      expect.stringContaining("status='failed'"),
+      expect.arrayContaining([expect.stringContaining('CommunityHub 422'), '10']),
+    );
+    expect(db.default.query).toHaveBeenCalledWith(
+      expect.stringContaining('publish_started_at=NULL'),
+      ['pending', '10'],
+    );
   });
 
   it('stores communityhub_post_id returned from CH API', async () => {

@@ -3,20 +3,22 @@ import pool from '@/lib/db';
 
 /**
  * POST /api/cleanup
- * Called by GitHub Actions daily cron.
- * Snapshots per-source counts into event_stats_archive BEFORE deleting,
- * so historical stats survive event expiry.
+ * Called by the deployment scheduler. Reviewer feedback is durable training
+ * evidence, so reviewed events are never deleted here. Cleanup only removes
+ * abandoned pending drafts and large poster blobs that are no longer needed.
  */
 export async function POST(req: NextRequest) {
   const secret = req.headers.get('x-cron-secret');
-  if (secret !== process.env.CRON_SECRET) {
+  const expectedSecret = process.env.CRON_SECRET?.trim();
+  if (!expectedSecret || secret !== expectedSecret) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   const nowUnix = Math.floor(Date.now() / 1000);
 
-  // ── 1. Snapshot counts of events that are ABOUT to be deleted ────
-  // We capture per-source totals for expiring events before removing them.
+  // Snapshot only abandoned, unreviewed drafts before deleting them. Approved,
+  // rejected, corrected, and superseded events remain available to the
+  // source-scoped feedback policy.
   await pool.query(
     `INSERT INTO event_stats_archive (source_id, source_name, total, approved, rejected, edited)
      SELECT
@@ -29,50 +31,82 @@ export async function POST(req: NextRequest) {
      FROM raw_events re
      JOIN sources s ON s.id = re.source_id
      LEFT JOIN field_edit_log fel ON fel.raw_event_id = re.id
-     WHERE (
-       (JSON_LENGTH(re.sessions) > 0 AND (
+     WHERE re.status = 'pending'
+       AND re.created_at < DATE_SUB(NOW(), INTERVAL 90 DAY)
+       AND NOT EXISTS (SELECT 1 FROM field_edit_log x WHERE x.raw_event_id = re.id)
+       AND NOT EXISTS (SELECT 1 FROM rejection_log x WHERE x.raw_event_id = re.id)
+       AND NOT EXISTS (SELECT 1 FROM review_sessions x WHERE x.raw_event_id = re.id)
+       AND NOT EXISTS (SELECT 1 FROM needs_fix x WHERE x.raw_event_id = re.id)
+       AND NOT EXISTS (SELECT 1 FROM communityhub_submissions x WHERE x.raw_event_id = re.id)
+       AND (
+        (JSON_LENGTH(re.sessions) > 0 AND (
          SELECT MAX(CAST(jt.endTime AS UNSIGNED))
          FROM JSON_TABLE(re.sessions, '$[*]' COLUMNS (endTime VARCHAR(20) PATH '$.endTime')) jt
        ) < ?)
-       OR
-       ((re.sessions IS NULL OR JSON_LENGTH(re.sessions) = 0)
-        AND re.created_at < DATE_SUB(NOW(), INTERVAL 30 DAY))
-     )
+        OR re.sessions IS NULL
+        OR JSON_LENGTH(re.sessions) = 0
+       )
      GROUP BY re.source_id, s.name
      HAVING COUNT(re.id) > 0`,
     [nowUnix]
   );
 
-  // ── 2. Delete expired events ──────────────────────────────────────
   const [eventsResult] = await pool.query(
-    `DELETE FROM raw_events
-     WHERE JSON_LENGTH(sessions) > 0
+    `DELETE re FROM raw_events re
+     WHERE re.status = 'pending'
+       AND re.created_at < DATE_SUB(NOW(), INTERVAL 90 DAY)
+       AND NOT EXISTS (SELECT 1 FROM field_edit_log x WHERE x.raw_event_id = re.id)
+       AND NOT EXISTS (SELECT 1 FROM rejection_log x WHERE x.raw_event_id = re.id)
+       AND NOT EXISTS (SELECT 1 FROM review_sessions x WHERE x.raw_event_id = re.id)
+       AND NOT EXISTS (SELECT 1 FROM needs_fix x WHERE x.raw_event_id = re.id)
+       AND NOT EXISTS (SELECT 1 FROM communityhub_submissions x WHERE x.raw_event_id = re.id)
        AND (
-         SELECT MAX(CAST(jt.endTime AS UNSIGNED))
-         FROM JSON_TABLE(sessions, '$[*]' COLUMNS (endTime VARCHAR(20) PATH '$.endTime')) jt
-       ) < ?`,
+         (JSON_LENGTH(re.sessions) > 0 AND (
+           SELECT MAX(CAST(jt.endTime AS UNSIGNED))
+           FROM JSON_TABLE(re.sessions, '$[*]' COLUMNS (endTime VARCHAR(20) PATH '$.endTime')) jt
+         ) < ?)
+         OR re.sessions IS NULL
+         OR JSON_LENGTH(re.sessions) = 0
+       )`,
     [nowUnix]
   ) as any;
 
-  const [noSessionResult] = await pool.query(
-    `DELETE FROM raw_events
-     WHERE (sessions IS NULL OR JSON_LENGTH(sessions) = 0)
-       AND created_at < DATE_SUB(NOW(), INTERVAL 30 DAY)`,
+  // Poster data can be several megabytes. Once a reviewed event is old and no
+  // longer active, remove only the blob while retaining its review evidence.
+  const [postersResult] = await pool.query(
+    `UPDATE raw_events
+     SET image_data = NULL
+     WHERE image_data IS NOT NULL
+       AND status IN ('approved','rejected','superseded')
+       AND updated_at < DATE_SUB(NOW(), INTERVAL 30 DAY)
+       AND (
+         (JSON_LENGTH(sessions) > 0 AND (
+           SELECT MAX(CAST(jt.endTime AS UNSIGNED))
+           FROM JSON_TABLE(sessions, '$[*]' COLUMNS (endTime VARCHAR(20) PATH '$.endTime')) jt
+         ) < ?)
+         OR sessions IS NULL
+         OR JSON_LENGTH(sessions) = 0
+       )`,
+    [nowUnix],
   ) as any;
 
-  // ── 3. Clean up old agent_runs (>90 days) ────────────────────────
+  // The baseline foreign key cascades run deletion to raw_events. Delete only
+  // run rows that no retained event references, preserving feedback history.
   const [runsResult] = await pool.query(
-    `DELETE FROM agent_runs WHERE started_at < DATE_SUB(NOW(), INTERVAL 90 DAY)`
+    `DELETE ar FROM agent_runs ar
+     WHERE ar.started_at < DATE_SUB(NOW(), INTERVAL 90 DAY)
+       AND NOT EXISTS (SELECT 1 FROM raw_events re WHERE re.agent_run_id = ar.id)`
   ) as any;
 
-  const deleted = eventsResult.affectedRows + noSessionResult.affectedRows;
-  console.log(`[cleanup] archived stats for ${deleted} expiring events, deleted ${deleted} events, ${runsResult.affectedRows} old runs`);
+  const deleted = eventsResult.affectedRows;
+  console.log(`[cleanup] deleted ${deleted} abandoned drafts, purged ${postersResult.affectedRows} poster blobs, deleted ${runsResult.affectedRows} unreferenced runs`);
 
   return Response.json({
     ok: true,
     archived_event_counts:  deleted,
     deleted_past_events:    eventsResult.affectedRows,
-    deleted_sessionless:    noSessionResult.affectedRows,
+    deleted_sessionless:    0,
+    purged_poster_blobs:     postersResult.affectedRows,
     deleted_old_runs:       runsResult.affectedRows,
   });
 }

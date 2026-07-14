@@ -1,328 +1,303 @@
 'use client';
-import Link from 'next/link';
+
 import Image from 'next/image';
+import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
+import { signOut as firebaseSignOut } from 'firebase/auth';
 import {
-  LayoutDashboard, ClipboardList, CheckCircle, XCircle,
-  Database, BarChart2, Shield, Settings, LogOut, Eye,
-  RefreshCw, PanelLeftClose, PanelLeftOpen, Bell,
+  BarChart3,
+  Bell,
+  CheckCircle2,
+  ClipboardCheck,
+  Database,
+  LayoutDashboard,
+  LogOut,
+  Settings,
+  ShieldCheck,
+  Users,
+  XCircle,
 } from 'lucide-react';
+import { auth } from '@/lib/firebase';
 
 interface SidebarProps {
-  role:   'admin' | 'reviewer';
-  name:   string;
+  role: 'admin' | 'reviewer';
+  name: string;
   email?: string;
   token?: string;
+  collapsed?: boolean;
+  mobileOpen?: boolean;
+  navigationHidden?: boolean;
+  onMobileClose?: () => void;
 }
 
-export default function Sidebar({ role, name, email, token }: SidebarProps) {
-  const path   = usePathname();
+interface NotificationItem {
+  id: number;
+  type?: string;
+  title: string;
+  message: string;
+  created_at: string;
+  read_at?: string | null;
+  raw_event_id?: number | null;
+}
+
+interface NavItem {
+  href: string;
+  label: string;
+  icon: React.ReactNode;
+  badge?: number;
+}
+
+export default function Sidebar({
+  role,
+  name,
+  email,
+  token,
+  collapsed = false,
+  mobileOpen,
+  navigationHidden = false,
+  onMobileClose,
+}: SidebarProps) {
+  const pathname = usePathname();
   const router = useRouter();
-  const [pendingCount, setPendingCount]           = useState<number | null>(null);
-  const [previewAsReviewer, setPreviewAsReviewer] = useState(false);
-  const [collapsed, setCollapsed]                 = useState(false);
-  const [notifications, setNotifications]         = useState<any[]>([]);
-  const [unreadCount, setUnreadCount]             = useState(0);
-  const [notifOpen, setNotifOpen]                 = useState(false);
-  const notifRef    = useRef<HTMLDivElement>(null);
-  const bellBtnRef  = useRef<HTMLButtonElement>(null);
-  const [notifPos, setNotifPos] = useState<{ bottom: number; left: number } | null>(null);
-  const isActive = (href: string) => path === href || path.startsWith(href + '/');
-  const effectiveRole = role === 'admin' && previewAsReviewer ? 'reviewer' : role;
+  const notificationsRef = useRef<HTMLDivElement>(null);
+  const [pendingCount, setPendingCount] = useState<number | null>(null);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
 
   useEffect(() => {
     if (!token) return;
-    fetch('/api/review/queue?limit=1', { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.json()).then(d => setPendingCount(d.total ?? 0)).catch(() => {});
-  }, [token, path]);
+    fetch('/api/review/queue?limit=1', {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(response => response.ok ? response.json() : Promise.reject())
+      .then(data => setPendingCount(Number(data.total) || 0))
+      .catch(() => setPendingCount(null));
+  }, [token, pathname]);
 
-  // Poll notifications every 30s
   useEffect(() => {
     if (!token) return;
-    const load = () =>
-      fetch('/api/notifications', { headers: { Authorization: `Bearer ${token}` } })
-        .then(r => r.json())
-        .then(d => { setNotifications(d.notifications || []); setUnreadCount(d.unread || 0); })
+    let cancelled = false;
+    const loadNotifications = () => {
+      fetch('/api/notifications', {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then(response => response.ok ? response.json() : Promise.reject())
+        .then(data => {
+          if (cancelled) return;
+          setNotifications(Array.isArray(data.notifications) ? data.notifications : []);
+          setUnreadCount(Number(data.unread) || 0);
+        })
         .catch(() => {});
-    load();
-    const iv = setInterval(load, 30000);
-    return () => clearInterval(iv);
+    };
+    loadNotifications();
+    const interval = window.setInterval(loadNotifications, 30_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
   }, [token]);
 
-  // Close dropdown on outside click
   useEffect(() => {
-    function handle(e: MouseEvent) {
-      if (notifRef.current && !notifRef.current.contains(e.target as Node)) setNotifOpen(false);
+    function handlePointer(event: MouseEvent) {
+      if (notificationsRef.current && !notificationsRef.current.contains(event.target as Node)) {
+        setNotificationsOpen(false);
+      }
     }
-    document.addEventListener('mousedown', handle);
-    return () => document.removeEventListener('mousedown', handle);
+    function handleKey(event: KeyboardEvent) {
+      if (event.key === 'Escape') setNotificationsOpen(false);
+    }
+    document.addEventListener('mousedown', handlePointer);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handlePointer);
+      document.removeEventListener('keydown', handleKey);
+    };
   }, []);
 
-  async function markRead(n: any) {
+  const workspaceItems: NavItem[] = [
+    {
+      href: role === 'admin' ? '/admin/stats' : '/reviewer/dashboard',
+      label: 'Overview',
+      icon: <LayoutDashboard size={18} aria-hidden="true" />,
+    },
+    {
+      href: '/reviewer/queue',
+      label: 'Review queue',
+      icon: <ClipboardCheck size={18} aria-hidden="true" />,
+      badge: pendingCount && pendingCount > 0 ? pendingCount : undefined,
+    },
+    {
+      href: '/events/approved',
+      label: 'Published',
+      icon: <CheckCircle2 size={18} aria-hidden="true" />,
+    },
+    {
+      href: '/events/rejected',
+      label: 'Rejected',
+      icon: <XCircle size={18} aria-hidden="true" />,
+    },
+  ];
+
+  const adminItems: NavItem[] = [
+    { href: '/admin/sources', label: 'Sources & runs', icon: <Database size={18} aria-hidden="true" /> },
+    { href: '/admin/analytics', label: 'Quality signals', icon: <BarChart3 size={18} aria-hidden="true" /> },
+    { href: '/admin/controls', label: 'Team & access', icon: <Users size={18} aria-hidden="true" /> },
+  ];
+
+  function isActive(href: string) {
+    const overviewAliases = href === '/admin/stats' && pathname === '/reviewer/dashboard';
+    return overviewAliases || pathname === href || pathname.startsWith(`${href}/`);
+  }
+
+  async function markRead(item: NotificationItem) {
     if (!token) return;
-    if (!n.read_at) {
-      await fetch(`/api/notifications/${n.id}/read`, {
-        method: 'POST', headers: { Authorization: `Bearer ${token}` },
+    if (!item.read_at) {
+      await fetch(`/api/notifications/${item.id}/read`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
       }).catch(() => {});
-      setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, read_at: new Date().toISOString() } : x));
-      setUnreadCount(c => Math.max(0, c - 1));
+      setNotifications(current => current.map(notification => (
+        notification.id === item.id
+          ? { ...notification, read_at: new Date().toISOString() }
+          : notification
+      )));
+      setUnreadCount(count => Math.max(0, count - 1));
     }
-    if (n.raw_event_id) {
-      setNotifOpen(false);
-      router.push(`/reviewer/events/${n.raw_event_id}`);
+    if (item.raw_event_id) {
+      setNotificationsOpen(false);
+      router.push(`/reviewer/events/${item.raw_event_id}`);
     }
   }
 
-  function signOut() {
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    window.location.href = '/login';
+  async function signOut() {
+    try {
+      await firebaseSignOut(auth);
+    } finally {
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      router.replace('/login');
+    }
   }
 
-  const w = collapsed ? 56 : 224;
+  function renderNavItem(item: NavItem) {
+    const active = isActive(item.href);
+    return (
+      <Link
+        key={item.href}
+        href={item.href}
+        className="sidebar__link"
+        aria-current={active ? 'page' : undefined}
+        title={collapsed ? item.label : undefined}
+        onClick={onMobileClose}
+      >
+        {item.icon}
+        <span className="sidebar__label">{item.label}</span>
+        {item.badge !== undefined && (
+          <span className="sidebar__badge" aria-label={`${item.badge} pending`}>
+            {item.badge > 99 ? '99+' : item.badge}
+          </span>
+        )}
+      </Link>
+    );
+  }
 
   return (
-    <aside style={{
-      width: w, minWidth: w, height: '100vh',
-      position: 'sticky', top: 0, alignSelf: 'flex-start',
-      borderRight: '1px solid var(--border)',
-      background: previewAsReviewer
-        ? 'linear-gradient(180deg, #f8fff8, #f1faf1)'
-        : 'linear-gradient(180deg, #ffffff, #fbfdfb)',
-      boxShadow: '1px 0 0 rgba(20,45,25,0.02), 4px 0 24px rgba(20,45,25,0.03)',
-      display: 'flex', flexDirection: 'column', flexShrink: 0,
-      overflow: 'hidden',
-      transition: 'width 0.22s var(--ease), min-width 0.22s var(--ease)',
-    }}>
-
-      {/* Logo row */}
-      <div style={{
-        padding: collapsed ? '1rem 0.75rem' : '1rem',
-        borderBottom: '1px solid #e8f5e9',
-        display: 'flex', alignItems: 'center',
-        gap: collapsed ? 0 : 10, flexShrink: 0,
-        justifyContent: collapsed ? 'center' : 'flex-start',
-      }}>
-        <div style={{
-          width: 34, height: 34, borderRadius: 9, flexShrink: 0,
-          background: 'linear-gradient(180deg, #ffffff, #eef7ef)',
-          border: '1px solid var(--green-200)', boxShadow: 'var(--shadow-xs)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          <Image src="/logo.png" alt="AI Events Ingestion Software" width={22} height={22} style={{ borderRadius: 5 }}/>
+    <aside
+      id="app-navigation"
+      className="sidebar"
+      data-collapsed={collapsed}
+      data-mobile-managed={typeof mobileOpen === 'boolean'}
+      data-mobile-open={Boolean(mobileOpen)}
+      aria-hidden={navigationHidden || undefined}
+      inert={navigationHidden || undefined}
+      aria-label="Primary navigation"
+    >
+      <div className="sidebar__brand">
+        <div className="sidebar__logo">
+          <Image src="/logo.png" alt="" width={24} height={24} />
         </div>
-        {!collapsed && (
-          <div>
-            <div style={{ fontSize: 10.5, fontWeight: 800, color: 'var(--green-600)', letterSpacing: 0.9, lineHeight: 1.3, whiteSpace: 'nowrap' }}>AI EVENTS</div>
-            <div style={{ fontSize: 10.5, fontWeight: 800, color: 'var(--green-600)', letterSpacing: 0.9, lineHeight: 1.3, whiteSpace: 'nowrap' }}>INGESTION</div>
-            <div style={{ fontSize: 9, color: 'var(--gray-500)', marginTop: 2, letterSpacing: 0.4 }}>CommunityHub</div>
-          </div>
-        )}
+        <div className="sidebar__brand-copy">
+          <p className="sidebar__product">Event Intake</p>
+          <div className="sidebar__community">CommunityHub · Oberlin</div>
+        </div>
       </div>
 
-      {/* Reviewer preview banner */}
-      {previewAsReviewer && !collapsed && (
-        <div style={{ background: '#fff3cd', borderBottom: '1px solid #ffc107', padding: '0.4rem 0.75rem', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-          <Eye size={11} color="#856404"/>
-          <span style={{ fontSize: 10, fontWeight: 700, color: '#856404', whiteSpace: 'nowrap' }}>REVIEWER VIEW</span>
+      <nav className="sidebar__nav">
+        <div className="sidebar__section">
+          <div className="sidebar__section-label">Workspace</div>
+          {workspaceItems.map(renderNavItem)}
         </div>
-      )}
-
-      {/* Nav */}
-      <nav style={{ flex: 1, padding: '0.625rem 0.375rem', overflowY: 'auto', overflowX: 'hidden' }}>
-        <NavItem href={effectiveRole === 'admin' ? '/admin/stats' : '/reviewer/dashboard'}
-          icon={<LayoutDashboard size={16}/>} label="Dashboard"
-          active={isActive('/admin/stats') || isActive('/reviewer/dashboard')}
-          collapsed={collapsed}/>
-        <NavItem href="/reviewer/queue" icon={<ClipboardList size={16}/>} label="Needs Review"
-          active={isActive('/reviewer/queue')} collapsed={collapsed}
-          badge={pendingCount !== null && pendingCount > 0 ? pendingCount : undefined}/>
-        <NavItem href="/events/approved" icon={<CheckCircle size={16}/>} label="Approved"
-          active={isActive('/events/approved')} collapsed={collapsed}/>
-        <NavItem href="/events/rejected" icon={<XCircle size={16}/>} label="Rejected"
-          active={isActive('/events/rejected')} collapsed={collapsed}/>
-
-        {effectiveRole === 'admin' && (
-          <>
-            <div style={{ borderTop: '1px solid #f0f0f0', margin: '0.5rem 0.25rem' }}/>
-            {!collapsed && <div style={{ fontSize: 9, fontWeight: 700, color: '#ccc', textTransform: 'uppercase', letterSpacing: 1, padding: '0 0.5rem 0.25rem', whiteSpace: 'nowrap' }}>Admin</div>}
-            <NavItem href="/admin/sources"   icon={<Database size={16}/>}  label="Event Sources"  active={isActive('/admin/sources')}  collapsed={collapsed}/>
-            <NavItem href="/admin/analytics" icon={<BarChart2 size={16}/>} label="AI Analytics"   active={isActive('/admin/analytics')} collapsed={collapsed}/>
-            <NavItem href="/admin/controls"  icon={<Shield size={16}/>}    label="Admin Controls" active={isActive('/admin/controls')}  collapsed={collapsed}/>
-          </>
+        {role === 'admin' && (
+          <div className="sidebar__section">
+            <div className="sidebar__section-label">Operations</div>
+            {adminItems.map(renderNavItem)}
+          </div>
         )}
-
-        <div style={{ borderTop: '1px solid #f0f0f0', margin: '0.5rem 0.25rem' }}/>
-        <NavItem href="/settings" icon={<Settings size={16}/>} label="Settings"
-          active={isActive('/settings')} collapsed={collapsed}/>
-
-        {/* Collapse toggle in nav */}
-        <button onClick={() => setCollapsed(c => !c)}
-          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          style={{
-            width: '100%', padding: '0.45rem',
-            borderRadius: 7, border: 'none', background: 'none',
-            cursor: 'pointer', color: '#bbb',
-            display: 'flex', alignItems: 'center',
-            justifyContent: collapsed ? 'center' : 'flex-start',
-            gap: 8, marginTop: 4,
-          }}
-          onMouseEnter={e => { e.currentTarget.style.background = '#f0f0f0'; e.currentTarget.style.color = '#3a8c3f'; }}
-          onMouseLeave={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = '#bbb'; }}
-        >
-          {collapsed ? <PanelLeftOpen size={16}/> : <><PanelLeftClose size={16}/><span style={{ fontSize: 13 }}>Collapse</span></>}
-        </button>
+        <div className="sidebar__section">
+          <div className="sidebar__section-label">Account</div>
+          {renderNavItem({
+            href: '/settings',
+            label: 'Settings',
+            icon: <Settings size={18} aria-hidden="true" />,
+          })}
+        </div>
       </nav>
 
-      {/* Admin preview toggle — only when expanded */}
-      {role === 'admin' && !collapsed && (
-        <div style={{ padding: '0.5rem 0.625rem', borderTop: '1px solid #f5f5f5', flexShrink: 0 }}>
-          <button onClick={() => setPreviewAsReviewer(p => !p)} style={{
-            width: '100%', padding: '0.4rem 0.75rem', borderRadius: 7,
-            border: `1.5px solid ${previewAsReviewer ? '#ffc107' : '#e0e0e0'}`,
-            background: previewAsReviewer ? '#fff3cd' : 'white',
-            color: previewAsReviewer ? '#856404' : '#888',
-            fontSize: 11, fontWeight: 600, cursor: 'pointer',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-            whiteSpace: 'nowrap',
-          }}>
-            {previewAsReviewer ? <><RefreshCw size={11}/> Back to admin</> : <><Eye size={11}/> Preview as reviewer</>}
-          </button>
-        </div>
-      )}
-
-      {/* Notification bell */}
-      <div ref={notifRef} style={{ padding: collapsed ? '0.5rem 0' : '0.5rem 0.625rem', borderTop: '1px solid #f5f5f5', flexShrink: 0, display: 'flex', justifyContent: collapsed ? 'center' : 'flex-start' }}>
+      <div className="sidebar__utility" ref={notificationsRef}>
         <button
-          ref={bellBtnRef}
-          onClick={() => {
-            if (!notifOpen && bellBtnRef.current) {
-              const r = bellBtnRef.current.getBoundingClientRect();
-              setNotifPos({ bottom: window.innerHeight - r.top + 8, left: r.left });
-            }
-            setNotifOpen(o => !o);
-          }}
-          title="Notifications"
-          style={{ position: 'relative', background: 'none', border: 'none', cursor: 'pointer', color: notifOpen ? '#3a8c3f' : '#bbb', padding: '0.35rem', borderRadius: 6, display: 'flex', alignItems: 'center', gap: 6 }}
-          onMouseEnter={e => { e.currentTarget.style.color = '#3a8c3f'; e.currentTarget.style.background = '#f0f0f0'; }}
-          onMouseLeave={e => { e.currentTarget.style.color = notifOpen ? '#3a8c3f' : '#bbb'; e.currentTarget.style.background = 'none'; }}
+          type="button"
+          className="sidebar__icon-button"
+          aria-label={unreadCount ? `Notifications, ${unreadCount} unread` : 'Notifications'}
+          aria-expanded={notificationsOpen}
+          aria-controls="notification-panel"
+          onClick={() => setNotificationsOpen(open => !open)}
         >
-          <Bell size={16}/>
-          {unreadCount > 0 && (
-            <span style={{ position: 'absolute', top: 2, right: 2, background: '#e53935', color: 'white', borderRadius: '50%', width: 14, height: 14, fontSize: 8, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              {unreadCount > 9 ? '9+' : unreadCount}
-            </span>
-          )}
-          {!collapsed && <span style={{ fontSize: 12, color: '#888' }}>Notifications{unreadCount > 0 ? ` (${unreadCount})` : ''}</span>}
+          <Bell size={18} aria-hidden="true" />
+          {unreadCount > 0 && <span className="sidebar__unread">{unreadCount > 9 ? '9+' : unreadCount}</span>}
         </button>
 
-        {notifOpen && notifPos && (
-          <div style={{ position: 'fixed', bottom: notifPos.bottom, left: notifPos.left, width: 320, background: 'white', border: '1px solid #e0e0e0', borderRadius: 10, boxShadow: '0 4px 24px rgba(0,0,0,0.14)', zIndex: 9999, overflow: 'hidden' }}>
-            <div style={{ padding: '0.75rem 1rem', borderBottom: '1px solid #f0f0f0', fontSize: 12, fontWeight: 700, color: '#555' }}>Notifications</div>
+        {notificationsOpen && (
+          <div id="notification-panel" className="sidebar__notifications" role="dialog" aria-label="Notifications">
+            <div className="sidebar__notifications-header">Notifications</div>
             {notifications.length === 0 ? (
-              <div style={{ padding: '1.5rem 1rem', fontSize: 12, color: '#aaa', textAlign: 'center' }}>No notifications yet</div>
-            ) : (
-              <div style={{ maxHeight: 360, overflowY: 'auto' }}>
-                {notifications.map(n => (
-                  <div key={n.id} onClick={() => markRead(n)}
-                    style={{ padding: '0.65rem 1rem', borderBottom: '1px solid #f5f5f5', cursor: n.raw_event_id ? 'pointer' : 'default', background: n.read_at ? 'white' : '#f0f7f0', display: 'flex', gap: 10, alignItems: 'flex-start' }}
-                    onMouseEnter={e => { if (n.raw_event_id) e.currentTarget.style.background = '#e8f5e9'; }}
-                    onMouseLeave={e => { e.currentTarget.style.background = n.read_at ? 'white' : '#f0f7f0'; }}
-                  >
-                    {!n.read_at && <span style={{ width: 7, height: 7, borderRadius: '50%', background: n.type === 'fix_failed' ? '#c0392b' : '#3a8c3f', flexShrink: 0, marginTop: 5 }}/>}
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 12, fontWeight: n.read_at ? 400 : 700, color: '#333', marginBottom: 2 }}>{n.title}</div>
-                      <div style={{ fontSize: 11, color: '#888', lineHeight: 1.4 }}>{n.message}</div>
-                      <div style={{ fontSize: 10, color: '#bbb', marginTop: 3 }}>{new Date(n.created_at).toLocaleDateString()}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+              <div className="sidebar__empty">No notifications yet</div>
+            ) : notifications.map(item => (
+              <button
+                type="button"
+                key={item.id}
+                className="sidebar__notification"
+                data-unread={!item.read_at}
+                onClick={() => markRead(item)}
+              >
+                <span aria-hidden="true">
+                  {item.type === 'fix_failed'
+                    ? <XCircle size={15} color="var(--red-600)" />
+                    : <ShieldCheck size={15} color="var(--green-600)" />}
+                </span>
+                <span>
+                  <span className="sidebar__notification-title">{item.title}</span>
+                  <span className="sidebar__notification-copy">{item.message}</span>
+                </span>
+              </button>
+            ))}
           </div>
         )}
       </div>
 
-      {/* User footer */}
-      <div style={{
-        padding: collapsed ? '0.75rem 0' : '0.75rem 1rem',
-        borderTop: '1px solid #eee', flexShrink: 0,
-        display: 'flex', flexDirection: 'column',
-        alignItems: collapsed ? 'center' : 'flex-start', gap: 6,
-      }}>
-        {/* Avatar — always shown */}
-        <div style={{
-          width: 30, height: 30, borderRadius: '50%',
-          background: role === 'admin' ? '#3a8c3f' : '#e8f5e9',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: 12, fontWeight: 700,
-          color: role === 'admin' ? 'white' : '#3a8c3f', flexShrink: 0,
-          cursor: collapsed ? 'default' : 'default',
-        }} title={collapsed ? `${name} (${role})` : undefined}>
-          {name?.[0]?.toUpperCase() ?? 'U'}
+      <div className="sidebar__user">
+        <div className="sidebar__avatar" title={name}>{name?.[0]?.toUpperCase() || 'U'}</div>
+        <div className="sidebar__user-copy">
+          <div className="sidebar__user-name">{name}</div>
+          <div className="sidebar__user-meta">{email || role} · {role}</div>
         </div>
-
-        {!collapsed && (
-          <>
-            <div style={{ minWidth: 0, width: '100%' }}>
-              <div style={{ fontSize: 12, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
-              {email && <div style={{ fontSize: 10, color: '#aaa', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{email}</div>}
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 20, background: role === 'admin' ? '#e8f5e9' : '#f0f0f0', color: role === 'admin' ? '#2a6b2e' : '#666' }}>
-                {role === 'admin' ? <Shield size={9}/> : <Eye size={9}/>} {role}
-              </span>
-              <button onClick={signOut} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#bbb', display: 'flex', alignItems: 'center', gap: 4, fontSize: 11 }}>
-                <LogOut size={12}/> Sign out
-              </button>
-            </div>
-          </>
-        )}
-
-        {collapsed && (
-          <button onClick={signOut} title="Sign out" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ccc', padding: 0 }}>
-            <LogOut size={13}/>
+        <div className="sidebar__footer-actions">
+          <button type="button" className="sidebar__icon-button sidebar__signout" onClick={signOut} title="Sign out" aria-label="Sign out">
+            <LogOut size={17} aria-hidden="true" />
           </button>
-        )}
+        </div>
       </div>
     </aside>
-  );
-}
-
-function NavItem({ href, icon, label, active, collapsed, badge }: {
-  href: string; icon: React.ReactNode; label: string;
-  active: boolean; collapsed: boolean; badge?: number;
-}) {
-  return (
-    <Link href={href} title={collapsed ? label : undefined} style={{
-      display: 'flex', alignItems: 'center',
-      gap: collapsed ? 0 : 8,
-      padding: collapsed ? '0.5rem' : '0.45rem 0.75rem',
-      borderRadius: 8, marginBottom: 2,
-      fontSize: 13, textDecoration: 'none',
-      justifyContent: collapsed ? 'center' : 'flex-start',
-      background: active ? 'linear-gradient(180deg, #ecf7ed, #e3f3e4)' : 'transparent',
-      color:      active ? 'var(--green-700)' : 'var(--gray-700)',
-      fontWeight: active ? 700 : 500,
-      boxShadow: active ? 'inset 3px 0 0 var(--green-500)' : 'none',
-      position: 'relative',
-      transition: 'background 0.15s var(--ease), color 0.15s var(--ease), box-shadow 0.15s var(--ease)',
-    }}
-    onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'var(--gray-100)'; }}
-    onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}>
-      <span style={{ flexShrink: 0 }}>{icon}</span>
-      {!collapsed && <span style={{ flex: 1, whiteSpace: 'nowrap' }}>{label}</span>}
-      {!collapsed && badge !== undefined && (
-        <span style={{ background: '#3a8c3f', color: 'white', borderRadius: 20, padding: '1px 7px', fontSize: 10, fontWeight: 700 }}>
-          {badge > 99 ? '99+' : badge}
-        </span>
-      )}
-      {collapsed && badge !== undefined && (
-        <span style={{ position: 'absolute', top: 4, right: 4, background: '#3a8c3f', color: 'white', borderRadius: '50%', width: 14, height: 14, fontSize: 8, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          {badge > 9 ? '9+' : badge}
-        </span>
-      )}
-    </Link>
   );
 }

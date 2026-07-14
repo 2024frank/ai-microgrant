@@ -1,18 +1,151 @@
-import { NextRequest } from 'next/server';
+import { after, NextRequest } from 'next/server';
 import pool from '@/lib/db';
 import { sendReviewNotification } from '@/lib/email';
-import { mergePosterImages } from '@/lib/mergePosters';
-import { computeDedupKey } from '@/lib/eventDedup';
-import { getAdminContact } from '@/lib/adminContact';
-import { normalizeEventType } from '@/lib/eventTypes';
+import { persistExtractedEvents } from '@/lib/eventIngestion';
+
+export const maxDuration = 60;
 
 const MAX_EVENTS_PER_INGEST = 200;
 
-// Sanitise a string field: strip NUL bytes, truncate to maxLen
-function san(v: unknown, maxLen: number): string | null {
-  if (v == null) return null;
-  const s = String(v).replace(/\0/g, '').trim();
-  return s.length > 0 ? s.slice(0, maxLen) : null;
+function isDuplicateEntry(error: any): boolean {
+  return error?.code === 'ER_DUP_ENTRY' || error?.errno === 1062;
+}
+
+async function bestEffortQuery(sql: string, params: unknown[]): Promise<void> {
+  try {
+    await pool.query(sql, params);
+  } catch {
+    // Do not hide the ingestion error behind a secondary status-write failure.
+  }
+}
+
+type NotificationRecipient = {
+  id: number;
+  email: string;
+  full_name: string;
+  role: 'admin' | 'reviewer';
+};
+
+type InsertedEventPreview = {
+  title: string;
+};
+
+function formatOldestDate(value: unknown): string | null {
+  if (!value) return null;
+  const date = new Date(value as string | number | Date);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+async function sendScopedReviewNotifications(
+  source: { id: number; name: string },
+  insertedEvents: InsertedEventPreview[],
+): Promise<void> {
+  // A reviewer only receives titles from a source explicitly assigned to them.
+  // Admins are global by role and may receive every source.
+  const [recipientRows] = await pool.query(
+    `SELECT DISTINCT u.id, u.email, u.full_name, u.role
+     FROM users u
+     LEFT JOIN reviewer_sources target
+       ON target.reviewer_id = u.id AND target.source_id = ?
+     WHERE u.active = 1
+       AND u.email IS NOT NULL
+       AND (
+         u.role = 'admin'
+         OR (u.role = 'reviewer' AND target.source_id IS NOT NULL)
+       )`,
+    [source.id],
+  ) as any;
+  const recipients = Array.isArray(recipientRows)
+    ? recipientRows as NotificationRecipient[]
+    : [];
+  const previewEvents = insertedEvents.slice(0, 5).map(event => ({
+    title: event.title,
+    source: source.name,
+  }));
+
+  await Promise.all(recipients.map(async recipient => {
+    try {
+      const reviewerScope = recipient.role === 'reviewer'
+        ? `AND EXISTS (
+            SELECT 1 FROM reviewer_sources rs
+            WHERE rs.reviewer_id = ? AND rs.source_id = re.source_id
+          )`
+        : '';
+      const params = recipient.role === 'reviewer'
+        ? [source.id, recipient.id]
+        : [source.id];
+      const [[stats]] = await pool.query(
+        `SELECT COUNT(*) AS pending,
+                SUM(re.source_id = ?) AS source_pending,
+                MIN(re.created_at) AS oldest_created_at
+         FROM raw_events re
+         WHERE re.status IN ('pending','pending_fix') ${reviewerScope}`,
+        params,
+      ) as any;
+
+      await sendReviewNotification({
+        reviewerEmail: recipient.email,
+        reviewerName: recipient.full_name,
+        pendingCount: Number(stats?.pending ?? 0),
+        sources: [{
+          name: source.name,
+          count: insertedEvents.length,
+          pending: Number(stats?.source_pending ?? insertedEvents.length),
+        }],
+        oldestDate: formatOldestDate(stats?.oldest_created_at),
+        previewEvents,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'unknown error';
+      console.error(`[ingest] email failed for ${recipient.email}:`, message);
+    }
+  }));
+}
+
+async function claimIngestRun(sourceId: number, eventCount: number) {
+  const findRunning = async () => {
+    const [[run]] = await pool.query(
+      `SELECT id, correction_event_id FROM agent_runs
+       WHERE source_id=? AND status='running'
+       ORDER BY id DESC LIMIT 1`,
+      [sourceId],
+    ) as any;
+    return run?.id ? {
+      runId: Number(run.id),
+      expectedCorrectionEventId: run.correction_event_id == null
+        ? undefined
+        : Number(run.correction_event_id),
+    } : null;
+  };
+
+  const existingRun = await findRunning();
+  if (existingRun) return { ...existingRun, reused: true };
+
+  try {
+    const [runRes] = await pool.query(
+      `INSERT INTO agent_runs (source_id, status, started_at, events_found)
+       VALUES (?, 'running', NOW(), ?)`,
+      [sourceId, eventCount],
+    ) as any;
+    return {
+      runId: Number(runRes.insertId),
+      expectedCorrectionEventId: undefined,
+      reused: false,
+    };
+  } catch (error) {
+    // A scheduled trigger may have claimed the source between SELECT and
+    // INSERT. The database lease is authoritative; attach to that run.
+    if (!isDuplicateEntry(error)) throw error;
+    const racedRun = await findRunning();
+    if (!racedRun) throw error;
+    return { ...racedRun, reused: true };
+  }
 }
 
 /**
@@ -28,8 +161,9 @@ export async function POST(
   context: { params: Promise<{ slug: string }> }
 ) {
   // ── auth ──────────────────────────────────────────────────────────
+  const configuredSecret = process.env.INGEST_SECRET?.trim();
   const secret = req.headers.get('x-ingest-secret');
-  if (!secret || secret !== process.env.INGEST_SECRET) {
+  if (!configuredSecret || !secret || secret !== configuredSecret) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -59,218 +193,110 @@ export async function POST(
     );
   }
 
-  if (!Array.isArray(events) || events.length === 0) {
-    // Agent called in but found nothing — still record the run
-    const [runRes] = await pool.query(
-      `INSERT INTO agent_runs (source_id, status, started_at, finished_at, events_found, events_extracted)
-       VALUES (?, 'completed', NOW(), NOW(), 0, 0)`,
-      [source.id]
-    ) as any;
-    return Response.json({ ok: true, run_id: runRes.insertId, inserted: 0, message: 'No events in payload' });
-  }
+  // Agents invoked by the scheduler may POST their result here while their
+  // lease is still running. Reuse that run instead of trying to create a
+  // second running row for the same source.
+  const {
+    runId,
+    reused: reusedRun,
+    expectedCorrectionEventId,
+  } = await claimIngestRun(source.id, agentCount);
 
-  // Create agent_run record
-  const [runRes] = await pool.query(
-    `INSERT INTO agent_runs (source_id, status, started_at, events_found)
-     VALUES (?, 'running', NOW(), ?)`,
-    [source.id, agentCount]
-  ) as any;
-  const runId = runRes.insertId;
-
-  // Write events inside a transaction
-  const adminContact = await getAdminContact();
-  const conn = await pool.getConnection();
-  let inserted = 0;
-  let skipped = 0;
-  try {
-    await (conn as any).beginTransaction();
-
-    for (const ev of events) {
-      // If this event resolves a correction request, find the matching needs_fix entry.
-      // Primary lookup: by raw_event_id (exact match from fix-queue response).
-      // Fallback: by calendar_source_url, in case the agent submitted the wrong ID.
-      const fixedFromId: number | null = ev.fixedFromEventId ? parseInt(ev.fixedFromEventId) : null;
-      let fixEntry: any = null;
-      if (fixedFromId) {
-        const [[row]] = await conn.query(
-          'SELECT * FROM needs_fix WHERE raw_event_id = ?', [fixedFromId]
-        ) as any;
-        fixEntry = row || null;
-      }
-      if (!fixEntry && ev.calendarSourceUrl) {
-        const [[row]] = await conn.query(
-          `SELECT nf.* FROM needs_fix nf
-           JOIN raw_events re ON re.id = nf.raw_event_id
-           WHERE re.calendar_source_url = ?
-           LIMIT 1`,
-          [ev.calendarSourceUrl]
-        ) as any;
-        fixEntry = row || null;
-      }
-
-      // Skip a non-correction event already ingested for this source with the
-      // same title + session window (agent re-scraped something already in).
-      const storedTitle = san(ev.title, 200) || 'Untitled';
-      const dedupKey = computeDedupKey(storedTitle, ev.sessions, ev.eventType, ev.description, ev.extendedDescription);
-      if (!fixedFromId) {
-        const [dupRows] = await conn.query(
-          "SELECT id FROM raw_events WHERE source_id = ? AND dedup_key = ? AND status IN ('pending','approved','pending_fix') LIMIT 1",
-          [source.id, dedupKey]
-        ) as any;
-        if (Array.isArray(dupRows) && dupRows.length > 0) { skipped++; continue; }
-      }
-
-      // Merge poster URLs into a single base64 image, or use image_cdn_url if provided.
-      // image_data stores the base64 for our serving endpoint (/api/events/{id}/poster.jpg).
-      // image_cdn_url is set after INSERT to the serving URL with a .jpg extension so
-      // CommunityHub accepts it (it validates the URL has a recognised image extension).
-      let imageData: string | null = null;
-      const rawCdnUrl = san(ev.image_cdn_url, 500);
-      if (Array.isArray(ev.poster_urls) && ev.poster_urls.length > 0) {
-        const merged = await mergePosterImages(ev.poster_urls);
-        if (merged) imageData = merged;
-      } else if (rawCdnUrl?.startsWith('data:')) {
-        imageData = rawCdnUrl;
-      }
-      // image_cdn_url in DB will be set to serving URL after we have the insertId
-      const imageCdnUrl: string | null = rawCdnUrl?.startsWith('data:') ? null : rawCdnUrl;
-
-      const [res] = await conn.query(
-        `INSERT INTO raw_events (
-          source_id, agent_run_id, event_type, title, description,
-          extended_description, sponsors, post_type_ids, sessions,
-          location_type, location, place_id, place_name, room_num,
-          url_link, display, screen_ids, buttons, contact_email, email,
-          phone, website, image_cdn_url, image_data, calendar_source_name,
-          calendar_source_url, geo_scope, geo_json,
-          corrected_from_id, sent_for_fix_by, dedup_key, status
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')`,
-        [
-          source.id, runId,
-          normalizeEventType(ev.eventType),
-          storedTitle,
-          san(ev.description, 2000)    || '',
-          san(ev.extendedDescription, 5000),
-          JSON.stringify(Array.isArray(ev.sponsors)   ? ev.sponsors.slice(0,20)   : []),
-          JSON.stringify(Array.isArray(ev.postTypeId) ? ev.postTypeId.slice(0,20) : []),
-          JSON.stringify(Array.isArray(ev.sessions)   ? ev.sessions.slice(0,50)   : []),
-          ['ph2','on','bo','ne'].includes(ev.locationType) ? ev.locationType : 'ne',
-          san(ev.location, 300),
-          san(ev.placeId,  100),
-          san(ev.placeName,200),
-          san(ev.roomNum,  50),
-          san(ev.urlLink,  500),
-          ['all','screen','none'].includes(ev.display) ? ev.display : 'all',
-          JSON.stringify(Array.isArray(ev.screensIds) ? ev.screensIds.slice(0,20) : []),
-          JSON.stringify(Array.isArray(ev.buttons)    ? ev.buttons.slice(0,10)    : []),
-          adminContact || san(ev.contactEmail, 150),
-          adminContact || san(ev.email, 150),
-          san(ev.phone,   30),
-          san(ev.website, 500),
-          imageCdnUrl,
-          imageData,
-          san(ev.calendarSourceName || source.calendar_source_name || source.name, 200),
-          san(ev.calendarSourceUrl, 500),
-          ['local','hyper_local','regional','national'].includes(ev.geo_scope) ? ev.geo_scope : null,
-          ev.geo ? JSON.stringify(ev.geo) : null,
-          fixedFromId,
-          san(fixEntry?.sent_by_email, 150),
-          dedupKey,
-        ]
-      ) as any;
-
-      const eventId = res.insertId;
-      const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://ai-microgrant-research-oberlin.vercel.app';
-      const ingestedPostUrl = `${appUrl}/reviewer/events/${eventId}`;
-      // Set image_cdn_url to the serving URL with .jpg extension — CH validates the extension
-      const servingImageUrl = imageData ? `${appUrl}/api/events/${eventId}/poster.jpg` : null;
-      await conn.query(
-        'UPDATE raw_events SET ingested_post_url = ?, image_cdn_url = COALESCE(?, image_cdn_url) WHERE id = ?',
-        [ingestedPostUrl, servingImageUrl, eventId]
+  if (events.length === 0) {
+    if (expectedCorrectionEventId !== undefined) {
+      await bestEffortQuery(
+        `UPDATE agent_runs SET error_log=JSON_ARRAY(?)
+         WHERE id=? AND status='running'`,
+        ['A correction direct-post must contain exactly one event', runId],
       );
-
-      // If this resolves a fix request: remove original pending_fix event, clean needs_fix, notify sender
-      if (fixedFromId && fixEntry) {
-        await conn.query('DELETE FROM needs_fix WHERE raw_event_id = ?', [fixedFromId]);
-        // Remove the original pending_fix event so only the corrected version stays in the queue
-        await conn.query('DELETE FROM raw_events WHERE id = ? AND status = ?', [fixedFromId, 'pending_fix']);
-        if (fixEntry.sent_by_user_id) {
-          const notifTitle = `Fixed: ${ev.title || 'Event'}`;
-          const parts: string[] = [];
-          if (fixEntry.correction_notes) parts.push(`You asked: ${fixEntry.correction_notes}`);
-          if (ev.fixSummary) parts.push(`Fixed: ${ev.fixSummary}`);
-          if (!parts.length) parts.push('The corrected event is ready to review.');
-          await conn.query(
-            `INSERT INTO notifications (user_id, type, title, message, raw_event_id)
-             VALUES (?, 'event_fixed', ?, ?, ?)`,
-            [fixEntry.sent_by_user_id, notifTitle, parts.join(' · '), eventId]
-          );
-        }
-      }
-
-      inserted++;
+      return Response.json({
+        error: 'A correction run must submit exactly one event',
+        run_id: runId,
+      }, { status: 422 });
     }
-
-    await (conn as any).commit();
-  } catch (err: any) {
-    await (conn as any).rollback();
     await pool.query(
-      `UPDATE agent_runs SET status='failed', finished_at=NOW(), error_log=? WHERE id=?`,
-      [JSON.stringify([err.message]), runId]
+      `UPDATE agent_runs SET status='completed', finished_at=NOW(),
+       events_found=0, events_extracted=0
+       WHERE id=? AND status='running'`,
+      [runId],
     );
-    return Response.json({ error: `DB error: ${err.message}` }, { status: 500 });
-  } finally {
-    (conn as any).release();
+    return Response.json({
+      ok: true,
+      run_id: runId,
+      inserted: 0,
+      reused_run: reusedRun,
+      message: 'No events in payload',
+    });
   }
 
-  // Mark this run complete
-  await pool.query(
-    `UPDATE agent_runs SET status='completed', finished_at=NOW(),
-     events_found=?, events_extracted=?, events_skipped_dup=? WHERE id=?`,
-    [agentCount, inserted, skipped, runId]
-  );
-
-  // Close any other stale running sessions for this source (agent is done)
-  await pool.query(
-    `UPDATE agent_runs SET status='completed', finished_at=NOW()
-     WHERE source_id=? AND status='running' AND id != ?`,
-    [source.id, runId]
-  );
-
-  // Email all active users about new events (skip fixed-events,
-  // which has its own per-reviewer bell notification flow)
-  if (inserted > 0 && source.slug !== 'fixed-events') {
-    const [[{ pending }]] = await pool.query(
-      `SELECT COUNT(*) AS pending FROM raw_events WHERE status IN ('pending','pending_fix')`
-    ) as any;
-    const [reviewers] = await pool.query(
-      `SELECT id, email, full_name FROM users WHERE active = 1`
-    ) as any;
-    // Pending count broken down by source
-    const [pendingBySource] = await pool.query(
-      `SELECT s.name, COUNT(*) AS pending
-       FROM raw_events re JOIN sources s ON s.id = re.source_id
-       WHERE re.status IN ('pending','pending_fix')
-       GROUP BY s.id, s.name`
-    ) as any;
-    const pendingMap: Record<string, number> = {};
-    for (const row of pendingBySource as any[]) pendingMap[row.name] = Number(row.pending);
-
-    // Build event preview from the events we just inserted (first 5 titles)
-    const previewEvents = events.slice(0, 5).map((ev: any) => ({
-      title:  String(ev.title || 'Untitled').slice(0, 80),
-      source: source.name,
-    }));
-    for (const u of reviewers as any[]) {
-      sendReviewNotification({
-        reviewerEmail: u.email,
-        reviewerName:  u.full_name,
-        pendingCount:  pending,
-        sources:       [{ name: source.name, count: inserted, pending: pendingMap[source.name] ?? inserted }],
-        oldestDate:    null,
-        previewEvents,
-      }).catch((err: Error) => console.error(`[ingest] email failed for ${u.email}:`, err.message));
+  // Every item is normalized against the same contract used at publication.
+  // One malformed item cannot roll back valid siblings; fixable drafts carry
+  // their field-level issues into the reviewer queue.
+  let result;
+  try {
+    result = await persistExtractedEvents(events, source, runId, {
+      expectedCorrectionEventId,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Ingestion failed';
+    if (reusedRun) {
+      await bestEffortQuery(
+        `UPDATE agent_runs SET events_errored=events_errored+1, error_log=?
+         WHERE id=? AND status='running'`,
+        [JSON.stringify([message]), runId],
+      );
+    } else {
+      await bestEffortQuery(
+        `UPDATE agent_runs SET status='failed', finished_at=NOW(),
+         events_errored=events_errored+1, error_log=? WHERE id=?`,
+        [JSON.stringify([message]), runId],
+      );
     }
+    return Response.json({ error: 'Unable to persist extracted events' }, { status: 500 });
+  }
+  const inserted = result.inserted.length;
+  const skipped = result.skipped;
+
+  if (reusedRun) {
+    // The parent agentRunner owns the lease and will close it when the managed
+    // session becomes idle. Preserve the direct-post counts in the meantime.
+    await pool.query(
+      `UPDATE agent_runs SET
+       events_found=GREATEST(events_found, ?),
+       events_extracted=events_extracted+?,
+       events_skipped_dup=events_skipped_dup+?,
+       events_errored=events_errored+?, error_log=?
+       WHERE id=? AND status='running'`,
+      [
+        agentCount,
+        inserted,
+        result.duplicates,
+        result.failed,
+        result.errors.length ? JSON.stringify(result.errors) : null,
+        runId,
+      ],
+    );
+  } else {
+    await pool.query(
+      `UPDATE agent_runs SET status='completed', finished_at=NOW(),
+       events_found=?, events_extracted=?, events_skipped_dup=?,
+       events_errored=?, error_log=? WHERE id=?`,
+      [
+        agentCount,
+        inserted,
+        result.duplicates,
+        result.failed,
+        result.errors.length ? JSON.stringify(result.errors) : null,
+        runId,
+      ],
+    );
+  }
+
+  // Email authorized reviewers after the response. `after` registers the work
+  // with Next/Vercel's request lifecycle so serverless execution stays alive.
+  // Fixed events keep their dedicated per-reviewer bell notification flow.
+  if (inserted > 0 && source.slug !== 'fixed-events') {
+    after(() => sendScopedReviewNotifications(source, result.inserted));
   }
 
   console.log(`[ingest] source=${source.name} slug=${slug} run=${runId} inserted=${inserted}`);
@@ -280,6 +306,9 @@ export async function POST(
     run_id:         runId,
     source:         source.name,
     inserted,
+    skipped,
+    needs_review: result.invalid,
+    validation_errors: result.errors,
     pending_review: inserted,
     message:        `${inserted} events queued for review`,
   });
@@ -291,7 +320,7 @@ export async function OPTIONS() {
     headers: {
       'Access-Control-Allow-Origin':  '*',
       'Access-Control-Allow-Methods': 'POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Allow-Headers': 'Content-Type, X-Ingest-Secret',
     },
   });
 }

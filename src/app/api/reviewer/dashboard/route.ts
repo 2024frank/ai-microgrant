@@ -11,6 +11,34 @@ export async function GET(req: NextRequest) {
   ) as any;
   const userId = dbUser?.id;
 
+  // Keep dashboard queue summaries inside the same assignment boundary as the
+  // review queue and event-detail routes. Reviewers with no assignments retain
+  // the shared-queue behavior; once an assignment exists, only those sources
+  // contribute to their counts and oldest-item summary. Admins remain global.
+  const reviewerEventScope = user.role === 'reviewer'
+    ? `AND (
+        NOT EXISTS (
+          SELECT 1 FROM reviewer_sources rs0 WHERE rs0.reviewer_id = ?
+        )
+        OR EXISTS (
+          SELECT 1 FROM reviewer_sources rs
+          WHERE rs.reviewer_id = ? AND rs.source_id = re.source_id
+        )
+      )`
+    : '';
+  const reviewerSourceScope = user.role === 'reviewer'
+    ? `AND (
+        NOT EXISTS (
+          SELECT 1 FROM reviewer_sources rs0 WHERE rs0.reviewer_id = ?
+        )
+        OR EXISTS (
+          SELECT 1 FROM reviewer_sources rs
+          WHERE rs.reviewer_id = ? AND rs.source_id = s.id
+        )
+      )`
+    : '';
+  const scopeParams = user.role === 'reviewer' ? [userId, userId] : [];
+
   // All queries run in parallel — O(log n) each with composite indexes
   const [
     [[{ pending }]],
@@ -21,7 +49,9 @@ export async function GET(req: NextRequest) {
     [[oldestPending]],
   ] = await Promise.all([
     pool.query(
-      `SELECT COUNT(*) AS pending FROM raw_events WHERE status IN ('pending','pending_fix')`
+      `SELECT COUNT(*) AS pending FROM raw_events re
+       WHERE re.status IN ('pending','pending_fix') ${reviewerEventScope}`,
+      scopeParams,
     ),
     pool.query(
       `SELECT
@@ -58,23 +88,28 @@ export async function GET(req: NextRequest) {
          SUM(re.status IN ('pending','pending_fix')) AS pending_count
        FROM sources s
        LEFT JOIN raw_events re ON re.source_id = s.id
-       WHERE s.active = 1
+       WHERE s.active = 1 ${reviewerSourceScope}
        GROUP BY s.id, s.name, s.slug
-       ORDER BY s.name`
+       ORDER BY s.name`,
+      scopeParams,
     ),
     pool.query(
       `SELECT re.title, re.created_at, s.name AS source_name
        FROM raw_events re JOIN sources s ON re.source_id = s.id
-       WHERE re.status IN ('pending','pending_fix')
-       ORDER BY re.created_at ASC LIMIT 1`
+       WHERE re.status IN ('pending','pending_fix') ${reviewerEventScope}
+       ORDER BY re.created_at ASC LIMIT 1`,
+      scopeParams,
     ),
   ]) as any;
 
-  return Response.json({
-    pending,
-    personal_stats: { ...personalStats, corrections_approved },
-    recent_activity: recentActivity,
-    assigned_sources: assignedSources,
-    oldest_pending: oldestPending || null,
-  });
+  return Response.json(
+    {
+      pending,
+      personal_stats: { ...personalStats, corrections_approved },
+      recent_activity: recentActivity,
+      assigned_sources: assignedSources,
+      oldest_pending: oldestPending || null,
+    },
+    { headers: { 'Cache-Control': 'private, no-store' } },
+  );
 }

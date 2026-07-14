@@ -62,12 +62,15 @@ export default function EventDeepLinkPage() {
   }, []);
 
   useEffect(() => {
-    fetch(`/api/events/${id}`)
+    setLoading(true);
+    fetch(`/api/events/${id}`, {
+      headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+    })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then(setEvent)
+      .then(data => { setEvent(data); setError(''); })
       .catch(() => setError('Event not found'))
       .finally(() => setLoading(false));
-  }, [id]);
+  }, [id, authToken]);
 
   const canEdit = authToken && (userRole === 'admin' || userRole === 'reviewer');
 
@@ -135,7 +138,9 @@ export default function EventDeepLinkPage() {
       setShowSendBack(false);
       setCorrectionNotes('');
       setSendBackMsg('✅ Queued for an automated correction attempt');
-      const r2 = await fetch(`/api/events/${id}`);
+      const r2 = await fetch(`/api/events/${id}`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
       if (r2.ok) setEvent(await r2.json());
     } catch (err: any) {
       setSendBackMsg(`❌ ${err.message}`);
@@ -159,7 +164,9 @@ export default function EventDeepLinkPage() {
       const postId = data.communityhub?.id || data.communityhub?.postId || '?';
       setResubmitMsg(`✅ Sent to CommunityHub — post #${postId}`);
       setLastSaveResult(null);
-      const r2 = await fetch(`/api/events/${id}`);
+      const r2 = await fetch(`/api/events/${id}`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
       if (r2.ok) setEvent(await r2.json());
     } catch (err: any) {
       setResubmitMsg(`❌ ${err.message}`);

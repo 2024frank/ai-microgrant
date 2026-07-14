@@ -7,6 +7,7 @@ const mockVerify = adminAuth.verifyIdToken as jest.Mock;
 function ctx(id: string) { return { params: Promise.resolve({ id }) }; }
 
 const ADMIN = { id: 1, email: 'admin@oberlin.edu', role: 'admin', full_name: 'Admin', active: 1, firebase_uid: 'uid-admin' };
+const REVIEWER = { id: 2, email: 'reviewer@oberlin.edu', role: 'reviewer', full_name: 'Reviewer', active: 1, firebase_uid: 'uid-reviewer' };
 const MOCK_EVENT = {
   id: 10, title: 'Original Title', status: 'pending', event_type: 'ot',
   description: 'Original desc', sessions: '[]', location_type: 'ph2',
@@ -25,8 +26,14 @@ function makeReq(id: string, body: any) {
 
 beforeEach(() => {
   db.default.query.mockReset();
+  db.default.getConnection.mockClear();
   db.mockConn.query.mockReset();
-  db.mockConn.query.mockResolvedValue([{ affectedRows: 1 }]);
+  db.mockConn.query.mockImplementation((sql: unknown) => {
+    if (typeof sql === 'string' && sql.includes('SELECT id FROM raw_events')) {
+      return Promise.resolve([[{ id: MOCK_EVENT.id }]]);
+    }
+    return Promise.resolve([{ affectedRows: 1 }]);
+  });
   db.mockConn.beginTransaction = jest.fn().mockResolvedValue(undefined);
   db.mockConn.commit           = jest.fn().mockResolvedValue(undefined);
   db.mockConn.rollback         = jest.fn().mockResolvedValue(undefined);
@@ -36,7 +43,7 @@ beforeEach(() => {
 });
 
 describe('POST /api/events/:id/edit', () => {
-  it('saves field edits and logs them for agent learning', async () => {
+  it('saves field edits and records them as bounded feedback evidence', async () => {
     db.default.query
       .mockResolvedValueOnce([[ADMIN]])
       .mockResolvedValueOnce([[MOCK_EVENT]])
@@ -53,7 +60,14 @@ describe('POST /api/events/:id/edit', () => {
     expect(data.ok).toBe(true);
     expect(data.changed_fields).toContain('title');
     expect(data.changed_fields).toContain('description');
-    expect(data.agent_id).toBe('agt_test_123');
+    expect(data.ready_to_publish).toBe(false);
+    expect(data.validation_errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'sessions', code: 'required' }),
+    ]));
+    const update = db.mockConn.query.mock.calls.find((call: any[]) =>
+      typeof call[0] === 'string' && call[0].includes('UPDATE raw_events SET')
+    );
+    expect(update?.[0]).toContain('validation_errors = ?');
   });
 
   it('returns empty changed_fields when nothing actually changed', async () => {
@@ -78,9 +92,9 @@ describe('POST /api/events/:id/edit', () => {
       .mockResolvedValueOnce([[ADMIN]])
       .mockResolvedValueOnce([[MOCK_EVENT]])
       .mockResolvedValueOnce([[{ id: 1 }]])
-      .mockResolvedValueOnce([[{ ...MOCK_EVENT, event_type: 'ev' }]]);
+      .mockResolvedValueOnce([[{ ...MOCK_EVENT, event_type: 'an' }]]);
 
-    const res = await POST(makeReq('10', { edits: { event_type: 'ev' } }), ctx('10'));
+    const res = await POST(makeReq('10', { edits: { event_type: 'an' } }), ctx('10'));
     const data = await res.json();
 
     expect(res.status).toBe(200);
@@ -88,7 +102,13 @@ describe('POST /api/events/:id/edit', () => {
     const update = db.mockConn.query.mock.calls.find((call: any[]) =>
       typeof call[0] === 'string' && call[0].includes('UPDATE raw_events SET')
     );
-    expect(update?.[1]).toContain('ev');
+    expect(update?.[1]).toContain('an');
+  });
+
+  it('rejects legacy category codes as new event type edits', async () => {
+    db.default.query.mockResolvedValueOnce([[ADMIN]]);
+    const res = await POST(makeReq('10', { edits: { event_type: 'ev' } }), ctx('10'));
+    expect(res.status).toBe(400);
   });
 
   it('rejects event type values outside the database contract', async () => {
@@ -97,7 +117,7 @@ describe('POST /api/events/:id/edit', () => {
     expect(res.status).toBe(400);
   });
 
-  it('logs teaching note to rejection_log when note provided', async () => {
+  it('logs a reviewer note to rejection_log when provided', async () => {
     db.default.query
       .mockResolvedValueOnce([[ADMIN]])
       .mockResolvedValueOnce([[MOCK_EVENT]])
@@ -138,5 +158,17 @@ describe('POST /api/events/:id/edit', () => {
       ctx('10')
     );
     expect(res.status).toBe(401);
+  });
+
+  it('returns 403 before editing an event outside the reviewer assignment', async () => {
+    mockVerify.mockResolvedValue({ uid: 'uid-reviewer', email: 'reviewer@oberlin.edu' });
+    db.default.query
+      .mockResolvedValueOnce([[REVIEWER]])
+      .mockResolvedValueOnce([[MOCK_EVENT]])
+      .mockResolvedValueOnce([[{ allowed: 0 }]]);
+
+    const res = await POST(makeReq('10', { edits: { title: 'Not allowed' } }), ctx('10'));
+    expect(res.status).toBe(403);
+    expect(db.default.getConnection).not.toHaveBeenCalled();
   });
 });

@@ -20,17 +20,19 @@ beforeEach(() => {
 });
 
 describe('GET /api/events (public — no auth required)', () => {
-  it('returns all events with pagination', async () => {
+  it('returns only approved events with pagination', async () => {
     db.default.query
-      .mockResolvedValueOnce([[{ total: 3 }]])
-      .mockResolvedValueOnce([EVENTS]);
+      .mockResolvedValueOnce([[{ total: 1 }]])
+      .mockResolvedValueOnce([[EVENTS[1]]]);
 
     const res  = await GET(makeReq());
     const data = await res.json();
 
     expect(res.status).toBe(200);
-    expect(data.events).toHaveLength(3);
-    expect(data.pagination.total).toBe(3);
+    expect(data.events).toHaveLength(1);
+    expect(data.events[0].status).toBe('approved');
+    expect(data.pagination.total).toBe(1);
+    expect(data.filters.status).toBe('approved');
     expect(data.pagination.has_next).toBe(false);
     expect(data.pagination.has_prev).toBe(false);
   });
@@ -52,6 +54,17 @@ describe('GET /api/events (public — no auth required)', () => {
     await GET(makeReq({ status: 'approved' }));
     expect(db.default.query.mock.calls[1][0]).toContain('re.status = ?');
     expect(db.default.query.mock.calls[1][1]).toContain('approved');
+  });
+
+  it('does not expose pending records when an anonymous caller requests them', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[{ total: 0 }]])
+      .mockResolvedValueOnce([[]]);
+
+    await GET(makeReq({ status: 'pending' }));
+
+    expect(db.default.query.mock.calls[0][1]).toContain('approved');
+    expect(db.default.query.mock.calls[0][1]).not.toContain('pending');
   });
 
   it('filters by source_id', async () => {

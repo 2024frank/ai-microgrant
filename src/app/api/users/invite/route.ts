@@ -1,4 +1,4 @@
-import { NextRequest } from 'next/server';
+import { after, NextRequest } from 'next/server';
 import pool from '@/lib/db';
 import { getAuthUser, unauthorized, forbidden } from '@/lib/auth';
 import { sendWelcomeEmail } from '@/lib/email';
@@ -29,7 +29,18 @@ export async function POST(req: NextRequest) {
   const [[{ pendingCount }]] = await pool.query(
     `SELECT COUNT(*) AS pendingCount FROM raw_events WHERE status IN ('pending','pending_fix')`
   ) as any;
-  sendWelcomeEmail({ email, name: full_name, role, pendingCount }).catch(console.error);
+  after(async () => {
+    try {
+      await sendWelcomeEmail({
+        email: email.toLowerCase().trim(),
+        name: full_name.trim(),
+        role,
+        pendingCount,
+      });
+    } catch (error) {
+      console.error('Welcome email delivery failed:', error);
+    }
+  });
 
   const [[created]] = await pool.query(
     'SELECT id, email, full_name, role, active FROM users WHERE id = ?', [userId]

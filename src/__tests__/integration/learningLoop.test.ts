@@ -163,6 +163,7 @@ describe('Stage 1 – Reject action writes a rejection_log row', () => {
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_USER]])
       .mockResolvedValueOnce([[PENDING_EVENT]])
+      .mockResolvedValueOnce([[{ allowed: 1 }]])
       .mockResolvedValueOnce([[{ id: 5 }]]);
 
     await postAction(
@@ -201,6 +202,7 @@ describe('Stage 1 – Reject action writes a rejection_log row', () => {
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_USER]])
       .mockResolvedValueOnce([[PENDING_EVENT]])
+      .mockResolvedValueOnce([[{ allowed: 1 }]])
       .mockResolvedValueOnce([[{ id: 5 }]]);
 
     await postAction(
@@ -222,6 +224,7 @@ describe('Stage 1 – Reject action writes a rejection_log row', () => {
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_USER]])
       .mockResolvedValueOnce([[PENDING_EVENT]])
+      .mockResolvedValueOnce([[{ allowed: 1 }]])
       .mockResolvedValueOnce([[{ id: 5 }]]);
 
     await postAction(
@@ -430,7 +433,10 @@ describe('Stage 3 – Next agent run injects rejection history into agent messag
     await triggerAgentRun(SOURCE_ID, 100, 'test-key', 'test-env');
 
     const agentMessage = mockSessionsEventsSend.mock.calls[0][1].events[0].content[0].text as string;
-    expect(agentMessage).toBe('Run extraction now. Return only the JSON array of events.');
+    expect(agentMessage).toContain('Run extraction now.');
+    expect(agentMessage).toContain('eventType is only "ot"');
+    expect(agentMessage).toContain('Never invent facts');
+    expect(agentMessage).not.toContain('Feedback policy');
   });
 
   it('scopes rejection history to the specific source being run', async () => {

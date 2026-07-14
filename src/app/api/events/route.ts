@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
+import { getAuthUser } from '@/lib/auth';
 
 const CACHE = { 'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=120' };
 const CORS  = {
@@ -11,7 +12,22 @@ const CORS  = {
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
 
-  const status      = searchParams.get('status')      || 'all';
+  const hasAuthorization = Boolean(req.headers.get('authorization'));
+  const user = hasAuthorization ? await getAuthUser(req) : null;
+  if (hasAuthorization && !user) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401, headers: CORS });
+  }
+
+  const requestedStatus = searchParams.get('status') || 'all';
+  const allowedStatuses = new Set([
+    'all', 'pending', 'approved', 'rejected', 'resubmitted',
+    'pending_fix', 'publishing', 'superseded',
+  ]);
+  if (!allowedStatuses.has(requestedStatus)) {
+    return Response.json({ error: 'Invalid status' }, { status: 400, headers: CORS });
+  }
+  // Anonymous consumers may only read records that completed human review.
+  const status = user ? requestedStatus : 'approved';
   const source_id   = searchParams.get('source_id');
   const source_slug = searchParams.get('source_slug');
   const event_type  = searchParams.get('event_type');
@@ -29,6 +45,21 @@ export async function GET(req: NextRequest) {
   const params: any[]        = [];
 
   if (status !== 'all') { conditions.push('re.status = ?');      params.push(status); }
+  if (user?.role === 'reviewer') {
+    conditions.push(`(
+      NOT EXISTS (
+        SELECT 1 FROM reviewer_sources rs0
+        JOIN users u0 ON u0.id=rs0.reviewer_id
+        WHERE u0.firebase_uid=?
+      )
+      OR EXISTS (
+        SELECT 1 FROM reviewer_sources rs
+        JOIN users u ON u.id=rs.reviewer_id
+        WHERE u.firebase_uid=? AND rs.source_id=re.source_id
+      )
+    )`);
+    params.push(user.uid, user.uid);
+  }
   if (source_id)        { conditions.push('re.source_id = ?');   params.push(source_id); }
   if (source_slug)      { conditions.push('s.slug = ?');         params.push(source_slug); }
   if (event_type)       { conditions.push('re.event_type = ?');  params.push(event_type); }
@@ -52,7 +83,7 @@ export async function GET(req: NextRequest) {
        re.id, re.event_type, re.title, re.description, re.extended_description,
        re.sponsors, re.post_type_ids, re.sessions, re.location_type,
        re.location, re.place_name, re.room_num, re.url_link, re.display,
-       re.buttons, re.contact_email, re.email, re.phone, re.website, re.image_cdn_url,
+       re.buttons, re.contact_email, re.phone, re.website, re.image_cdn_url,
        re.calendar_source_name, re.calendar_source_url, re.ingested_post_url,
        re.geo_scope, re.status, re.communityhub_post_id,
        re.created_at, re.updated_at,
@@ -76,7 +107,7 @@ export async function GET(req: NextRequest) {
       has_prev: page > 0,
     },
     filters: { status, source_id, source_slug, event_type, geo_scope, from, to, q, order },
-  }, { headers: { ...CACHE, ...CORS } });
+  }, { headers: { ...(user ? { 'Cache-Control': 'private, no-store' } : CACHE), ...CORS } });
 }
 
 export async function OPTIONS() {

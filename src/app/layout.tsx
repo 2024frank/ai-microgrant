@@ -10,11 +10,11 @@ const inter = Inter({
 
 export const metadata: Metadata = {
   title: {
-    default: 'AI Events Ingestion Software',
-    template: '%s · AI Events Ingestion',
+    default: 'Community Event Intake',
+    template: '%s · Event Intake',
   },
   description:
-    'AI-powered event ingestion and human review platform for community organizations.',
+    'Source ingestion, payload validation, and human review for community publishing teams.',
   icons: {
     icon: '/logo.png',
     apple: '/logo.png',
@@ -22,7 +22,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: '#3a8c3f',
+  themeColor: '#174c35',
   width: 'device-width',
   initialScale: 1,
 };

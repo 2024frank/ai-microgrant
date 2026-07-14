@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
-import { getAuthUser, unauthorized } from '@/lib/auth';
+import { forbidden, getAuthUser, unauthorized } from '@/lib/auth';
+import { canAccessSource } from '@/lib/reviewerAccess';
 
 export async function GET(
   req: NextRequest,
@@ -14,5 +15,15 @@ export async function GET(
      FROM raw_events re JOIN sources s ON re.source_id = s.id WHERE re.id = ?`, [id]
   ) as any;
   if (!event) return Response.json({ error: 'Not found' }, { status: 404 });
-  return Response.json(event);
+  if (!await canAccessSource(user, Number(event.source_id))) return forbidden();
+  const publishingEmail = (
+    process.env.COMMUNITYHUB_EMAIL?.trim()
+    || event.email
+    || process.env.ADMIN_EMAIL?.trim()
+    || ''
+  );
+  return Response.json({
+    ...event,
+    publishing_email_configured: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(publishingEmail),
+  });
 }

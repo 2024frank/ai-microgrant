@@ -9,7 +9,7 @@
  *  - A reviewer with NO source assignments sees ALL sources' events.
  *  - Admins see all events regardless of assignments.
  *  - source_id query param further narrows within the reviewer's scope.
- *  - The public /api/events endpoint is never gated — no auth required.
+ *  - The public /api/events endpoint requires no auth but exposes approved rows only.
  *
  * All DB I/O is mocked. We verify that the SQL clauses generated match
  * the expected scoping rules, and that response shapes are correct.
@@ -131,8 +131,10 @@ describe('Review Queue — source assignment scoping', () => {
     // Both the events query and the count query should use reviewer_sources subquery
     const eventsQuery = db.default.query.mock.calls[1][0] as string;
     const countQuery  = db.default.query.mock.calls[2][0] as string;
+    const sourcesQuery = db.default.query.mock.calls[3][0] as string;
     expect(eventsQuery).toContain('reviewer_sources');
     expect(countQuery).toContain('reviewer_sources');
+    expect(sourcesQuery).toContain('reviewer_sources');
   });
 
   it('reviewer with assignments has their firebase_uid passed as query param (O(1) lookup)', async () => {

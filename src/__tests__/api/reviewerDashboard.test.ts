@@ -41,6 +41,22 @@ describe('GET /api/reviewer/dashboard', () => {
     expect(data.recent_activity).toHaveLength(1);
     expect(data.assigned_sources).toHaveLength(1);
     expect(data.oldest_pending.title).toBe('Old Event');
+
+    const pendingQuery = db.default.query.mock.calls.find(
+      ([sql]: [string]) => sql.includes('COUNT(*) AS pending'),
+    );
+    const sourcesQuery = db.default.query.mock.calls.find(
+      ([sql]: [string]) => sql.includes('SUM(re.status'),
+    );
+    const oldestQuery = db.default.query.mock.calls.find(
+      ([sql]: [string]) => sql.includes('ORDER BY re.created_at ASC LIMIT 1'),
+    );
+    for (const call of [pendingQuery, sourcesQuery, oldestQuery]) {
+      expect(call).toBeDefined();
+      expect(call[0]).toContain('reviewer_sources');
+      expect(call[1]).toEqual([REVIEWER.id, REVIEWER.id]);
+    }
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
   });
 
   it('returns dashboard data for admin (no source filter)', async () => {
@@ -60,9 +76,18 @@ describe('GET /api/reviewer/dashboard', () => {
 
     expect(res.status).toBe(200);
     expect(data.pending).toBe(12);
-    // Admin query should NOT include reviewer_sources
-    const pendingQuery = db.default.query.mock.calls[1][0];
-    expect(pendingQuery).not.toContain('reviewer_sources');
+    // Admin queue summaries and source breakdown remain global.
+    const aggregateQueries = db.default.query.mock.calls.filter(
+      ([sql]: [string]) =>
+        sql.includes('COUNT(*) AS pending')
+        || sql.includes('SUM(re.status')
+        || sql.includes('ORDER BY re.created_at ASC LIMIT 1'),
+    );
+    expect(aggregateQueries).toHaveLength(3);
+    for (const [sql, params] of aggregateQueries) {
+      expect(sql).not.toContain('reviewer_sources');
+      expect(params).toEqual([]);
+    }
   });
 
   it('returns 401 without token', async () => {
