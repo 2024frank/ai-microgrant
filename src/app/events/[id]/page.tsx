@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
+import Link from 'next/link';
 import Image from 'next/image';
 import { ExternalLink, Pencil, Check, X, BookOpen, Send, RotateCcw } from 'lucide-react';
 import { formatSessionRange, getTimezoneLabel } from '@/lib/timezone';
@@ -200,8 +201,8 @@ export default function EventDeepLinkPage() {
 
         {/* Header */}
         <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:'1.5rem' }}>
-          <Image src="/logo.png" alt="AI Events Ingestion Software" width={32} height={32}/>
-          <div style={{ fontSize:12, fontWeight:800, color:'#3a8c3f', letterSpacing:0.5 }}>AI EVENTS INGESTION SOFTWARE</div>
+          <Image src="/logo.png" alt="CommunityHub Event Intake" width={32} height={32}/>
+          <div style={{ fontSize:12, fontWeight:800, color:'#3a8c3f', letterSpacing:0.5 }}>COMMUNITYHUB EVENT INTAKE</div>
         </div>
 
         <div style={{ background:'white', borderRadius:12, overflow:'hidden', boxShadow:'0 2px 16px rgba(0,0,0,0.08)' }}>
@@ -225,7 +226,7 @@ export default function EventDeepLinkPage() {
                 </span>
               )}
               <span style={{ fontSize:11, color:'#aaa', marginLeft:'auto' }}>Source: {event.calendar_source_name}</span>
-              {canEdit && !editing && (
+              {canEdit && !editing && event.status === 'pending' && (
                 <>
                   <button onClick={startEdit}
                     style={{ display:'flex', alignItems:'center', gap:4, background:'#f0f7f0', border:'1px solid #c8e6c9', color:'#3a8c3f', borderRadius:6, padding:'4px 10px', fontSize:12, fontWeight:600, cursor:'pointer' }}>
@@ -349,7 +350,7 @@ export default function EventDeepLinkPage() {
               </>
             )}
 
-            {/* ── AI LEARNED banner — shown after a save ── */}
+            {/* Reviewer-feedback receipt shown after a save. */}
             {lastSaveResult && lastSaveResult.fields.length > 0 && (
               <div style={{ marginTop:'1.25rem', padding:'12px 14px', background:'#f0f7f0', border:'1px solid #c8e6c9', borderRadius:8 }}>
                 <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:8 }}>
@@ -386,16 +387,18 @@ export default function EventDeepLinkPage() {
               </div>
             )}
 
-            {/* Also show resubmit for rejected events even before editing */}
+            {/* Rejected records must return through correction and a new review pass. */}
             {canEdit && event.status === 'rejected' && !lastSaveResult && !editing && (
               <div style={{ marginTop:'1.25rem', paddingTop:'1.25rem', borderTop:'1px solid #f0f0f0' }}>
                 <p style={{ fontSize:12, color:'#888', marginBottom:8 }}>
-                  Edit the fields above and save, then send to CommunityHub.
+                  {Number(event.sent_for_correction) === 1
+                    ? 'The rejected original stays archived while a corrected replacement is prepared.'
+                    : 'The rejected original stays archived. Request a corrected draft, then review the new record before publishing.'}
                 </p>
-                <button onClick={resubmit} disabled={resubmitting}
-                  style={{ display:'flex', alignItems:'center', gap:6, background:'#1565c0', color:'white', border:'none', borderRadius:7, padding:'10px 20px', fontSize:13, fontWeight:700, cursor:resubmitting?'wait':'pointer', opacity:resubmitting?0.7:1 }}>
-                  <Send size={14}/> {resubmitting ? 'Sending…' : 'Send to CommunityHub as-is'}
-                </button>
+                <Link href={`/reviewer/events/${id}`}
+                  style={{ display:'inline-flex', alignItems:'center', gap:6, background:'#1565c0', color:'white', borderRadius:7, padding:'10px 20px', fontSize:13, fontWeight:700, textDecoration:'none' }}>
+                  <RotateCcw size={14}/> {Number(event.sent_for_correction) === 1 ? 'View correction status' : 'Open correction workflow'}
+                </Link>
               </div>
             )}
 
@@ -409,7 +412,7 @@ export default function EventDeepLinkPage() {
         )}
 
         <p style={{ textAlign:'center', fontSize:11, color:'#aaa', marginTop:'1.5rem' }}>
-          AI Events Ingestion Software · CommunityHub
+          CommunityHub Event Intake · Oberlin
         </p>
       </div>
 

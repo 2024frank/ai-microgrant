@@ -27,7 +27,7 @@ export async function POST(req: NextRequest) {
 
   // Send welcome email with current queue stats
   const [[{ pendingCount }]] = await pool.query(
-    `SELECT COUNT(*) AS pendingCount FROM raw_events WHERE status IN ('pending','pending_fix')`
+    `SELECT COUNT(*) AS pendingCount FROM raw_events WHERE status = 'pending'`
   ) as any;
   after(async () => {
     try {

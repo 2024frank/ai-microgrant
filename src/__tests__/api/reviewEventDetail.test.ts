@@ -44,6 +44,7 @@ describe('GET /api/review/events/:id assignment scope', () => {
       ...EVENT,
       publishing_email_configured: true,
     });
+    expect(db.default.query.mock.calls[1][0]).toContain('rejection_log');
   });
 
   it('fails closed when the assignment lookup result is missing', async () => {

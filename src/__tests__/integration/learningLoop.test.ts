@@ -367,6 +367,14 @@ describe('Stage 2 – getRejectionHistory builds structured prompt from rejectio
 // Stage 3: Next agent run receives the rejection history in its message
 // ===========================================================================
 describe('Stage 3 – Next agent run injects rejection history into agent message', () => {
+  function installRunningLeaseFallback() {
+    db.default.query.mockImplementation((sql: unknown) => (
+      typeof sql === 'string' && /SELECT status FROM agent_runs/i.test(sql)
+        ? Promise.resolve([[{ status: 'running' }]])
+        : Promise.resolve([{ affectedRows: 1 }])
+    ));
+  }
+
   // Set up sessions API mocks so triggerAgentRun doesn't throw
   beforeEach(() => {
     mockSessionsCreate.mockResolvedValue({ id: 'sess_xyz' });
@@ -398,6 +406,7 @@ describe('Stage 3 – Next agent run injects rejection history into agent messag
       .mockResolvedValueOnce([[SOURCE_FOR_NEXT_RUN]])    // sources SELECT
       .mockResolvedValueOnce([REJECTION_LOG_ROWS])       // rejection_log query
       .mockResolvedValueOnce([{ affectedRows: 1 }]);     // UPDATE agent_runs
+    installRunningLeaseFallback();
 
     await triggerAgentRun(SOURCE_ID, 100, 'test-key', 'test-env');
 
@@ -415,6 +424,7 @@ describe('Stage 3 – Next agent run injects rejection history into agent messag
       .mockResolvedValueOnce([[SOURCE_FOR_NEXT_RUN]])
       .mockResolvedValueOnce([REJECTION_LOG_ROWS])
       .mockResolvedValueOnce([{ affectedRows: 1 }]);
+    installRunningLeaseFallback();
 
     await triggerAgentRun(SOURCE_ID, 100, 'test-key', 'test-env');
 
@@ -429,6 +439,7 @@ describe('Stage 3 – Next agent run injects rejection history into agent messag
       .mockResolvedValueOnce([[SOURCE_FOR_NEXT_RUN]])
       .mockResolvedValueOnce([[]])              // empty rejection_log
       .mockResolvedValueOnce([{ affectedRows: 1 }]);
+    installRunningLeaseFallback();
 
     await triggerAgentRun(SOURCE_ID, 100, 'test-key', 'test-env');
 
@@ -445,6 +456,7 @@ describe('Stage 3 – Next agent run injects rejection history into agent messag
       .mockResolvedValueOnce([[SOURCE_FOR_NEXT_RUN]])
       .mockResolvedValueOnce([[]])              // empty rejection_log
       .mockResolvedValueOnce([{ affectedRows: 1 }]);
+    installRunningLeaseFallback();
 
     await triggerAgentRun(SOURCE_ID, 100, 'test-key', 'test-env');
 
@@ -480,6 +492,7 @@ describe('Stage 3 – Next agent run injects rejection history into agent messag
       .mockResolvedValueOnce([[SOURCE_FOR_NEXT_RUN]])
       .mockResolvedValueOnce([SOURCE_1_REJECTIONS])     // rejection_log
       .mockResolvedValueOnce([{ affectedRows: 1 }]);    // UPDATE agent_runs
+    installRunningLeaseFallback();
 
     await triggerAgentRun(1, 99, 'test-key', 'test-env');
     const msg1 = mockSessionsEventsSend.mock.calls[0][1].events[0].content[0].text as string;
@@ -507,6 +520,14 @@ describe('Stage 3 – Next agent run injects rejection history into agent messag
 // Stage 4: Full cycle verified end-to-end (reject → history → next run)
 // ===========================================================================
 describe('Stage 4 – Complete cycle: Reject → History built → Agent learns', () => {
+  function installRunningLeaseFallback() {
+    db.default.query.mockImplementation((sql: unknown) => (
+      typeof sql === 'string' && /SELECT status FROM agent_runs/i.test(sql)
+        ? Promise.resolve([[{ status: 'running' }]])
+        : Promise.resolve([{ affectedRows: 1 }])
+    ));
+  }
+
   beforeEach(() => {
     mockSessionsCreate.mockResolvedValue({ id: 'sess_xyz' });
     mockSessionsEventsSend.mockResolvedValue({});
@@ -548,6 +569,7 @@ describe('Stage 4 – Complete cycle: Reject → History built → Agent learns'
       .mockResolvedValueOnce([[SOURCE_FOR_NEXT_RUN]])
       .mockResolvedValueOnce([rejectionInDb])   // rejection_log query
       .mockResolvedValueOnce([{ affectedRows: 1 }]);
+    installRunningLeaseFallback();
 
     mockSessionsCreate.mockResolvedValue({
       id: 'run_after_learning', status: 'completed',

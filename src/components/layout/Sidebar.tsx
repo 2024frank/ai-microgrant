@@ -3,7 +3,7 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { signOut as firebaseSignOut } from 'firebase/auth';
 import {
   BarChart3,
@@ -66,15 +66,27 @@ export default function Sidebar({
   const [unreadCount, setUnreadCount] = useState(0);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
 
-  useEffect(() => {
-    if (!token) return;
+  const loadPendingCount = useCallback(() => {
+    if (!token) return Promise.resolve();
     fetch('/api/review/queue?limit=1', {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(response => response.ok ? response.json() : Promise.reject())
       .then(data => setPendingCount(Number(data.total) || 0))
       .catch(() => setPendingCount(null));
-  }, [token, pathname]);
+    return Promise.resolve();
+  }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+    void loadPendingCount();
+    const interval = window.setInterval(loadPendingCount, 30_000);
+    window.addEventListener('review-queue-updated', loadPendingCount);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('review-queue-updated', loadPendingCount);
+    };
+  }, [token, pathname, loadPendingCount]);
 
   useEffect(() => {
     if (!token) return;
@@ -183,21 +195,27 @@ export default function Sidebar({
 
   function renderNavItem(item: NavItem) {
     const active = isActive(item.href);
+    const badgeDescription = item.badge !== undefined
+      ? `${item.badge} ${item.badge === 1 ? 'record' : 'records'} waiting`
+      : '';
     return (
       <Link
         key={item.href}
         href={item.href}
-        className="sidebar__link"
+        className={`sidebar__link${item.badge !== undefined ? ' sidebar__link--badged' : ''}`}
         aria-current={active ? 'page' : undefined}
-        title={collapsed ? item.label : undefined}
+        title={collapsed ? `${item.label}${badgeDescription ? ` — ${badgeDescription}` : ''}` : undefined}
         onClick={onMobileClose}
       >
         {item.icon}
         <span className="sidebar__label">{item.label}</span>
         {item.badge !== undefined && (
-          <span className="sidebar__badge" aria-label={`${item.badge} pending`}>
+          <span className="sidebar__badge" aria-label={badgeDescription} title={`${item.label}: ${badgeDescription}`}>
             {item.badge > 99 ? '99+' : item.badge}
           </span>
+        )}
+        {item.badge !== undefined && (
+          <span className="sidebar__compact-queue" aria-hidden="true">Review {item.badge > 99 ? '99+' : item.badge}</span>
         )}
       </Link>
     );

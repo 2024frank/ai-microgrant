@@ -78,8 +78,9 @@ const AGENT_OUTPUT_EVENTS = [
     extendedDescription:  'Free admission. Seating is first come, first served. Doors open 30 min before.',
     sponsors:             ['Apollo Theatre', 'Oberlin College'],
     postTypeId:           [8],
-    sessions:             [{ startTime: 1748476800, endTime: 1748484000 }], // 2026-05-29 19:00–21:00 UTC
+    sessions:             [{ startTime: 2000000000, endTime: 2000007200 }],
     locationType:         'ph2',
+    display:              'all',
     location:             '19 E College St, Oberlin, OH 44074',
     placeName:            'Apollo Theatre',
     calendarSourceName:   'Apollo Theatre Oberlin',
@@ -95,8 +96,9 @@ const AGENT_OUTPUT_EVENTS = [
     description:          'Screening of an award-winning environmental documentary followed by discussion.',
     sponsors:             ['Apollo Theatre'],
     postTypeId:           [5],
-    sessions:             [{ startTime: 1748563200, endTime: 1748570400 }],
+    sessions:             [{ startTime: 2000086400, endTime: 2000093600 }],
     locationType:         'ph2',
+    display:              'all',
     location:             '19 E College St, Oberlin, OH 44074',
     placeName:            'Apollo Theatre',
     calendarSourceName:   'Apollo Theatre Oberlin',
@@ -118,7 +120,7 @@ function makeRawEvent(overrides: Record<string, any> = {}) {
     extended_description: 'Free admission. Seating is first come, first served. Doors open 30 min before.',
     sponsors:             JSON.stringify(['Apollo Theatre', 'Oberlin College']),
     post_type_ids:        JSON.stringify([8]),
-    sessions:             JSON.stringify([{ startTime: 1748476800, endTime: 1748484000 }]),
+    sessions:             JSON.stringify([{ startTime: 2000000000, endTime: 2000007200 }]),
     location_type:        'ph2',
     location:             '19 E College St, Oberlin, OH 44074',
     place_name:           'Apollo Theatre',
@@ -435,7 +437,7 @@ describe('Scenario 3 – Approve sends correct CommunityHub payload', () => {
     expect(Array.isArray(body.sponsors)).toBe(true);
     expect(body.sponsors).toContain('Apollo Theatre');
     expect(Array.isArray(body.sessions)).toBe(true);
-    expect(body.sessions[0].startTime).toBe(1748476800);
+    expect(body.sessions[0].startTime).toBe(2000000000);
     expect(Array.isArray(body.postTypeId)).toBe(true);
   });
 

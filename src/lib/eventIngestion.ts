@@ -3,6 +3,7 @@ import { getAdminContact } from './adminContact';
 import {
   type CommunityHubPayload,
   type CommunityHubPayloadIssue,
+  getCommunityHubExpirationIssue,
   validateCommunityHubPayload,
 } from './communityHubPayload';
 import { computeDedupKey } from './eventDedup';
@@ -228,6 +229,20 @@ export async function persistExtractedEvents(
         continue;
       }
 
+      const expirationIssue = getCommunityHubExpirationIssue(payload.sessions);
+      if (expirationIssue) {
+        skipped++;
+        invalid++;
+        failed++;
+        errors.push({
+          index,
+          title,
+          inserted: false,
+          issues: mergeIssues(issues, [expirationIssue]),
+        });
+        continue;
+      }
+
       const fixedFromId = parseCorrectionId(raw.fixedFromEventId);
       if (
         expectedCorrectionEventId !== undefined
@@ -319,6 +334,15 @@ export async function persistExtractedEvents(
         await (conn as any).beginTransaction();
         let originalEvent: any = null;
         if (fixedFromId) {
+          const [[activeRun]] = await conn.query(
+            `SELECT id FROM agent_runs
+             WHERE id=? AND source_id=? AND correction_event_id=? AND status='running'
+             LIMIT 1 FOR UPDATE`,
+            [runId, source.id, fixedFromId],
+          ) as any;
+          if (!activeRun) {
+            throw new Error('correction run lease is no longer active');
+          }
           const [[row]] = await conn.query(
             `SELECT * FROM needs_fix
              WHERE raw_event_id = ? AND source_id = ?
@@ -327,7 +351,11 @@ export async function persistExtractedEvents(
           ) as any;
           const [[original]] = await conn.query(
             `SELECT * FROM raw_events
-             WHERE id = ? AND source_id = ? AND status = 'pending_fix'
+             WHERE id = ? AND source_id = ?
+               AND (
+                 status = 'pending_fix'
+                 OR (status = 'rejected' AND sent_for_correction = 1)
+               )
              LIMIT 1 FOR UPDATE`,
             [fixedFromId, source.id],
           ) as any;
@@ -414,7 +442,11 @@ export async function persistExtractedEvents(
           const [supersede] = await conn.query(
             `UPDATE raw_events
              SET status = 'superseded', superseded_by_id = ?
-             WHERE id = ? AND status = 'pending_fix'`,
+             WHERE id = ?
+               AND (
+                 status = 'pending_fix'
+                 OR (status = 'rejected' AND sent_for_correction = 1)
+               )`,
             [eventId, fixedFromId],
           ) as any;
           if (supersede.affectedRows !== 1) {
@@ -476,7 +508,10 @@ export async function persistExtractedEvents(
               JSON.stringify(originalEvent ?? {}),
             ],
           );
-          await conn.query('DELETE FROM needs_fix WHERE raw_event_id = ?', [fixedFromId]);
+          await conn.query(
+            'DELETE FROM needs_fix WHERE raw_event_id = ?',
+            [fixedFromId],
+          );
           if (fixEntry.sent_by_user_id) {
             const parts = [
               fixEntry.correction_notes ? `You asked: ${fixEntry.correction_notes}` : '',

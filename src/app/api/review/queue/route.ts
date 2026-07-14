@@ -64,7 +64,7 @@ export async function GET(req: NextRequest) {
             s.name AS source_name, s.slug AS source_slug
      FROM raw_events re
      JOIN sources s ON re.source_id = s.id
-     WHERE re.status IN ('pending','pending_fix') ${scopeClause} ${extraClause}
+     WHERE re.status = 'pending' ${scopeClause} ${extraClause}
      ORDER BY ${orderBy}
      LIMIT ? OFFSET ?`,
     [...scopeParams, ...params, limit, page * limit]
@@ -72,7 +72,7 @@ export async function GET(req: NextRequest) {
 
   const [[{ total }]] = await pool.query(
     `SELECT COUNT(*) AS total FROM raw_events re
-     WHERE re.status IN ('pending','pending_fix') ${scopeClause} ${extraClause}`,
+     WHERE re.status = 'pending' ${scopeClause} ${extraClause}`,
     [...scopeParams, ...params]
   ) as any;
 
@@ -80,7 +80,7 @@ export async function GET(req: NextRequest) {
   const [sources] = await pool.query(
     `SELECT DISTINCT s.id, s.name FROM raw_events re
      JOIN sources s ON re.source_id = s.id
-     WHERE re.status IN ('pending','pending_fix') ${scopeClause}
+     WHERE re.status = 'pending' ${scopeClause}
      ORDER BY s.name ASC`,
     scopeParams,
   ) as any;

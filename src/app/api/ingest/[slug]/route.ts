@@ -85,7 +85,7 @@ async function sendScopedReviewNotifications(
                 SUM(re.source_id = ?) AS source_pending,
                 MIN(re.created_at) AS oldest_created_at
          FROM raw_events re
-         WHERE re.status IN ('pending','pending_fix') ${reviewerScope}`,
+         WHERE re.status = 'pending' ${reviewerScope}`,
         params,
       ) as any;
 
@@ -192,6 +192,16 @@ export async function POST(
       { status: 422 }
     );
   }
+  if (events.some(event => (
+    event !== null
+    && typeof event === 'object'
+    && Object.hasOwn(event, 'fixedFromEventId')
+  ))) {
+    return Response.json(
+      { error: 'Correction output must return through its managed agent run' },
+      { status: 409 },
+    );
+  }
 
   // Agents invoked by the scheduler may POST their result here while their
   // lease is still running. Reuse that run instead of trying to create a
@@ -202,18 +212,20 @@ export async function POST(
     expectedCorrectionEventId,
   } = await claimIngestRun(source.id, agentCount);
 
-  if (events.length === 0) {
-    if (expectedCorrectionEventId !== undefined) {
-      await bestEffortQuery(
-        `UPDATE agent_runs SET error_log=JSON_ARRAY(?)
-         WHERE id=? AND status='running'`,
-        ['A correction direct-post must contain exactly one event', runId],
-      );
-      return Response.json({
-        error: 'A correction run must submit exactly one event',
+  // Correction agents return JSON to agentRunner, which carries a run-scoped
+  // lease into the persistence transaction. The shared ingest secret is not a
+  // safe identity for attaching a late direct POST to a correction retry.
+  if (expectedCorrectionEventId !== undefined) {
+    return Response.json(
+      {
+        error: 'Direct posting is disabled while a correction run is active',
         run_id: runId,
-      }, { status: 422 });
-    }
+      },
+      { status: 409 },
+    );
+  }
+
+  if (events.length === 0) {
     await pool.query(
       `UPDATE agent_runs SET status='completed', finished_at=NOW(),
        events_found=0, events_extracted=0
@@ -271,7 +283,7 @@ export async function POST(
         agentCount,
         inserted,
         result.duplicates,
-        result.failed,
+        result.invalid,
         result.errors.length ? JSON.stringify(result.errors) : null,
         runId,
       ],
@@ -285,7 +297,7 @@ export async function POST(
         agentCount,
         inserted,
         result.duplicates,
-        result.failed,
+        result.invalid,
         result.errors.length ? JSON.stringify(result.errors) : null,
         runId,
       ],

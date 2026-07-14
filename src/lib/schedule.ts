@@ -134,6 +134,79 @@ export function parseCronExpression(expression: unknown): ParsedCronExpression |
   return result.valid ? result.schedule : null;
 }
 
+const DAY_NAMES = [
+  'Sunday',
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+] as const;
+
+function formatWallTime(hour: number, minute: number): string {
+  const suffix = hour >= 12 ? 'PM' : 'AM';
+  const displayHour = hour % 12 || 12;
+  return `${displayHour}:${String(minute).padStart(2, '0')} ${suffix}`;
+}
+
+function joinDayNames(days: readonly number[]): string {
+  const labels = days.map(day => DAY_NAMES[day]);
+  if (labels.length === 1) return labels[0];
+  if (labels.length === 2) return `${labels[0]} and ${labels[1]}`;
+  return `${labels.slice(0, -1).join(', ')}, and ${labels.at(-1)}`;
+}
+
+/**
+ * Turn the common schedules supported by the operations UI into plain English.
+ * Unusual but valid expressions remain editable and are labelled as custom
+ * instead of presenting operators that non-technical operators must decode.
+ */
+export function describeCronExpression(expression: unknown): string {
+  const result = validateCronExpression(expression);
+  if (!result.valid) return 'Invalid schedule';
+
+  const schedule = result.schedule;
+  const [, hourToken, dayOfMonthToken, monthToken, dayOfWeekToken] =
+    schedule.expression.split(' ');
+  const isEveryCalendarDay = dayOfMonthToken === '*' && monthToken === '*';
+  const minutes = [...schedule.minute.values];
+  const hours = [...schedule.hour.values];
+
+  if (isEveryCalendarDay && dayOfWeekToken === '*' && minutes.length === 1) {
+    if (hourToken === '*') {
+      return minutes[0] === 0 ? 'Every hour' : `Every hour at :${String(minutes[0]).padStart(2, '0')}`;
+    }
+    const hourStep = /^\*\/(\d+)$/.exec(hourToken);
+    if (hourStep) {
+      const interval = Number(hourStep[1]);
+      if (interval > 24 || 24 % interval !== 0) return 'Custom schedule';
+      return `Every ${interval} ${interval === 1 ? 'hour' : 'hours'}${minutes[0] ? ` at :${String(minutes[0]).padStart(2, '0')}` : ''}`;
+    }
+  }
+
+  if (minutes.length !== 1 || hours.length !== 1 || monthToken !== '*') {
+    return 'Custom schedule';
+  }
+
+  const time = formatWallTime(hours[0], minutes[0]);
+  if (dayOfMonthToken === '*' && dayOfWeekToken === '*') {
+    return `Every day at ${time}`;
+  }
+  if (dayOfMonthToken === '*' && dayOfWeekToken === '1-5') {
+    return `Weekdays at ${time}`;
+  }
+  if (dayOfMonthToken === '*' && !schedule.dayOfWeek.wildcard) {
+    const days = [...schedule.dayOfWeek.values].sort((left, right) => left - right);
+    return `Every ${joinDayNames(days)} at ${time}`;
+  }
+  if (dayOfWeekToken === '*' && schedule.dayOfMonth.values.size === 1) {
+    return `Monthly on day ${[...schedule.dayOfMonth.values][0]} at ${time}`;
+  }
+
+  return 'Custom schedule';
+}
+
 function getFormatter(timeZone: string): Intl.DateTimeFormat {
   let formatter = formatterCache.get(timeZone);
   if (!formatter) {
@@ -311,19 +384,26 @@ function exactInstantsForWallTime(
 }
 
 /**
- * Return the latest scheduled slot in the dispatcher's current hourly window.
- * An hourly dispatcher coalesces expressions that select multiple minutes into
- * one source run, using the latest matching minute as the idempotency slot.
+ * Return the latest scheduled slot in a bounded dispatcher lookback window.
+ * The caller can widen the default hourly window to recover from a delayed
+ * external scheduler; the schedule slot remains the idempotency key.
  */
 export function getDueScheduleSlot(
   expression: unknown,
   now: Date = new Date(),
   timeZone = SCHEDULE_TIME_ZONE,
+  lookbackMinutes = 60,
 ): Date | null {
   const schedule = parseCronExpression(expression);
-  if (!schedule || Number.isNaN(now.getTime())) return null;
+  const boundedLookback = Math.floor(lookbackMinutes);
+  if (
+    !schedule
+    || Number.isNaN(now.getTime())
+    || !Number.isFinite(boundedLookback)
+    || boundedLookback < 1
+  ) return null;
   const cursor = floorToMinute(now);
-  for (let offset = 0; offset < 60; offset++) {
+  for (let offset = 0; offset < boundedLookback; offset++) {
     const candidate = new Date(cursor.getTime() - offset * 60_000);
     if (scheduleMatchesDate(schedule, candidate, timeZone)) return candidate;
   }

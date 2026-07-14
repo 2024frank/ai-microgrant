@@ -114,8 +114,15 @@ export async function GET(req: NextRequest) {
       try {
         const [countResult, runResult] = await Promise.all([
           pool.query(
-            `SELECT COUNT(*) AS total_events, SUM(status='approved') AS total_approved,
+            `SELECT COUNT(*) AS total_events,
+                    SUM(status='approved') AS total_approved,
+                    SUM(status='pending') AS review_queue,
                     SUM(status='pending') AS pending_review,
+                    SUM(status='pending_fix' OR (status='rejected' AND sent_for_correction=1)) AS pending_fix,
+                    SUM(status='rejected' AND COALESCE(sent_for_correction, 0)=0) AS total_rejected,
+                    SUM(status='resubmitted') AS total_resubmitted,
+                    SUM(status='publishing') AS total_publishing,
+                    SUM(status='superseded') AS total_superseded,
                     SUM(JSON_LENGTH(COALESCE(validation_errors, JSON_ARRAY())) > 0) AS validation_issues
              FROM raw_events WHERE source_id = ?`,
             [s.id],
@@ -173,7 +180,13 @@ export async function GET(req: NextRequest) {
           ...s,
           total_events: 0,
           total_approved: 0,
+          review_queue: 0,
           pending_review: 0,
+          pending_fix: 0,
+          total_rejected: 0,
+          total_resubmitted: 0,
+          total_publishing: 0,
+          total_superseded: 0,
           validation_issues: 0,
           schedule_valid: schedule.valid,
           schedule_error: schedule.valid ? null : schedule.error,

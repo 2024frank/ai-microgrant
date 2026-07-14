@@ -27,10 +27,17 @@ import AppShell from '@/components/layout/AppShell';
 import EventTypeBadge from '@/components/EventTypeBadge';
 import { useAuth } from '@/hooks/useAuth';
 import { getTimezoneLabel } from '@/lib/timezone';
-import { OBERLIN_POST_TYPE_IDS, OBERLIN_POST_TYPE_LABELS } from '@/lib/communityHubPayload';
+import {
+  COMMUNITY_HUB_DISPLAY_TYPES,
+  COMMUNITY_HUB_LOCATION_TYPES,
+  OBERLIN_POST_TYPE_IDS,
+  OBERLIN_POST_TYPE_LABELS,
+} from '@/lib/communityHubPayload';
+import { EVENT_TYPES, type EventType } from '@/lib/eventTypes';
 import { validatePublicHttpUrl } from '@/lib/publicHttpUrl';
+import { REJECTION_REASONS } from '@/lib/rejectionReasons';
 
-type PostKind = 'ot' | 'an' | 'jp';
+type PostKind = EventType;
 type Session = { startTime: number; endTime: number };
 type ActionButton = { title: string; link: string };
 
@@ -41,11 +48,15 @@ interface ReadinessCheck {
   pass: boolean;
 }
 
-const POST_KINDS: Array<{ value: PostKind; label: string; description: string }> = [
-  { value: 'ot', label: 'Event', description: 'A scheduled public event' },
-  { value: 'an', label: 'Announcement', description: 'A time-bound public notice' },
-  { value: 'jp', label: 'Job', description: 'A public employment post' },
-];
+const POST_KIND_DESCRIPTIONS: Record<PostKind, string> = {
+  ot: 'A scheduled public event',
+  an: 'A time-bound public notice',
+  jp: 'A public employment post',
+};
+const POST_KINDS = EVENT_TYPES.map(kind => ({
+  ...kind,
+  description: POST_KIND_DESCRIPTIONS[kind.value],
+}));
 
 const POST_CATEGORIES = OBERLIN_POST_TYPE_IDS.map(id => ({
   id,
@@ -53,19 +64,27 @@ const POST_CATEGORIES = OBERLIN_POST_TYPE_IDS.map(id => ({
 }));
 const DOCUMENTED_CATEGORY_IDS = new Set<number>(POST_CATEGORIES.map(category => category.id));
 
-const LOCATION_OPTIONS = [
-  { value: 'ph2', label: 'In person' },
-  { value: 'on', label: 'Online' },
-  { value: 'bo', label: 'Hybrid' },
-  { value: 'ne', label: 'No location' },
-];
+const LOCATION_LABELS = {
+  ph2: 'In person',
+  on: 'Online',
+  bo: 'Hybrid',
+  ne: 'No location',
+} as const;
+const LOCATION_OPTIONS = COMMUNITY_HUB_LOCATION_TYPES.map(value => ({
+  value,
+  label: LOCATION_LABELS[value],
+}));
 
-const DISPLAY_OPTIONS = [
-  { value: 'all', label: 'All public screens' },
-  { value: 'ps', label: 'School screens' },
-  { value: 'sps', label: 'School + public' },
-  { value: 'ss', label: 'Specific screens' },
-];
+const DISPLAY_LABELS = {
+  all: 'All public screens',
+  ps: 'School screens',
+  sps: 'School + public',
+  ss: 'Specific screens',
+} as const;
+const DISPLAY_OPTIONS = COMMUNITY_HUB_DISPLAY_TYPES.map(value => ({
+  value,
+  label: DISPLAY_LABELS[value],
+}));
 
 const GEO_OPTIONS = [
   { value: 'hyper_local', label: 'Hyper-local' },
@@ -74,18 +93,9 @@ const GEO_OPTIONS = [
   { value: 'regional', label: 'Regional' },
 ];
 
-const REASON_CODES = [
-  { code: 'wrong_audience', label: 'Wrong audience (staff or students only)' },
-  { code: 'bad_date_parse', label: 'Date or time extracted incorrectly' },
-  { code: 'duplicate_missed', label: 'Duplicate already in CommunityHub' },
-  { code: 'description_hallucinated', label: 'Description contains invented details' },
-  { code: 'missing_fields', label: 'Required fields are missing' },
-  { code: 'wrong_geo_scope', label: 'Geographic scope is wrong' },
-  { code: 'not_public_event', label: 'Private or invitation-only' },
-  { code: 'wrong_post_type', label: 'Post kind or category is wrong' },
-  { code: 'bad_location', label: 'Location is missing or wrong' },
-  { code: 'other', label: 'Other' },
-];
+const REASON_LABELS = Object.fromEntries(
+  REJECTION_REASONS.map(reason => [reason.code, reason.label]),
+) as Record<string, string>;
 
 function parseJson<T>(value: unknown, fallback: T): T {
   if (value === null || value === undefined || value === '') return fallback;
@@ -107,9 +117,10 @@ function normalizeStringArray(value: unknown): string[] {
 function normalizeNumberArray(value: unknown): number[] {
   const parsed = parseJson<unknown>(value, []);
   if (!Array.isArray(parsed)) return [];
-  return parsed
+  return [...new Set(parsed
     .map(item => Number(item))
-    .filter(item => Number.isInteger(item) && item > 0);
+    .filter(item => Number.isInteger(item) && item > 0))]
+    .sort((a, b) => a - b);
 }
 
 function normalizeSessions(value: unknown): Session[] {
@@ -191,10 +202,17 @@ export default function ReviewEventPage() {
   const [reasons, setReasons] = useState<string[]>([]);
   const [reviewNote, setReviewNote] = useState('');
   const [correctionNote, setCorrectionNote] = useState('');
+  const [sponsorDraft, setSponsorDraft] = useState('');
+  const [screenIdsDraft, setScreenIdsDraft] = useState('');
+  const [reviewNowSeconds, setReviewNowSeconds] = useState(0);
   const [timezoneLabel] = useState(getTimezoneLabel);
 
   useEffect(() => {
     reviewStartedAt.current = Date.now();
+    const refreshNow = () => setReviewNowSeconds(Math.floor(Date.now() / 1000));
+    refreshNow();
+    const timer = window.setInterval(refreshNow, 60_000);
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -222,7 +240,10 @@ export default function ReviewEventPage() {
         return payload;
       })
       .then(payload => {
-        if (!cancelled) setEvent(payload);
+        if (!cancelled) {
+          setEvent(payload);
+          setScreenIdsDraft(normalizeNumberArray(payload.screen_ids).join(', '));
+        }
       })
       .catch(error => {
         if (!cancelled) setLoadError(error instanceof Error ? error.message : 'This record could not be loaded.');
@@ -248,12 +269,18 @@ export default function ReviewEventPage() {
     window.setTimeout(() => setToast(null), 4200);
   }
 
+  const isRejectedRecord = event?.status === 'rejected';
+  const isCorrectionInProgress = event?.status === 'pending_fix'
+    || (isRejectedRecord && (event?.sent_for_correction === true || Number(event?.sent_for_correction) === 1));
+  const isRejected = isRejectedRecord && !isCorrectionInProgress;
+  const isReadOnly = isRejected || isCorrectionInProgress;
   const postKind = String(field('event_type', ''));
   const title = String(field('title', ''));
   const description = String(field('description', ''));
   const extendedDescription = String(field('extended_description', ''));
   const locationType = String(field('location_type', ''));
   const location = String(field('location', ''));
+  const placeId = String(field('place_id', ''));
   const urlLink = String(field('url_link', ''));
   const contactEmail = String(field('contact_email', ''));
   const phone = String(field('phone', ''));
@@ -266,15 +293,24 @@ export default function ReviewEventPage() {
   const postTypeIds = normalizeNumberArray(field('post_type_ids', []));
   const screenIds = normalizeNumberArray(field('screen_ids', []));
   const buttons = normalizeButtons(field('buttons', []));
+  const calendarSourceName = String(field('calendar_source_name', ''));
+  const calendarSourceUrl = String(field('calendar_source_url', ''));
+  const ingestedPostUrl = String(field('ingested_post_url', ''));
   const ingestionValidationIssues = parseJson<Array<{ path?: string; message?: string }>>(
     event?.validation_errors,
     [],
   );
+  const rejectionReasonCodes = normalizeStringArray(event?.rejection_reason_codes);
+  const rejectionReviewerNote = String(event?.rejection_reviewer_note ?? '').trim();
   const unsupportedCategoryIds = postTypeIds.filter(id => !DOCUMENTED_CATEGORY_IDS.has(id));
-  const addressChangedWithPlaceId = ['ph2', 'bo'].includes(locationType)
-    && edits.location !== undefined
-    && String(edits.location).trim() !== String(event?.location || '').trim()
-    && Boolean(event?.place_id);
+  const usesPhysicalLocation = ['ph2', 'bo'].includes(locationType);
+  const placeIdNeedsClear = Boolean(placeId) && (
+    !usesPhysicalLocation
+    || (
+      edits.location !== undefined
+      && String(edits.location).trim() !== String(event?.location || '').trim()
+    )
+  );
 
   const readiness: ReadinessCheck[] = (() => {
     const validSessions = sessions.length > 0 && sessions.every(session => (
@@ -284,6 +320,9 @@ export default function ReviewEventPage() {
       && Number(session.endTime) <= 9_999_999_999
       && Number(session.endTime) >= Number(session.startTime)
     ));
+    const hasCurrentSession = reviewNowSeconds > 0 && validSessions && sessions.some(session => (
+      Number(session.endTime) >= reviewNowSeconds
+    ));
     const physicalReady = !['ph2', 'bo'].includes(locationType) || location.trim().length > 0;
     const onlineReady = !['on', 'bo'].includes(locationType) || validHttpUrl(urlLink);
     const displayReady = ['all', 'ps', 'sps', 'ss'].includes(display) && (display !== 'ss' || screenIds.length > 0);
@@ -291,8 +330,8 @@ export default function ReviewEventPage() {
       && (!website || validHttpUrl(website))
       && (!imageUrl || Boolean(safeImageUrl))
       && (!phone || validPhone(phone));
-    const sourceLinksReady = (!event?.calendar_source_url || validHttpUrl(String(event.calendar_source_url)))
-      && (!event?.ingested_post_url || validHttpUrl(String(event.ingested_post_url)));
+    const sourceLinksReady = (!calendarSourceUrl || validHttpUrl(calendarSourceUrl))
+      && (!ingestedPostUrl || validHttpUrl(ingestedPostUrl));
     const buttonsReady = buttons.every(button => button.title.trim().length > 0 && validHttpUrl(button.link));
 
     return [
@@ -339,8 +378,12 @@ export default function ReviewEventPage() {
       {
         id: 'sessions',
         label: 'Sessions',
-        detail: validSessions ? `${sessions.length} valid session${sessions.length === 1 ? '' : 's'}.` : 'Add a valid start and end time; end cannot precede start.',
-        pass: validSessions,
+        detail: !validSessions
+          ? 'Add a valid start and end time; end cannot precede start.'
+          : hasCurrentSession
+            ? `${sessions.length} valid session${sessions.length === 1 ? '' : 's'}; at least one is ongoing or upcoming.`
+            : 'Every session has ended. Reject or correct this draft before publishing.',
+        pass: validSessions && hasCurrentSession,
       },
       {
         id: 'location',
@@ -353,10 +396,10 @@ export default function ReviewEventPage() {
       {
         id: 'place-id',
         label: 'Place identity',
-        detail: addressChangedWithPlaceId
-          ? 'The address changed but the stored Google place ID cannot be updated by this form. Revert the address or resolve the place ID upstream.'
+        detail: placeIdNeedsClear
+          ? 'The stored place ID no longer matches the selected location. Clear it before publishing.'
           : 'The stored place identity is consistent with this draft.',
-        pass: !addressChangedWithPlaceId,
+        pass: !placeIdNeedsClear,
       },
       {
         id: 'display',
@@ -395,7 +438,7 @@ export default function ReviewEventPage() {
       phone: phone || '',
       website: website || '',
       urlLink: urlLink || '',
-      placeId: String(event?.place_id || ''),
+      placeId: usesPhysicalLocation ? placeId : '',
       title,
       sponsors,
       postTypeId: postTypeIds,
@@ -404,10 +447,10 @@ export default function ReviewEventPage() {
       extendedDescription: extendedDescription || undefined,
       locationType: locationType || null,
       display: display || null,
-      screensIds: screenIds,
-      calendarSourceName: event?.calendar_source_name || '',
-      calendarSourceUrl: event?.calendar_source_url || '',
-      ingestedPostUrl: event?.ingested_post_url || '',
+      screensIds: display === 'ss' ? screenIds : [],
+      calendarSourceName,
+      calendarSourceUrl,
+      ingestedPostUrl,
       public: '1',
     };
     if (contactEmail) payload.contactEmail = contactEmail;
@@ -430,6 +473,19 @@ export default function ReviewEventPage() {
     setField('buttons', buttons.map((button, buttonIndex) => (
       buttonIndex === index ? { ...button, [key]: value } : button
     )));
+  }
+
+  function updateSponsor(index: number, value: string) {
+    setField('sponsors', sponsors.map((sponsor, sponsorIndex) => (
+      sponsorIndex === index ? value : sponsor
+    )));
+  }
+
+  function addSponsor() {
+    const nextSponsor = sponsorDraft.trim();
+    if (!nextSponsor) return;
+    setField('sponsors', [...sponsors, nextSponsor]);
+    setSponsorDraft('');
   }
 
   async function saveEdits() {
@@ -476,6 +532,7 @@ export default function ReviewEventPage() {
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || 'CommunityHub did not accept this payload.');
       showToast('Published to CommunityHub.');
+      window.dispatchEvent(new Event('review-queue-updated'));
       window.setTimeout(() => router.push('/reviewer/queue'), 900);
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'This record could not be published.', true);
@@ -502,6 +559,7 @@ export default function ReviewEventPage() {
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || 'This record could not be rejected.');
       showToast('Record rejected and reviewer feedback saved.');
+      window.dispatchEvent(new Event('review-queue-updated'));
       window.setTimeout(() => router.push('/reviewer/queue'), 800);
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'This record could not be rejected.', true);
@@ -523,7 +581,10 @@ export default function ReviewEventPage() {
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || 'The correction request could not be queued.');
-      showToast('Correction attempt queued for another review pass.');
+      showToast(isRejected
+        ? 'Correction started. A new draft will return to the review queue.'
+        : 'Correction attempt queued for another review pass.');
+      window.dispatchEvent(new Event('review-queue-updated'));
       window.setTimeout(() => router.push('/reviewer/queue'), 900);
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'The correction request could not be queued.', true);
@@ -553,22 +614,42 @@ export default function ReviewEventPage() {
           <>
             <header className="studio-header">
               <div>
-                <Link href="/reviewer/queue" className="studio-back"><ArrowLeft size={14} /> Back to queue</Link>
+                <Link href={isRejectedRecord ? '/events/rejected' : '/reviewer/queue'} className="studio-back"><ArrowLeft size={14} /> {isRejectedRecord ? 'Back to rejected' : 'Back to queue'}</Link>
                 <h1>Review Studio</h1>
-                <p>Compare the extracted record, correct the draft, and inspect the exact outgoing payload before publishing.</p>
+                <p>{isRejected
+                  ? 'Inspect the archived rejection and request a source-backed corrected draft for a new review pass.'
+                  : isCorrectionInProgress
+                    ? 'This original is locked while the correction workflow prepares a replacement draft.'
+                    : 'Compare the extracted record, correct the draft, and inspect the exact outgoing payload before publishing.'}</p>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <EventTypeBadge value={postKind} />
-                <span className={payloadReady ? 'badge badge-green' : 'badge badge-red'}>
-                  {payloadReady ? <CheckCircle2 size={12} /> : <AlertTriangle size={12} />}
-                  {payloadReady ? 'Ready to publish' : `${failedChecks.length} blocker${failedChecks.length === 1 ? '' : 's'}`}
+                <span className={isRejected ? 'badge badge-red' : isCorrectionInProgress ? 'badge badge-amber' : payloadReady ? 'badge badge-green' : 'badge badge-red'}>
+                  {isRejected ? <XCircle size={12} /> : isCorrectionInProgress ? <RefreshCcw size={12} /> : payloadReady ? <CheckCircle2 size={12} /> : <AlertTriangle size={12} />}
+                  {isRejected ? 'Rejected archive' : isCorrectionInProgress ? 'Correction running' : payloadReady ? 'Ready to publish' : `${failedChecks.length} blocker${failedChecks.length === 1 ? '' : 's'}`}
                 </span>
               </div>
             </header>
 
+            {isRejectedRecord && (
+              <section className="alert alert--warning" aria-label="Latest rejection feedback" style={{ marginBottom: 16, alignItems: 'flex-start' }}>
+                <XCircle size={17} aria-hidden="true" />
+                <div>
+                  <strong>Why this record was rejected</strong>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                    {rejectionReasonCodes.length > 0
+                      ? rejectionReasonCodes.map(code => <span className="badge badge-red" key={code}>{REASON_LABELS[code] || code}</span>)
+                      : <span>No structured reason was recorded.</span>}
+                  </div>
+                  {rejectionReviewerNote && <p style={{ margin: '8px 0 0' }}>{rejectionReviewerNote}</p>}
+                </div>
+              </section>
+            )}
+
             <div className="studio-grid">
               <div>
                 <form className="studio-form" onSubmit={event => event.preventDefault()}>
+                  <fieldset className="studio-form__fieldset" disabled={isReadOnly} aria-label={isRejected ? 'Archived rejected payload' : isCorrectionInProgress ? 'Payload locked during correction' : 'Editable review payload'}>
                   <StudioSection title="Post identity" hint="Post kind and categories are separate CommunityHub fields.">
                     <fieldset className="fieldset">
                       <legend className="fieldset__legend">Post kind · eventType</legend>
@@ -606,18 +687,49 @@ export default function ReviewEventPage() {
                       <textarea id="record-extended-description" className="input" aria-invalid={extendedDescription.length > 1000} maxLength={1000} rows={6} value={extendedDescription} onChange={event => setField('extended_description', event.target.value)} />
                     </div>
 
-                    <div className="field">
-                      <label className="field__label" htmlFor="record-sponsors">Sponsors · minimum 1</label>
-                      <input
-                        id="record-sponsors"
-                        className="input"
-                        aria-invalid={!sponsors.length}
-                        value={sponsors.join(', ')}
-                        onChange={event => setField('sponsors', event.target.value.split(',').map(value => value.trim()).filter(Boolean))}
-                        placeholder="Organization One, Organization Two"
-                      />
-                      <span className="field__hint">Separate multiple sponsors with commas.</span>
-                    </div>
+                    <fieldset className="fieldset">
+                      <legend className="fieldset__legend">Sponsors · minimum 1</legend>
+                      <div className="studio-list-editor">
+                        {sponsors.map((sponsor, index) => (
+                          <div className="studio-list-editor__row" key={index}>
+                            <label className="sr-only" htmlFor={`record-sponsor-${index}`}>Sponsor {index + 1}</label>
+                            <input
+                              id={`record-sponsor-${index}`}
+                              className="input"
+                              value={sponsor}
+                              onChange={event => updateSponsor(index, event.target.value)}
+                            />
+                            <button
+                              type="button"
+                              className="icon-btn"
+                              aria-label={`Remove sponsor ${sponsor}`}
+                              onClick={() => setField('sponsors', sponsors.filter((_, sponsorIndex) => sponsorIndex !== index))}
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          </div>
+                        ))}
+                        <div className="studio-list-editor__row">
+                          <label className="sr-only" htmlFor="record-sponsor-new">Add sponsor</label>
+                          <input
+                            id="record-sponsor-new"
+                            className="input"
+                            value={sponsorDraft}
+                            onChange={event => setSponsorDraft(event.target.value)}
+                            onKeyDown={event => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault();
+                                addSponsor();
+                              }
+                            }}
+                            placeholder="Organization or host named by the source"
+                          />
+                          <button type="button" className="btn-secondary" onClick={addSponsor} disabled={!sponsorDraft.trim()}><Plus size={14} /> Add</button>
+                        </div>
+                      </div>
+                      {!sponsors.length && <div className="field__error" style={{ marginTop: 8 }}>Add at least one sponsor stated by the source.</div>}
+                      <span className="field__hint">Each sponsor is stored as a separate payload value; commas inside organization names are preserved.</span>
+                    </fieldset>
                   </StudioSection>
 
                   <StudioSection title="Schedule" hint={`All times shown in ${timezoneLabel}.`}>
@@ -643,7 +755,18 @@ export default function ReviewEventPage() {
                       <legend className="fieldset__legend">Location type</legend>
                       <div className="segmented">
                         {LOCATION_OPTIONS.map(option => (
-                          <button type="button" className="segment" aria-pressed={locationType === option.value} key={option.value} onClick={() => setField('location_type', option.value)}>{option.label}</button>
+                          <button
+                            type="button"
+                            className="segment"
+                            aria-pressed={locationType === option.value}
+                            key={option.value}
+                            onClick={() => {
+                              setField('location_type', option.value);
+                              if (!['ph2', 'bo'].includes(option.value) && placeId) setField('place_id', '');
+                            }}
+                          >
+                            {option.label}
+                          </button>
                         ))}
                       </div>
                     </fieldset>
@@ -669,6 +792,18 @@ export default function ReviewEventPage() {
                         <input id="record-room" className="input" value={String(field('room_num', ''))} onChange={event => setField('room_num', event.target.value)} />
                       </div>
                     </div>
+                    {placeId && (
+                      <div className={placeIdNeedsClear ? 'alert alert--error' : 'alert alert--info'}>
+                        {placeIdNeedsClear ? <AlertTriangle size={16} /> : <MapPin size={16} />}
+                        <span>
+                          <strong>Stored map place ID</strong><br />
+                          {placeIdNeedsClear
+                            ? 'The address or location type changed. Clear the stale place ID before publishing.'
+                            : 'Keep this ID only while it still refers to the selected address.'}
+                        </span>
+                        <button type="button" className="btn-secondary" style={{ marginLeft: 'auto' }} onClick={() => setField('place_id', '')}>Clear place ID</button>
+                      </div>
+                    )}
                   </StudioSection>
 
                   <StudioSection title="Categories and distribution" hint="Categories are postTypeId values; they do not change the post kind.">
@@ -708,11 +843,31 @@ export default function ReviewEventPage() {
                       </div>
                     </fieldset>
                     {display === 'ss' && (
-                      screenIds.length ? (
-                        <div className="alert alert--info"><ShieldCheck size={16} /> Existing screen IDs: {screenIds.join(', ')}. Screen assignment is managed by ingestion configuration.</div>
-                      ) : (
-                        <div className="alert alert--error"><AlertTriangle size={16} /> No screen IDs were ingested. Choose another distribution or correct the source configuration before publishing.</div>
-                      )
+                      <div className="field">
+                        <label className="field__label" htmlFor="record-screen-ids">Specific screen IDs · minimum 1</label>
+                        <input
+                          id="record-screen-ids"
+                          className="input tnum"
+                          inputMode="numeric"
+                          aria-invalid={!screenIds.length}
+                          value={screenIdsDraft}
+                          onChange={event => {
+                            const draft = event.target.value;
+                            setScreenIdsDraft(draft);
+                            setField(
+                              'screen_ids',
+                              [...new Set(draft
+                                .split(/[\s,]+/)
+                                .map(value => Number(value))
+                                .filter(value => Number.isSafeInteger(value) && value > 0))],
+                            );
+                          }}
+                          onBlur={() => setScreenIdsDraft(screenIds.join(', '))}
+                          placeholder="12, 18, 25"
+                        />
+                        <span className="field__hint">Enter existing CommunityHub screen IDs separated by commas.</span>
+                        {!screenIds.length && <div className="field__error">Specific-screen distribution requires at least one screen ID.</div>}
+                      </div>
                     )}
 
                     <fieldset className="fieldset">
@@ -748,6 +903,22 @@ export default function ReviewEventPage() {
                     </div>
                   </StudioSection>
 
+                  <StudioSection title="Source attribution" hint="These values identify the public source behind the extracted record.">
+                    <div className="field">
+                      <label className="field__label" htmlFor="record-source-name">Calendar source name</label>
+                      <input id="record-source-name" className="input" maxLength={120} value={calendarSourceName} onChange={event => setField('calendar_source_name', event.target.value)} placeholder="Publishing organization" />
+                    </div>
+                    <div className="field">
+                      <label className="field__label" htmlFor="record-source-url">Calendar source URL</label>
+                      <input id="record-source-url" className="input" type="url" aria-invalid={Boolean(calendarSourceUrl && !validHttpUrl(calendarSourceUrl))} value={calendarSourceUrl} onChange={event => setField('calendar_source_url', event.target.value)} placeholder="https://…" />
+                      <span className="field__hint">Use the exact event page when one exists, rather than a generic homepage.</span>
+                    </div>
+                    <div className="field">
+                      <label className="field__label" htmlFor="record-ingested-url">Reviewer record URL · managed by this application</label>
+                      <input id="record-ingested-url" className="input" type="url" value={ingestedPostUrl} readOnly />
+                    </div>
+                  </StudioSection>
+
                   <StudioSection title="Action buttons" hint="Every supplied button needs a label and a valid http(s) URL.">
                     {buttons.map((button, index) => (
                       <div className="studio-button-row" key={index}>
@@ -764,20 +935,32 @@ export default function ReviewEventPage() {
                     ))}
                     <button type="button" className="btn-secondary" style={{ width: 'fit-content' }} onClick={() => setField('buttons', [...buttons, { title: '', link: '' }])}><Plus size={14} /> Add button</button>
                   </StudioSection>
+                  </fieldset>
                 </form>
 
                 <div className="studio-actions" aria-label="Review actions">
-                  <div className="studio-actions__status">
-                    {hasEdits
-                      ? 'Draft fields changed. Save feedback before rejecting or requesting a correction; publishing can include the current draft directly.'
-                      : payloadReady
-                      ? 'All documented payload checks pass. Publishing submits immediately to CommunityHub.'
-                      : `${failedChecks.length} documented requirement${failedChecks.length === 1 ? '' : 's'} must be fixed before publishing.`}
-                  </div>
-                  <button type="button" className="btn-secondary" onClick={saveEdits} disabled={!hasEdits || saving || submitting}><Save size={14} /> {saving ? 'Saving…' : 'Save feedback'}</button>
-                  {event.source_slug !== 'fixed-events' && <button type="button" className="btn-warning" onClick={() => setCorrectionOpen(true)} disabled={submitting || hasEdits} title={hasEdits ? 'Save or revert draft edits first' : undefined}><RefreshCcw size={14} /> Request correction</button>}
-                  <button type="button" className="btn-danger" onClick={() => setRejectOpen(true)} disabled={submitting || hasEdits} title={hasEdits ? 'Save or revert draft edits first' : undefined}><X size={14} /> Reject</button>
-                  <button type="button" className="btn-primary" onClick={approve} disabled={!payloadReady || submitting || saving} title={!payloadReady ? 'Fix every readiness blocker before publishing' : undefined}><Check size={15} /> {submitting ? 'Submitting…' : 'Publish to CommunityHub'}</button>
+                  {isRejected ? (
+                    <>
+                      <div className="studio-actions__status">The rejected original stays in the audit trail. A successful correction creates a new pending draft that must be reviewed before publishing.</div>
+                      <button type="button" className="btn-primary" onClick={() => setCorrectionOpen(true)} disabled={submitting}><RefreshCcw size={14} /> Request corrected draft</button>
+                    </>
+                  ) : isCorrectionInProgress ? (
+                    <div className="studio-actions__status">Correction is in progress. This original is not part of the review queue; a new pending draft will appear when the correction succeeds.</div>
+                  ) : (
+                    <>
+                      <div className="studio-actions__status">
+                        {hasEdits
+                          ? 'Draft fields changed. Save feedback before rejecting or requesting a correction; publishing can include the current draft directly.'
+                          : payloadReady
+                          ? 'All documented payload checks pass. Publishing submits immediately to CommunityHub.'
+                          : `${failedChecks.length} documented requirement${failedChecks.length === 1 ? '' : 's'} must be fixed before publishing.`}
+                      </div>
+                      <button type="button" className="btn-secondary" onClick={saveEdits} disabled={!hasEdits || saving || submitting}><Save size={14} /> {saving ? 'Saving…' : 'Save feedback'}</button>
+                      {event.source_slug !== 'fixed-events' && <button type="button" className="btn-warning" onClick={() => setCorrectionOpen(true)} disabled={submitting || hasEdits} title={hasEdits ? 'Save or revert draft edits first' : undefined}><RefreshCcw size={14} /> Request correction</button>}
+                      <button type="button" className="btn-danger" onClick={() => setRejectOpen(true)} disabled={submitting || hasEdits} title={hasEdits ? 'Save or revert draft edits first' : undefined}><X size={14} /> Reject</button>
+                      <button type="button" className="btn-primary" onClick={approve} disabled={!payloadReady || submitting || saving} title={!payloadReady ? 'Fix every readiness blocker before publishing' : undefined}><Check size={15} /> {submitting ? 'Submitting…' : 'Publish to CommunityHub'}</button>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -851,8 +1034,10 @@ export default function ReviewEventPage() {
           <section className="dialog" role="dialog" aria-modal="true" aria-labelledby="correction-title">
             <div className="dialog__header">
               <div>
-                <h2 id="correction-title">Request a correction attempt</h2>
-                <p>Your note is sent to the correction workflow. The returned record must be reviewed again.</p>
+                <h2 id="correction-title">{isRejected ? 'Request a corrected draft' : 'Request a correction attempt'}</h2>
+                <p>{isRejected
+                  ? 'The rejection reasons and your note are sent as untrusted correction context. The original remains archived and the returned draft must be reviewed again.'
+                  : 'Your note is sent to the correction workflow. The returned record must be reviewed again.'}</p>
               </div>
               <button type="button" className="icon-btn" aria-label="Close correction dialog" onClick={() => setCorrectionOpen(false)}><X size={16} /></button>
             </div>
@@ -863,7 +1048,7 @@ export default function ReviewEventPage() {
             </div>
             <div className="dialog__actions">
               <button type="button" className="btn-secondary" onClick={() => setCorrectionOpen(false)}>Cancel</button>
-              <button type="button" className="btn-warning" onClick={requestCorrection} disabled={!correctionNote.trim() || submitting}><RefreshCcw size={14} /> Queue correction</button>
+              <button type="button" className={isRejected ? 'btn-primary' : 'btn-warning'} onClick={requestCorrection} disabled={!correctionNote.trim() || submitting}><RefreshCcw size={14} /> {isRejected ? 'Create corrected draft' : 'Queue correction'}</button>
             </div>
           </section>
         </div>
@@ -885,7 +1070,7 @@ export default function ReviewEventPage() {
               <fieldset className="fieldset">
                 <legend className="fieldset__legend">Select every applicable reason</legend>
                 <div style={{ display: 'grid', gap: 6 }}>
-                  {REASON_CODES.map(reason => (
+                  {REJECTION_REASONS.map(reason => (
                     <label className="list-row" style={{ minHeight: 42, cursor: 'pointer' }} key={reason.code}>
                       <input type="checkbox" checked={reasons.includes(reason.code)} onChange={event => setReasons(current => event.target.checked ? [...current, reason.code] : current.filter(code => code !== reason.code))} />
                       <span className="list-row__title">{reason.label}</span>

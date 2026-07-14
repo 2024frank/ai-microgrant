@@ -42,8 +42,9 @@ const SOURCE = {
 const AGENT_EVENT = {
   eventType: 'ot', title: 'Jazz Night', description: 'Live jazz at Apollo.',
   sponsors: ['Apollo Theatre'], postTypeId: [8],
-  sessions: [{ startTime: 1700000000, endTime: 1700003600 }],
+  sessions: [{ startTime: 2000000000, endTime: 2000003600 }],
   locationType: 'ph2', location: '19 E College St, Oberlin, OH 44074',
+  display: 'all',
   geo_scope: 'city_wide',
 };
 
@@ -137,6 +138,20 @@ describe('triggerAgentRun — happy path', () => {
       'sess_xyz',
       expect.objectContaining({ events: expect.any(Array) })
     );
+  });
+
+  it('sends the exact constrained payload choices and anti-invention rules', async () => {
+    await triggerAgentRun(1, 99, 'test-key', 'test-env');
+    const message = mockSessionsEventsSend.mock.calls[0][1].events[0].content[0].text;
+
+    expect(message).toContain('eventType is only "ot"');
+    expect(message).toContain('8 Music Performance');
+    expect(message).toContain('59 Ecolympics or Environmental');
+    expect(message).toContain('locationType is ph2/on/bo/ne');
+    expect(message).toContain('ps (school screens)');
+    expect(message).toContain('Do not estimate an unstated end time');
+    expect(message).toContain('future or currently ongoing');
+    expect(message).toContain('Re-read the current source each run');
   });
 
   it('builds ingestedPostUrl using APP_URL and inserted row id', async () => {
@@ -243,6 +258,7 @@ describe('triggerAgentRun — multiple events', () => {
       (c: any[]) => typeof c[0] === 'string' && c[0].includes("status='completed'")
     );
     expect(completedUpdate?.[1]?.[2]).toBe(0);
+    expect(completedUpdate?.[1]?.[3]).toBe(2);
   });
 });
 
@@ -344,6 +360,30 @@ describe('triggerAgentRun — agent failures', () => {
       .rejects.toThrow('malformed JSON');
   });
 
+  it('does not persist output after the run lease has been recovered as failed', async () => {
+    let statusRead = 0;
+    db.default.query.mockImplementation((sql: unknown) => {
+      if (typeof sql === 'string' && /SELECT status FROM agent_runs/i.test(sql)) {
+        statusRead++;
+        return Promise.resolve([[
+          { status: statusRead === 1 ? 'running' : 'failed' },
+        ]]);
+      }
+      if (typeof sql === 'string' && /FROM sources/i.test(sql)) {
+        return Promise.resolve([[SOURCE]]);
+      }
+      return Promise.resolve([{ affectedRows: 1 }]);
+    });
+
+    await expect(triggerAgentRun(1, 99, 'test-key', 'test-env'))
+      .rejects.toThrow('Agent run lease is no longer active');
+
+    expect(db.mockConn.beginTransaction).not.toHaveBeenCalled();
+    expect(db.mockConn.query.mock.calls.some(
+      ([sql]: [string]) => sql.includes('INSERT INTO raw_events'),
+    )).toBe(false);
+  });
+
   it('marks run as failed when sessions.create throws', async () => {
     mockSessionsCreate.mockRejectedValue(new Error('Rate limited'));
     await expect(triggerAgentRun(1, 99, 'test-key', 'test-env'))
@@ -390,6 +430,7 @@ describe('triggerAgentRun — DB write failure', () => {
       (c: any[]) => typeof c[0] === 'string' && c[0].includes("status='completed'")
     );
     expect(completedUpdate?.[1]?.[2]).toBe(0);
+    expect(completedUpdate?.[1]?.[3]).toBe(1);
     expect(db.mockConn.rollback).toHaveBeenCalledTimes(1);
     expect(db.mockConn.release).toHaveBeenCalledTimes(1);
   });
