@@ -124,6 +124,42 @@ describe('POST /api/ingest/:slug', () => {
     );
   });
 
+  it('never attaches a shared-secret direct post to an active correction run', async () => {
+    db.default.query.mockImplementation((sql: string) => {
+      if (sql.includes('FROM sources')) return Promise.resolve([[SOURCE]]);
+      if (sql.includes("status='running'") && sql.includes('SELECT id')) {
+        return Promise.resolve([[{ id: 77, correction_event_id: 10 }]]);
+      }
+      return Promise.resolve([{ affectedRows: 1 }]);
+    });
+
+    const response = await POST(request([{ title: 'Late correction output' }]), context);
+
+    expect(response.status).toBe(409);
+    expect(mockPersist).not.toHaveBeenCalled();
+    expect(db.default.query.mock.calls.some(
+      ([sql]: [string]) => sql.includes('events_extracted=events_extracted+?'),
+    )).toBe(false);
+  });
+
+  it('rejects correction-shaped direct posts before claiming a run', async () => {
+    db.default.query.mockImplementation((sql: string) => {
+      if (sql.includes('FROM sources')) return Promise.resolve([[SOURCE]]);
+      return Promise.resolve([{ affectedRows: 1 }]);
+    });
+
+    const response = await POST(request([{
+      title: 'Stale correction output',
+      fixedFromEventId: 10,
+    }]), context);
+
+    expect(response.status).toBe(409);
+    expect(mockPersist).not.toHaveBeenCalled();
+    expect(db.default.query.mock.calls.some(
+      ([sql]: [string]) => sql.includes('INSERT INTO agent_runs'),
+    )).toBe(false);
+  });
+
   it('marks an owned run failed when persistence crashes', async () => {
     db.default.query.mockImplementation((sql: string) => {
       if (sql.includes('FROM sources')) return Promise.resolve([[SOURCE]]);

@@ -53,6 +53,7 @@ function mockSuccessfulClaim({ internal = false, source = SOURCE, runId = 7 } = 
   db.default.query
     .mockResolvedValueOnce([[source]])
     .mockResolvedValueOnce([{ affectedRows: 0 }])
+    .mockResolvedValueOnce([{ affectedRows: 0 }])
     .mockResolvedValueOnce([{ insertId: runId }]);
 }
 
@@ -128,6 +129,7 @@ describe('POST /api/agent/trigger/:source_id', () => {
     db.default.query
       .mockResolvedValueOnce([[SOURCE]])
       .mockResolvedValueOnce([{ affectedRows: 0 }])
+      .mockResolvedValueOnce([{ affectedRows: 0 }])
       .mockRejectedValueOnce(duplicate)
       .mockResolvedValueOnce([[{ id: 19, status: 'running', schedule_slot: '2026-07-13 10:30:00' }]]);
 
@@ -144,6 +146,23 @@ describe('POST /api/agent/trigger/:source_id', () => {
     await callbacks[0]();
     expect(mockEmailRun).toHaveBeenCalledWith(3, 7);
     expect(mockAgentRun).not.toHaveBeenCalled();
+  });
+
+  it('restores orphaned correction state before starting a manual run', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[SOURCE]])
+      .mockResolvedValueOnce([{ affectedRows: 1 }])
+      .mockResolvedValueOnce([{ affectedRows: 1 }])
+      .mockResolvedValueOnce([{ affectedRows: 1 }])
+      .mockResolvedValueOnce([{ insertId: 12 }]);
+
+    const response = await POST(manualReq(), ctx('3'));
+
+    expect(response.status).toBe(200);
+    expect(db.default.query.mock.calls[3][0]).toContain("re.status='pending_fix'");
+    expect(db.default.query.mock.calls[4][0]).toContain('DELETE nf FROM needs_fix');
+    expect(db.default.query.mock.calls[4][1]).toEqual([3]);
   });
 
   it('persists an after() worker failure without overriding a stopped run', async () => {

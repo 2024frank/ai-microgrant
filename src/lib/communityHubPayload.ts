@@ -79,6 +79,24 @@ export interface CommunityHubPayloadIssue {
   message: string;
 }
 
+/** Publishing policy: at least one session must still be ongoing or upcoming. */
+export function getCommunityHubExpirationIssue(
+  sessions: CommunityHubSession[],
+  nowSeconds = Math.floor(Date.now() / 1000),
+): CommunityHubPayloadIssue | null {
+  if (
+    sessions.length === 0
+    || sessions.some(session => Number(session.endTime) >= nowSeconds)
+  ) {
+    return null;
+  }
+  return {
+    path: 'sessions',
+    code: 'expired',
+    message: 'must include at least one ongoing or future session',
+  };
+}
+
 export interface CommunityHubPayloadNormalization {
   payload: CommunityHubPayload;
   issues: CommunityHubPayloadIssue[];
@@ -326,7 +344,10 @@ function normalizeLocationType(
   value: unknown,
   issues: CommunityHubPayloadIssue[],
 ): CommunityHubLocationType {
-  if (value === undefined || value === null || value === '') return 'ne';
+  if (value === undefined || value === null || value === '') {
+    addIssue(issues, 'locationType', 'required', 'is required');
+    return 'ne';
+  }
   const candidate = String(value).trim().toLowerCase();
   if (LOCATION_TYPE_SET.has(candidate)) return candidate as CommunityHubLocationType;
   addIssue(issues, 'locationType', 'invalid_enum', 'must be ph2, on, bo, or ne');
@@ -337,7 +358,10 @@ function normalizeDisplayType(
   value: unknown,
   issues: CommunityHubPayloadIssue[],
 ): CommunityHubDisplayType {
-  if (value === undefined || value === null || value === '') return 'all';
+  if (value === undefined || value === null || value === '') {
+    addIssue(issues, 'display', 'required', 'is required');
+    return 'all';
+  }
   const candidate = String(value).trim().toLowerCase();
   if (DISPLAY_TYPE_SET.has(candidate)) return candidate as CommunityHubDisplayType;
   if (candidate === 'screen' || candidate === 'none') return 'ss';
@@ -392,6 +416,8 @@ export function normalizeCommunityHubPayload(input: unknown): CommunityHubPayloa
     issues,
     POST_TYPE_ID_SET,
   ) as OberlinPostTypeId[];
+  const locationType = normalizeLocationType(read(source, 'locationType', 'location_type'), issues);
+  const normalizedPlaceId = normalizeText(read(source, 'placeId', 'place_id'), 'placeId', 120, issues);
 
   const payload: CommunityHubPayload = {
     eventType: normalizeEventType(rawEventType),
@@ -402,13 +428,13 @@ export function normalizeCommunityHubPayload(input: unknown): CommunityHubPayloa
     sponsors: normalizeStringArray(read(source, 'sponsors'), 'sponsors', issues),
     postTypeId,
     sessions: normalizeSessions(read(source, 'sessions'), issues),
-    locationType: normalizeLocationType(read(source, 'locationType', 'location_type'), issues),
+    locationType,
     display,
     screensIds: display === 'ss' ? rawScreenIds : [],
     phone: normalizeText(read(source, 'phone'), 'phone', 30, issues),
     website: normalizeText(read(source, 'website'), 'website', 2048, issues),
     urlLink: normalizeText(read(source, 'urlLink', 'url_link'), 'urlLink', 2048, issues),
-    placeId: normalizeText(read(source, 'placeId', 'place_id'), 'placeId', 120, issues),
+    placeId: locationType === 'ph2' || locationType === 'bo' ? normalizedPlaceId : '',
     buttons: normalizeButtons(read(source, 'buttons'), issues),
     public: normalizeBoolean(read(source, 'public'), true, 'public', issues) ? '1' : '0',
   };
@@ -476,6 +502,11 @@ export function validateCommunityHubPayload(input: unknown): CommunityHubPayload
   }
   if (payload.sessions.length === 0) {
     addIssue(issues, 'sessions', 'required', 'must contain at least one valid session');
+  } else {
+    const expirationIssue = getCommunityHubExpirationIssue(payload.sessions);
+    if (expirationIssue) {
+      addIssue(issues, expirationIssue.path, expirationIssue.code, expirationIssue.message);
+    }
   }
 
   const needsPhysicalLocation = payload.locationType === 'ph2' || payload.locationType === 'bo';

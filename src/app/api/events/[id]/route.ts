@@ -21,7 +21,8 @@ export async function GET(
             re.location_type, re.location, re.place_name, re.room_num, re.url_link,
             re.display, re.buttons, re.website, re.image_cdn_url,
             re.calendar_source_name, re.calendar_source_url, re.ingested_post_url,
-            re.geo_scope, re.geo_json, re.status, re.created_at, re.source_id,
+            re.geo_scope, re.geo_json, re.status, re.sent_for_correction,
+            re.superseded_by_id, re.created_at, re.source_id,
             s.name AS source_name, s.calendar_source_name AS source_calendar_name
      FROM raw_events re LEFT JOIN sources s ON re.source_id = s.id WHERE re.id = ?`, [id]
   ) as any;

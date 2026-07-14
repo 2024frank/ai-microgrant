@@ -56,7 +56,7 @@ Required rules:
 - `title` is 1–60 characters.
 - `description` is 10–200 characters; `extendedDescription` is at most 1,000 characters.
 - `email` is valid, and `sponsors`, `postTypeId`, and `sessions` are non-empty arrays.
-- Session `startTime` and `endTime` are positive Unix timestamps in seconds; the end cannot precede the start.
+- Session `startTime` and `endTime` are positive Unix timestamps in seconds; the end cannot precede the start, and publication requires at least one ongoing or future session.
 - `locationType` is `ph2`, `on`, `bo`, or `ne`. Physical/hybrid events require `location`; online/hybrid events require `urlLink`.
 - `display` is `all`, `ps`, `sps`, or `ss`. `ss` requires at least one screen ID.
 - Optional email, phone, and URL fields are validated before publication.
@@ -90,9 +90,11 @@ Legacy category-like event-type codes are migrated to `ot`; new unknown values a
 
 This is persistent prompt context, not fine-tuning, weight updates, reinforcement learning, or a guarantee that the underlying model improves.
 
+Rejected records remain an immutable audit trail. A correction request carries the latest structured rejection reasons and reviewer note as untrusted context, keeps the rejected original archived while work runs, and creates a separate `pending` replacement only when source-backed correction succeeds. `pending_fix` is an internal work state and is not counted as a record waiting for human review. Failed or orphaned correction jobs restore their original review state and can be retried.
+
 ## Scheduling and run safety
 
-GitHub Actions calls `/api/agent/schedule` hourly at minute 17. The dispatcher evaluates every active source's five-field cron expression in `America/New_York`, dispatches only due sources, and reports invalid schedules without running them. Vercel also makes one daily safety invocation, which remains compatible with Hobby-plan cron limits.
+GitHub Actions calls `/api/agent/schedule` hourly at minute 17. The dispatcher evaluates every active source's five-field cron expression in `America/New_York`, uses a six-hour catch-up window for delayed Actions starts, recovers stale leases and orphaned pending corrections globally, and reports invalid schedules without running them. Schedule-slot uniqueness keeps repeated catch-up calls idempotent. Vercel also makes one daily safety invocation, which remains compatible with Hobby-plan cron limits.
 
 The per-source trigger then:
 
@@ -195,6 +197,15 @@ npx tsx scripts/audit-sources.ts
 
 That command requires production credentials and should never be run from an untrusted environment.
 
+Pending-event validation and managed-agent contract synchronization are dry-run by default:
+
+```bash
+npm run events:revalidate
+npx tsx scripts/sync-agent-contracts.ts
+```
+
+Pass `--apply` only after reviewing the report. Neither command prints prompt bodies or secret values.
+
 ## Deployment
 
 1. Create a MySQL 8 database and configure all required variables from `.env.example` in the deployment environment.
@@ -206,7 +217,7 @@ That command requires production credentials and should never be run from an unt
 7. Create sources with valid agent IDs and five-field cron expressions.
 8. Trigger one source manually, inspect its run record, review a draft, and verify a test submission before enabling all schedules.
 
-The dispatcher is hourly and scans the preceding 60-minute window. A non-zero minute is therefore honored but may start up to 59 minutes after its exact cron time; multiple occurrences for one source inside the same window are coalesced to the latest slot. Increase the platform dispatcher frequency if exact-minute starts are required.
+The dispatcher is hourly and scans the preceding six hours so delayed GitHub scheduled runs do not silently lose a source slot. Multiple occurrences for one source inside the window are coalesced to the latest slot, and the database prevents a schedule slot from being claimed twice. Increase the platform dispatcher frequency if exact-minute starts are required.
 
 ## Contributing
 

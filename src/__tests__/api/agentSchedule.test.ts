@@ -89,10 +89,47 @@ describe('GET /api/agent/schedule', () => {
     expect(data.results[1]).toMatchObject({ status: 'error', error: 'Unavailable' });
   });
 
-  it('handles an empty active-source list without dispatching', async () => {
-    db.default.query.mockResolvedValueOnce([[]]);
+  it('dispatches a daily slot after a delayed GitHub scheduled invocation', async () => {
+    jest.setSystemTime(new Date('2026-07-14T11:46:00Z')); // 07:46 EDT
+    db.default.query.mockResolvedValueOnce([[
+      { id: 4, name: 'Delayed source', schedule_cron: '0 6 * * *' },
+    ]]);
+    (global.fetch as jest.Mock).mockResolvedValueOnce(new Response(
+      JSON.stringify({ ok: true, run_id: 88 }),
+      { status: 202, headers: { 'Content-Type': 'application/json' } },
+    ));
+
     const data = await (await GET(makeReq())).json();
-    expect(data).toMatchObject({ checked: 0, due: 0, dispatched: 0 });
+    expect(data).toMatchObject({ due: 1, dispatched: 1, failed: 0 });
+    expect(global.fetch).toHaveBeenCalledWith(
+      new URL('http://localhost/api/agent/trigger/4'),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'x-schedule-slot': '2026-07-14T10:00:00.000Z',
+        }),
+      }),
+    );
+  });
+
+  it('handles an empty active-source list without dispatching', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[]])
+      .mockResolvedValueOnce([{ affectedRows: 2 }])
+      .mockResolvedValueOnce([{ affectedRows: 1 }])
+      .mockResolvedValueOnce([{ affectedRows: 1 }]);
+    const data = await (await GET(makeReq())).json();
+    expect(data).toMatchObject({
+      checked: 0,
+      due: 0,
+      dispatched: 0,
+      recovered_stale_runs: 2,
+      recovered_correction_requests: 1,
+    });
+    expect(db.default.query.mock.calls[2][0]).toContain("re.status='pending_fix'");
+    expect(db.default.query.mock.calls[2][0]).toContain("re.status='rejected'");
+    expect(db.default.query.mock.calls[2][0]).toContain('ar.correction_event_id=re.id');
+    expect(db.default.query.mock.calls[2][0]).not.toContain('JOIN needs_fix');
+    expect(db.default.query.mock.calls[3][0]).toContain('DELETE nf FROM needs_fix');
     expect(global.fetch).not.toHaveBeenCalled();
   });
 });

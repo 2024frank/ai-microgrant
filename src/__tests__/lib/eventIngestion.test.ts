@@ -31,6 +31,7 @@ describe('persistExtractedEvents', () => {
     db.mockConn.query.mockReset();
     let nextId = 40;
     db.mockConn.query.mockImplementation((sql: string) => {
+      if (sql.includes('FROM agent_runs')) return Promise.resolve([[{ id: 12 }]]);
       if (sql.includes('FROM needs_fix')) return Promise.resolve([[]]);
       if (sql.includes('SELECT id FROM raw_events')) return Promise.resolve([[]]);
       if (sql.includes("status = 'pending_fix'")) return Promise.resolve([[]]);
@@ -101,6 +102,20 @@ describe('persistExtractedEvents', () => {
     expect(db.mockConn.commit).toHaveBeenCalledTimes(1);
   });
 
+  it('rejects fully expired agent output before it reaches the review queue', async () => {
+    const result = await persistExtractedEvents([{
+      ...VALID_EVENT,
+      sessions: [{ startTime: 1_700_000_000, endTime: 1_700_003_600 }],
+    }], SOURCE, 12);
+
+    expect(result).toMatchObject({ inserted: [], skipped: 1, invalid: 1, failed: 1 });
+    expect(result.errors[0].issues).toContainEqual(expect.objectContaining({
+      path: 'sessions',
+      code: 'expired',
+    }));
+    expect(db.mockConn.beginTransaction).not.toHaveBeenCalled();
+  });
+
   it('requires correction requests to belong to the same source', async () => {
     const result = await persistExtractedEvents([
       { ...VALID_EVENT, fixedFromEventId: 99 },
@@ -113,7 +128,7 @@ describe('persistExtractedEvents', () => {
       code: 'not_found',
     }));
     expect(db.mockConn.query).toHaveBeenCalledWith(
-      expect.stringContaining('source_id = ?'),
+      expect.stringContaining('FROM needs_fix'),
       [99, SOURCE.id],
     );
   });
@@ -180,6 +195,7 @@ describe('persistExtractedEvents', () => {
       sent_by_email: 'reviewer@oberlin.edu',
     };
     db.mockConn.query.mockImplementation((sql: string) => {
+      if (sql.includes('FROM agent_runs')) return Promise.resolve([[{ id: 12 }]]);
       if (sql.includes('FROM needs_fix')) return Promise.resolve([[fixRequest]]);
       if (sql.includes("status = 'pending_fix'") && sql.includes('FOR UPDATE')) {
         return Promise.resolve([[original]]);
@@ -212,6 +228,84 @@ describe('persistExtractedEvents', () => {
       'DELETE FROM needs_fix WHERE raw_event_id = ?',
       [99],
     );
+  });
+
+  it('keeps a rejected original archived while correction runs, then supersedes it', async () => {
+    const original = {
+      id: 99,
+      source_id: SOURCE.id,
+      status: 'rejected',
+      sent_for_correction: 1,
+      title: 'Rejected Jazz Night',
+      description: 'Incorrect source details.',
+      event_type: 'ot',
+      sponsors: JSON.stringify(['Old Sponsor']),
+      post_type_ids: JSON.stringify([8]),
+      sessions: JSON.stringify(VALID_EVENT.sessions),
+      location_type: 'ne',
+    };
+    const fixRequest = {
+      raw_event_id: 99,
+      source_id: SOURCE.id,
+      correction_notes: 'Re-open the source and correct the event.',
+      sent_by_user_id: 4,
+      sent_by_email: 'reviewer@oberlin.edu',
+    };
+    db.mockConn.query.mockImplementation((sql: string) => {
+      if (sql.includes('FROM agent_runs')) return Promise.resolve([[{ id: 13 }]]);
+      if (sql.includes('FROM needs_fix')) return Promise.resolve([[fixRequest]]);
+      if (sql.includes('FROM raw_events') && sql.includes('FOR UPDATE')) {
+        return Promise.resolve([[original]]);
+      }
+      if (sql.includes('INSERT INTO raw_events')) return Promise.resolve([{ insertId: 102 }]);
+      if (sql.includes('SELECT id FROM raw_events')) return Promise.resolve([[]]);
+      return Promise.resolve([{ affectedRows: 1 }]);
+    });
+
+    const result = await persistExtractedEvents(
+      [{ ...VALID_EVENT, fixedFromEventId: 99, fixSummary: 'Corrected from current source evidence.' }],
+      SOURCE,
+      13,
+      { expectedCorrectionEventId: 99 },
+    );
+
+    expect(result.inserted).toHaveLength(1);
+    const lockQuery = db.mockConn.query.mock.calls.find(
+      ([sql]: [string]) => sql.includes('FROM raw_events') && sql.includes('FOR UPDATE'),
+    )?.[0] as string;
+    expect(lockQuery).toContain("status = 'rejected'");
+    expect(lockQuery).toContain('sent_for_correction = 1');
+    expect(db.mockConn.query).toHaveBeenCalledWith(
+      expect.stringContaining("status = 'superseded'"),
+      [102, 99],
+    );
+    expect(db.mockConn.query).toHaveBeenCalledWith(
+      'DELETE FROM needs_fix WHERE raw_event_id = ?',
+      [99],
+    );
+  });
+
+  it('fences a correction when its run lease was revoked before persistence', async () => {
+    db.mockConn.query.mockImplementation((sql: string) => {
+      if (sql.includes('FROM agent_runs')) return Promise.resolve([[]]);
+      return Promise.resolve([{ affectedRows: 1 }]);
+    });
+
+    const result = await persistExtractedEvents(
+      [{ ...VALID_EVENT, fixedFromEventId: 99 }],
+      SOURCE,
+      12,
+      { expectedCorrectionEventId: 99 },
+    );
+
+    expect(result).toMatchObject({ inserted: [], skipped: 1, failed: 1 });
+    expect(result.errors[0].issues).toContainEqual(expect.objectContaining({
+      code: 'database_error',
+      message: 'correction run lease is no longer active',
+    }));
+    expect(db.mockConn.query.mock.calls.some(
+      ([sql]: [string]) => sql.includes('INSERT INTO raw_events'),
+    )).toBe(false);
   });
 
   it('continues after one event fails to write', async () => {

@@ -1,0 +1,358 @@
+.page {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow-x: hidden;
+  background: #f2f4f3;
+  color: var(--ink-950);
+}
+
+.masthead {
+  min-height: 76px;
+  padding: 14px clamp(20px, 4vw, 54px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  border-bottom: 1px solid #d8dfdb;
+  background: #fff;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brandMark {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--green-200);
+  border-radius: 8px;
+  background: #f8fbf9;
+}
+
+.brandCopy {
+  display: grid;
+  gap: 3px;
+  line-height: 1.1;
+}
+
+.brandCopy strong {
+  color: var(--ink-900);
+  font-size: 14px;
+  font-weight: 790;
+  letter-spacing: -.01em;
+}
+
+.brandCopy span {
+  color: var(--ink-600);
+  font-size: 11px;
+  font-weight: 610;
+  letter-spacing: .035em;
+}
+
+.workspaceStatus {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-600);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.workspaceStatus > span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--green-500);
+  box-shadow: 0 0 0 3px var(--green-100);
+}
+
+.content {
+  width: min(100%, 1020px);
+  margin: auto;
+  padding: clamp(44px, 8vh, 90px) clamp(20px, 4vw, 54px);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 410px);
+  align-items: center;
+  gap: clamp(48px, 8vw, 104px);
+}
+
+.introduction {
+  max-width: 520px;
+}
+
+.eyebrow {
+  margin: 0 0 14px;
+  color: var(--green-700);
+  font-size: 11px;
+  font-weight: 820;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+}
+
+.introduction h1 {
+  max-width: 500px;
+  margin: 0 0 18px;
+  font-size: clamp(36px, 5vw, 56px);
+  font-weight: 760;
+  letter-spacing: -.048em;
+  line-height: 1.02;
+}
+
+.lead {
+  max-width: 500px;
+  margin-bottom: 34px;
+  color: var(--ink-700);
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+.workflow {
+  max-width: 510px;
+  padding-top: 21px;
+  border-top: 1px solid #cfd8d3;
+}
+
+.workflowHeading {
+  margin-bottom: 15px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--ink-900);
+  font-size: 13px;
+  font-weight: 780;
+}
+
+.workflowHeading svg {
+  color: var(--green-700);
+}
+
+.workflow ol {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 11px;
+  list-style: none;
+}
+
+.workflow li {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  color: var(--ink-700);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.check {
+  width: 23px;
+  height: 23px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--green-200);
+  border-radius: 50%;
+  background: var(--green-50);
+  color: var(--green-700);
+}
+
+.accessNote {
+  margin: 26px 0 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--ink-600);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.accessNote svg {
+  flex: 0 0 auto;
+  color: var(--green-700);
+}
+
+.signInPanel {
+  width: 100%;
+  padding: 34px;
+  border: 1px solid #d5ddd9;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(16 32 25 / 4%), 0 16px 36px rgb(16 32 25 / 7%);
+}
+
+.panelIcon {
+  width: 42px;
+  height: 42px;
+  margin-bottom: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--green-800);
+  color: #fff;
+}
+
+.panelHeading p {
+  margin: 0 0 7px;
+  color: var(--green-700);
+  font-size: 10px;
+  font-weight: 810;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.panelHeading h2 {
+  margin: 0 0 8px;
+  font-size: 25px;
+  font-weight: 770;
+  letter-spacing: -.035em;
+}
+
+.panelHeading > span {
+  display: block;
+  margin-bottom: 27px;
+  color: var(--ink-600);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.error {
+  margin-bottom: 18px;
+  padding: 11px 12px;
+  border: 1px solid var(--red-100);
+  border-radius: 8px;
+  background: var(--red-50);
+  color: var(--red-700);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.googleButton {
+  width: 100%;
+  min-height: 48px;
+  padding: 11px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 1px solid var(--ink-300);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink-900);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 720;
+  box-shadow: var(--shadow-xs);
+  transition: border-color .15s, background .15s, box-shadow .15s;
+}
+
+.googleButton:hover:not(:disabled) {
+  border-color: var(--green-500);
+  background: var(--green-50);
+  box-shadow: 0 0 0 3px rgb(47 143 95 / 10%);
+}
+
+.googleButton:disabled {
+  cursor: wait;
+  opacity: .68;
+}
+
+.helpText {
+  margin: 18px 0 0;
+  color: var(--ink-600);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.footer {
+  min-height: 54px;
+  padding: 13px clamp(20px, 4vw, 54px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  border-top: 1px solid #d8dfdb;
+  color: var(--ink-600);
+  font-size: 10px;
+  font-weight: 620;
+  letter-spacing: .035em;
+}
+
+@media (max-width: 800px) {
+  .content {
+    max-width: 560px;
+    grid-template-columns: 1fr;
+    align-items: start;
+    gap: 38px;
+  }
+
+  .introduction {
+    max-width: none;
+  }
+
+  .introduction h1 {
+    font-size: clamp(34px, 10vw, 48px);
+  }
+
+  .lead {
+    margin-bottom: 28px;
+  }
+}
+
+@media (max-width: 520px) {
+  .masthead {
+    min-height: 68px;
+    padding: 12px 18px;
+  }
+
+  .workspaceStatus {
+    display: none;
+  }
+
+  .content {
+    padding: 38px 18px 44px;
+    gap: 32px;
+  }
+
+  .workflow {
+    display: none;
+  }
+
+  .accessNote {
+    margin-top: 22px;
+  }
+
+  .signInPanel {
+    padding: 26px 22px;
+  }
+
+  .footer {
+    padding: 16px 18px;
+    display: block;
+    line-height: 1.6;
+  }
+
+  .footer span {
+    display: block;
+  }
+}
+
+@media (max-height: 620px) and (min-width: 801px) {
+  .content {
+    padding-top: 32px;
+    padding-bottom: 32px;
+  }
+
+  .workflow,
+  .accessNote {
+    display: none;
+  }
+
+  .lead {
+    margin-bottom: 0;
+  }
+}

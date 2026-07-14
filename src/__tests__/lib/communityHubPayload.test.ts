@@ -1,6 +1,7 @@
 import {
   buildCommunityHubPayload,
   CommunityHubPayloadValidationError,
+  getCommunityHubExpirationIssue,
   normalizeCommunityHubPayload,
   validateCommunityHubPayload,
 } from '@/lib/communityHubPayload';
@@ -12,7 +13,7 @@ const BASE = {
   description: 'Create a neighborhood mural with local artists and volunteers.',
   sponsors: ['Oberlin Arts Council'],
   postTypeId: [7],
-  sessions: [{ startTime: 1760000000, endTime: 1760007200 }],
+  sessions: [{ startTime: 2000000000, endTime: 2000007200 }],
   locationType: 'ph2',
   location: '123 Main Street, Oberlin, OH 44074',
   display: 'all',
@@ -35,9 +36,9 @@ describe('CommunityHub payload contract', () => {
       sponsors: JSON.stringify([' Oberlin Arts Council ', 'oberlin arts council', 'City Parks']),
       post_type_ids: JSON.stringify(['89', 7, 7]),
       sessions: JSON.stringify([
-        { startTime: '1760100000', endTime: '1760103600' },
-        { startTime: 1760000000, endTime: 1760007200 },
-        { startTime: 1760000000, endTime: 1760007200 },
+        { startTime: '2000100000', endTime: '2000103600' },
+        { startTime: 2000000000, endTime: 2000007200 },
+        { startTime: 2000000000, endTime: 2000007200 },
       ]),
       location_type: 'ph2',
       location: BASE.location,
@@ -58,8 +59,8 @@ describe('CommunityHub payload contract', () => {
     expect(result.data.sponsors).toEqual(['Oberlin Arts Council', 'City Parks']);
     expect(result.data.postTypeId).toEqual([7, 89]);
     expect(result.data.sessions).toEqual([
-      { startTime: 1760000000, endTime: 1760007200 },
-      { startTime: 1760100000, endTime: 1760103600 },
+      { startTime: 2000000000, endTime: 2000007200 },
+      { startTime: 2000100000, endTime: 2000103600 },
     ]);
     expect(result.data.screensIds).toEqual([]);
     expect(result.data.buttons).toEqual([
@@ -75,6 +76,23 @@ describe('CommunityHub payload contract', () => {
       sessions: [],
     });
     expect(paths).toEqual(expect.arrayContaining(['sponsors', 'postTypeId', 'sessions']));
+  });
+
+  it('flags omitted location and display choices instead of hiding them behind defaults', () => {
+    const result = validateCommunityHubPayload({
+      ...BASE,
+      locationType: undefined,
+      display: undefined,
+    });
+
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'locationType', code: 'required' }),
+      expect.objectContaining({ path: 'display', code: 'required' }),
+    ]));
+    expect(result.normalized.locationType).toBe('ne');
+    expect(result.normalized.display).toBe('all');
   });
 
   it.each([
@@ -99,6 +117,27 @@ describe('CommunityHub payload contract', () => {
       locationType: 'bo',
       urlLink: 'https://meet.example.org/room',
     }).success).toBe(true);
+  });
+
+  it('clears physical place identity for non-physical location types', () => {
+    const result = validateCommunityHubPayload({
+      ...BASE,
+      locationType: 'on',
+      location: undefined,
+      urlLink: 'https://meet.example.org/room',
+      placeId: 'stale-physical-place',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.placeId).toBe('');
+  });
+
+  it('reports when every normalized session has ended', () => {
+    expect(getCommunityHubExpirationIssue([
+      { startTime: 100, endTime: 150 },
+    ], 200)).toMatchObject({ path: 'sessions', code: 'expired' });
+    expect(getCommunityHubExpirationIssue([
+      { startTime: 100, endTime: 200 },
+    ], 200)).toBeNull();
   });
 
   it('rejects unknown event types, categories, and invalid session ranges', () => {

@@ -138,6 +138,9 @@ export default function EventsListPage({ status, title, emptyMsg }: EventsListPa
                 {events.map((ev: any) => {
                   const session = getFirstSession(ev.sessions);
                   const st = STATUS_STYLES[ev.status] || STATUS_STYLES.pending;
+                  const statusLabel = ev.status === 'rejected' && Number(ev.sent_for_correction) === 1
+                    ? 'Correction running'
+                    : ev.status;
                   return (
                     <tr key={ev.id}
                       onClick={() => router.push(`/reviewer/events/${ev.id}`)}
@@ -160,7 +163,7 @@ export default function EventsListPage({ status, title, emptyMsg }: EventsListPa
                       </td>
                       <td style={{ padding: '0.75rem 1rem' }}>
                         <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 20, background: st.bg, color: st.color, fontWeight: 600 }}>
-                          {ev.status}
+                          {statusLabel}
                         </span>
                       </td>
                       <td style={{ padding: '0.75rem 1rem', color: '#aaa', whiteSpace: 'nowrap', fontSize: 12 }}>

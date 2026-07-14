@@ -50,7 +50,7 @@ export async function GET(req: NextRequest) {
   ] = await Promise.all([
     pool.query(
       `SELECT COUNT(*) AS pending FROM raw_events re
-       WHERE re.status IN ('pending','pending_fix') ${reviewerEventScope}`,
+       WHERE re.status = 'pending' ${reviewerEventScope}`,
       scopeParams,
     ),
     pool.query(
@@ -85,7 +85,7 @@ export async function GET(req: NextRequest) {
     ),
     pool.query(
       `SELECT s.id, s.name, s.slug,
-         SUM(re.status IN ('pending','pending_fix')) AS pending_count
+         SUM(re.status = 'pending') AS pending_count
        FROM sources s
        LEFT JOIN raw_events re ON re.source_id = s.id
        WHERE s.active = 1 ${reviewerSourceScope}
@@ -96,7 +96,7 @@ export async function GET(req: NextRequest) {
     pool.query(
       `SELECT re.title, re.created_at, s.name AS source_name
        FROM raw_events re JOIN sources s ON re.source_id = s.id
-       WHERE re.status IN ('pending','pending_fix') ${reviewerEventScope}
+       WHERE re.status = 'pending' ${reviewerEventScope}
        ORDER BY re.created_at ASC LIMIT 1`,
       scopeParams,
     ),

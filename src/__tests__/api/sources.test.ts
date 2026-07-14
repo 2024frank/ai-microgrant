@@ -40,7 +40,15 @@ describe('GET /api/sources', () => {
         },
       ]])
       .mockResolvedValueOnce([[
-        { total_events: 20, total_approved: 12, pending_review: 3, validation_issues: 2 },
+        {
+          total_events: 20,
+          total_approved: 12,
+          review_queue: 4,
+          pending_review: 3,
+          pending_fix: 1,
+          total_rejected: 2,
+          validation_issues: 2,
+        },
       ]])
       .mockResolvedValueOnce([[
         {
@@ -65,7 +73,12 @@ describe('GET /api/sources', () => {
       last_run_status: 'failed',
       last_error: 'Provider timed out',
       validation_issues: 2,
+      review_queue: 4,
+      pending_fix: 1,
+      total_rejected: 2,
     });
+    expect(db.default.query.mock.calls[2][0]).toContain("SUM(status='pending') AS review_queue");
+    expect(db.default.query.mock.calls[2][0]).toContain("status='rejected' AND COALESCE(sent_for_correction, 0)=0");
     expect(data[0].next_run_at).toEqual(expect.any(String));
     expect(data[0].recent_runs[0]).toMatchObject({
       id: 90,

@@ -80,16 +80,30 @@ describe('POST /api/review/events/:id/send-for-correction', () => {
     });
   });
 
-  function successfulClaim(correctionApplied = true) {
+  function successfulClaim(correctionApplied = true, sourceEvent = EVENT) {
     db.default.query
       .mockResolvedValueOnce([[ADMIN]])
-      .mockResolvedValueOnce([[EVENT]])
+      .mockResolvedValueOnce([[sourceEvent]])
       .mockResolvedValueOnce([[{ id: 1, email: ADMIN.email }]])
       .mockResolvedValueOnce([{ affectedRows: 0 }])
       .mockResolvedValueOnce([{ insertId: 44 }]);
     if (correctionApplied) {
       db.default.query.mockResolvedValueOnce([[{ id: 55 }]]);
     }
+  }
+
+  function correctionCleanup(status: 'pending_fix' | 'rejected', newerRun = false) {
+    db.mockConn.query.mockImplementation((sql: string) => {
+      if (sql.includes('JOIN agent_runs owner')) {
+        return Promise.resolve([[
+          { id: EVENT.id, source_id: EVENT.source_id, status, sent_for_correction: 1 },
+        ]]);
+      }
+      if (sql.includes('id<>?') && sql.includes('agent_runs')) {
+        return Promise.resolve(newerRun ? [[{ id: 45 }]] : [[]]);
+      }
+      return Promise.resolve([{ affectedRows: 1 }]);
+    });
   }
 
   it('runs the event source agent with no secret embedded in the prompt', async () => {
@@ -102,6 +116,10 @@ describe('POST /api/review/events/:id/send-for-correction', () => {
     expect(body.fix_run_id).toBe(44);
     expect(mockAfter).toHaveBeenCalledTimes(1);
     expect(mockTrigger).not.toHaveBeenCalled();
+    expect(db.mockConn.query).toHaveBeenCalledWith(
+      expect.stringContaining('correction_notes'),
+      [EVENT.id.toString(), EVENT.source_id, 'The start time should be 8 PM.', ADMIN.id, ADMIN.email],
+    );
 
     await callbacks[0]();
     expect(mockTrigger).toHaveBeenCalledWith(
@@ -116,6 +134,29 @@ describe('POST /api/review/events/:id/send-for-correction', () => {
     expect(prompt).toContain('untrusted data');
     expect(prompt).not.toContain(process.env.INGEST_SECRET);
     expect(prompt).not.toContain('x-ingest-secret');
+  });
+
+  it('turns a rejected record into a corrected draft and includes its rejection evidence', async () => {
+    const rejectedEvent = {
+      ...EVENT,
+      status: 'rejected',
+      rejection_reason_codes: JSON.stringify(['bad_date_parse', 'bad_location']),
+      rejection_reviewer_note: 'The source shows Sunday at ForeFront Field.',
+    };
+    successfulClaim(true, rejectedEvent);
+
+    const response = await POST(request('Re-open the source and correct only supported facts.'), context);
+
+    expect(response.status).toBe(202);
+    expect(db.mockConn.query).toHaveBeenCalledWith(
+      expect.stringContaining('WHERE id=? AND status=?'),
+      ['rejected', '10', 'rejected'],
+    );
+
+    await callbacks[0]();
+    const prompt = mockTrigger.mock.calls[0][4] as string;
+    expect(prompt).toContain('bad_date_parse');
+    expect(prompt).toContain('The source shows Sunday at ForeFront Field.');
   });
 
   it('does not mutate the event when the source run lease is already held', async () => {
@@ -154,15 +195,105 @@ describe('POST /api/review/events/:id/send-for-correction', () => {
     db.default.query.mockResolvedValueOnce([[]]);
 
     await POST(request(), context);
+    correctionCleanup('pending_fix');
     await callbacks[0]();
 
-    expect(db.default.query).toHaveBeenCalledWith(
-      expect.stringContaining("status='pending'"),
-      [EVENT.id],
+    expect(db.mockConn.query).toHaveBeenCalledWith(
+      expect.stringContaining('SET status=?, sent_for_correction=0'),
+      ['pending', EVENT.id, 'pending_fix'],
     );
-    expect(db.default.query).toHaveBeenCalledWith(
+    expect(db.mockConn.query).toHaveBeenCalledWith(
       'DELETE FROM needs_fix WHERE raw_event_id=?',
       [EVENT.id],
     );
+  });
+
+  it('returns a rejected original to the rejected archive when correction fails', async () => {
+    const rejectedEvent = { ...EVENT, status: 'rejected' };
+    successfulClaim(false, rejectedEvent);
+    mockTrigger.mockResolvedValueOnce({ run_id: 44, inserted: 0, events: [] });
+    db.default.query.mockResolvedValue([{ affectedRows: 1 }]);
+    db.default.query.mockResolvedValueOnce([[]]);
+
+    await POST(request(), context);
+    correctionCleanup('rejected');
+    await callbacks[0]();
+
+    expect(db.mockConn.query).toHaveBeenCalledWith(
+      expect.stringContaining('SET status=?, sent_for_correction=0'),
+      ['rejected', EVENT.id, 'rejected'],
+    );
+  });
+
+  it('does not let a stale failure callback clear a newer correction request', async () => {
+    successfulClaim(false);
+
+    await POST(request(), context);
+    db.default.query.mockReset().mockResolvedValueOnce([[]]).mockResolvedValue([{ affectedRows: 1 }]);
+    correctionCleanup('pending_fix', true);
+
+    await callbacks[0]();
+
+    expect(db.mockConn.query.mock.calls.some(
+      ([sql]: [string]) => sql.includes('DELETE FROM needs_fix'),
+    )).toBe(false);
+    expect(db.default.query.mock.calls.some(
+      ([sql]: [string]) => sql.includes('INSERT INTO notifications'),
+    )).toBe(false);
+  });
+
+  it('recovers an orphaned pending correction even when its needs_fix row is missing', async () => {
+    const orphaned = { ...EVENT, status: 'pending_fix', sent_for_correction: 1 };
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[orphaned]])
+      .mockResolvedValueOnce([[{ id: 1, email: ADMIN.email }]])
+      .mockResolvedValueOnce([{ affectedRows: 1 }])
+      .mockResolvedValueOnce([{ affectedRows: 1 }])
+      .mockResolvedValueOnce([{ affectedRows: 1 }])
+      .mockResolvedValueOnce([{ insertId: 44 }])
+      .mockResolvedValueOnce([[{ id: 55 }]]);
+
+    const response = await POST(request(), context);
+
+    expect(response.status).toBe(202);
+    expect(db.default.query).toHaveBeenCalledWith(
+      expect.stringContaining("re.status='pending_fix'"),
+      [EVENT.id],
+    );
+    expect(db.default.query).toHaveBeenCalledWith(
+      expect.stringContaining('DELETE FROM needs_fix'),
+      [EVENT.id, EVENT.source_id, EVENT.id],
+    );
+  });
+
+  it('does not recover an event while its correction run is active', async () => {
+    const correcting = { ...EVENT, status: 'pending_fix', sent_for_correction: 1 };
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[correcting]])
+      .mockResolvedValueOnce([[{ id: 1, email: ADMIN.email }]])
+      .mockResolvedValueOnce([{ affectedRows: 0 }])
+      .mockResolvedValueOnce([{ affectedRows: 0 }]);
+
+    const response = await POST(request(), context);
+
+    expect(response.status).toBe(409);
+    expect(db.default.getConnection).not.toHaveBeenCalled();
+    expect(mockAfter).not.toHaveBeenCalled();
+  });
+
+  it('releases a claimed run when the database connection cannot be acquired', async () => {
+    successfulClaim(false);
+    db.default.getConnection.mockRejectedValueOnce(new Error('pool exhausted'));
+
+    const response = await POST(request(), context);
+
+    expect(response.status).toBe(500);
+    expect(db.default.query).toHaveBeenCalledWith(
+      expect.stringContaining("status='failed'"),
+      [expect.stringContaining('pool exhausted'), 44],
+    );
+    expect(mockAfter).not.toHaveBeenCalled();
   });
 });

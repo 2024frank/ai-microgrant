@@ -126,6 +126,40 @@ export async function POST(
     [sourceId],
   );
 
+  // A manual run must provide the same recovery guarantee as the scheduler.
+  // Otherwise an expired correction lease can leave a record looking active
+  // until the next hourly dispatch.
+  const [recoveredCorrections] = await pool.query(
+    `UPDATE raw_events re
+     SET re.status=CASE WHEN re.status='pending_fix' THEN 'pending' ELSE 'rejected' END,
+         re.sent_for_correction=0
+     WHERE re.source_id=?
+       AND (re.status='pending_fix' OR (re.status='rejected' AND re.sent_for_correction=1))
+       AND NOT EXISTS (
+         SELECT 1 FROM agent_runs ar
+         WHERE ar.source_id=re.source_id
+           AND ar.correction_event_id=re.id
+           AND ar.status='running'
+       )`,
+    [sourceId],
+  ) as any;
+  if (recoveredCorrections.affectedRows) {
+    await pool.query(
+      `DELETE nf FROM needs_fix nf
+       JOIN raw_events re ON re.id=nf.raw_event_id
+       WHERE re.source_id=?
+         AND re.status IN ('pending','rejected')
+         AND re.sent_for_correction=0
+         AND NOT EXISTS (
+           SELECT 1 FROM agent_runs ar
+           WHERE ar.source_id=re.source_id
+             AND ar.correction_event_id=re.id
+             AND ar.status='running'
+         )`,
+      [sourceId],
+    );
+  }
+
   const slotValue = scheduleSlot ? toMysqlUtc(scheduleSlot) : null;
   let runId: number;
   try {

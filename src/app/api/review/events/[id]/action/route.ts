@@ -11,6 +11,7 @@ import {
 } from '@/lib/communityHubPayload';
 import { canAccessSource } from '@/lib/reviewerAccess';
 import { validatePublicHttpUrl } from '@/lib/publicHttpUrl';
+import { isRejectionReasonCode } from '@/lib/rejectionReasons';
 
 const CH_BASE = 'https://oberlin.communityhub.cloud/api/legacy/calendar';
 const EDITABLE_FIELDS = [
@@ -175,8 +176,14 @@ export async function POST(
   if (edits.event_type !== undefined && !isEventType(edits.event_type)) {
     return Response.json({ error: 'Invalid event type' }, { status: 400 });
   }
-  if (action === 'reject' && (!Array.isArray(edits.reason_codes) || edits.reason_codes.length === 0)) {
-    return Response.json({ error: 'reason_codes required' }, { status: 400 });
+  if (action === 'reject') {
+    if (!Array.isArray(edits.reason_codes) || edits.reason_codes.length === 0) {
+      return Response.json({ error: 'reason_codes required' }, { status: 400 });
+    }
+    if (edits.reason_codes.length > 10 || !edits.reason_codes.every(isRejectionReasonCode)) {
+      return Response.json({ error: 'Invalid rejection reason code' }, { status: 400 });
+    }
+    edits.reason_codes = [...new Set(edits.reason_codes)];
   }
 
   const [[event]] = await pool.query('SELECT * FROM raw_events WHERE id = ?', [eventId]) as any;

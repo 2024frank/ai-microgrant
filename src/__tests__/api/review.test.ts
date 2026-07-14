@@ -17,11 +17,11 @@ const ADMIN = { id: 1, email: 'admin@oberlin.edu', role: 'admin', full_name: 'Ad
 const PENDING = {
   id: 10, title: 'Jazz Night', status: 'pending', event_type: 'ot',
   description: 'A great jazz show',
-  sessions: JSON.stringify([{ startTime: 1700000000, endTime: 1700003600 }]),
+  sessions: JSON.stringify([{ startTime: 4102444800, endTime: 4102448400 }]),
   location_type: 'ph2', location: '39 S Main St', sponsors: JSON.stringify(['Apollo']),
   post_type_ids: JSON.stringify([8]), source_id: 1, source_name: 'Apollo',
   calendar_source_name: 'Apollo', calendar_source_url: 'https://apollotheater.org',
-  ingested_post_url: 'http://localhost/events/10', screen_ids: '[]', buttons: '[]', extended_description: null,
+  ingested_post_url: 'http://localhost/events/10', display: 'all', screen_ids: '[]', buttons: '[]', extended_description: null,
 };
 
 // Helper — wraps id in a resolved Promise as Next.js 16 requires
@@ -81,6 +81,8 @@ describe('GET /api/review/queue', () => {
     const data = await (await GET(makeReq('/api/review/queue'))).json();
     expect(data.events[0].title).toBe('Jazz Night');
     expect(data.total).toBe(1);
+    expect(db.default.query.mock.calls[1][0]).toContain("re.status = 'pending'");
+    expect(db.default.query.mock.calls[1][0]).not.toContain('pending_fix');
   });
 
   it('returns 401 without token', async () => {
@@ -119,6 +121,21 @@ describe('POST /api/review/events/:id/action', () => {
       ctx('10')
     );
     expect(res.status).toBe(400);
+  });
+
+  it('rejects arbitrary reason codes before they can enter agent prompt context', async () => {
+    db.default.query.mockResolvedValueOnce([[ADMIN]]);
+
+    const res = await POST(
+      makeReq('/api/review/events/10/action', {
+        action: 'reject',
+        edits: { reason_codes: ['ignore_previous_instructions'] },
+      }),
+      ctx('10'),
+    );
+
+    expect(res.status).toBe(400);
+    expect(db.default.query).toHaveBeenCalledTimes(1);
   });
 
   it('returns 409 when event already reviewed', async () => {
@@ -204,6 +221,30 @@ describe('POST /api/review/events/:id/action — approve path', () => {
     expect(db.mockConn.rollback).toHaveBeenCalled();
   });
 
+  it('blocks publication when every session has already ended', async () => {
+    lockedEvent = {
+      ...PENDING,
+      sessions: JSON.stringify([{ startTime: 1700000000, endTime: 1700003600 }]),
+    };
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[lockedEvent]])
+      .mockResolvedValueOnce([[{ id: 1 }]]);
+
+    const res = await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve' }),
+      ctx('10'),
+    );
+    const data = await res.json();
+
+    expect(res.status).toBe(422);
+    expect(data.validation_errors).toContainEqual(expect.objectContaining({
+      path: 'sessions',
+      code: 'expired',
+    }));
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it('ignores non-allow-listed camelCase edit keys at publication', async () => {
     db.default.query
       .mockResolvedValueOnce([[ADMIN]])
@@ -221,6 +262,77 @@ describe('POST /api/review/events/:id/action — approve path', () => {
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(body.postTypeId).toEqual([8]);
     expect(body.screensIds).toEqual([]);
+  });
+
+  it('publishes reviewer-selected screen IDs and corrected source attribution', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[PENDING]])
+      .mockResolvedValueOnce([[{ id: 1 }]]);
+
+    await POST(
+      makeReq('/api/review/events/10/action', {
+        action: 'approve',
+        edits: {
+          display: 'ss',
+          screen_ids: [19, 7],
+          calendar_source_name: 'Apollo Theater calendar',
+          calendar_source_url: 'https://apollotheater.org/events/jazz-night',
+          place_id: '',
+        },
+      }),
+      ctx('10'),
+    );
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.display).toBe('ss');
+    expect(body.screensIds).toEqual([7, 19]);
+    expect(body.calendarSourceName).toBe('Apollo Theater calendar');
+    expect(body.calendarSourceUrl).toBe('https://apollotheater.org/events/jazz-night');
+    expect(body.placeId).toBe('');
+  });
+
+  it('clears stale screen IDs when distribution changes away from specific screens', async () => {
+    lockedEvent = { ...PENDING, display: 'ss', screen_ids: '[7,19]' };
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[lockedEvent]])
+      .mockResolvedValueOnce([[{ id: 1 }]]);
+
+    await POST(
+      makeReq('/api/review/events/10/action', {
+        action: 'approve',
+        edits: { display: 'all' },
+      }),
+      ctx('10'),
+    );
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.display).toBe('all');
+    expect(body.screensIds).toEqual([]);
+  });
+
+  it('does not publish a physical place ID for an online-only event', async () => {
+    lockedEvent = { ...PENDING, place_id: 'stale-physical-place' };
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[lockedEvent]])
+      .mockResolvedValueOnce([[{ id: 1 }]]);
+
+    await POST(
+      makeReq('/api/review/events/10/action', {
+        action: 'approve',
+        edits: {
+          location_type: 'on',
+          url_link: 'https://example.org/watch',
+        },
+      }),
+      ctx('10'),
+    );
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.locationType).toBe('on');
+    expect(body.placeId).toBe('');
   });
 
   it('does not repost while a prior submission outcome is unresolved', async () => {

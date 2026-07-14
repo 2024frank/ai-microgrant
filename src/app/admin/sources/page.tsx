@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import AppShell from '@/components/layout/AppShell';
 import { useAuth } from '@/hooks/useAuth';
+import { describeCronExpression } from '@/lib/schedule';
 
 const SCHEDULE_PRESETS = [
   { label: 'Every hour', value: '0 * * * *' },
@@ -43,7 +44,13 @@ interface SourceRecord {
   schedule_cron: string;
   total_events?: number;
   total_approved?: number;
+  review_queue?: number;
   pending_review?: number;
+  pending_fix?: number;
+  total_rejected?: number;
+  total_resubmitted?: number;
+  total_publishing?: number;
+  total_superseded?: number;
   validation_issues?: number;
   schedule_valid?: boolean;
   schedule_error?: string | null;
@@ -453,7 +460,7 @@ export default function SourcesPage() {
 
         <div className="ops-banner" id="scheduler-contract">
           <AlertTriangle size={17} aria-hidden="true" />
-          <span><strong>Five-field cron · America/New_York.</strong> The hourly dispatcher scans the previous 60 minutes. A non-zero minute can therefore be dispatched up to 59 minutes later, and multiple matches in one window coalesce to the latest matching slot. “Run now” requests an immediate run.</span>
+          <span><strong>Schedules use Oberlin time.</strong> The hourly dispatcher catches up work due within the previous six hours, so a delayed hourly check does not silently skip a source. “Run now” requests an immediate run. Raw five-field cron is available only while editing.</span>
         </div>
 
         {!runsError && activeRuns.length > 0 && (
@@ -482,11 +489,14 @@ export default function SourcesPage() {
               const health = sourceHealth(source, run);
               const isEmail = source.source_type === 'email';
               const isCorrection = source.slug === 'fixed-events';
-              const schedulePreset = SCHEDULE_PRESETS.find(option => option.value === source.schedule_cron);
+              const scheduleDescription = describeCronExpression(source.schedule_cron);
               const lastActivity = run?.started_at || source.last_run_started_at || source.last_run_at;
               const failureDetails = run?.error_log
                 ?? source.last_error
                 ?? source.recent_runs?.[0]?.error_summary;
+              const otherLifecycleCount = Number(source.total_resubmitted || 0)
+                + Number(source.total_publishing || 0)
+                + Number(source.total_superseded || 0);
               return (
                 <article className="source-card" data-health={health} key={source.id}>
                   <div className="source-card__header">
@@ -507,16 +517,28 @@ export default function SourcesPage() {
 
                   <div className="source-card__metrics">
                     <div className="source-card__metric">
-                      <div className="source-card__metric-label">All records</div>
+                      <div className="source-card__metric-label">Records in system</div>
                       <div className="source-card__metric-value tnum">{Number(source.total_events) || 0}</div>
+                    </div>
+                    <div className="source-card__metric">
+                      <div className="source-card__metric-label">Review queue</div>
+                      <div className="source-card__metric-value tnum">{Number(source.review_queue) || 0}</div>
+                    </div>
+                    <div className="source-card__metric" title="Records currently being corrected and temporarily outside human review">
+                      <div className="source-card__metric-label">Correction jobs</div>
+                      <div className="source-card__metric-value tnum">{Number(source.pending_fix) || 0}</div>
                     </div>
                     <div className="source-card__metric">
                       <div className="source-card__metric-label">Published</div>
                       <div className="source-card__metric-value tnum">{Number(source.total_approved) || 0}</div>
                     </div>
-                    <div className="source-card__metric">
-                      <div className="source-card__metric-label">Pending review</div>
-                      <div className="source-card__metric-value tnum">{Number(source.pending_review) || 0}</div>
+                    <div className="source-card__metric" title="Rejected records with no correction currently running">
+                      <div className="source-card__metric-label">Rejected · idle</div>
+                      <div className="source-card__metric-value tnum">{Number(source.total_rejected) || 0}</div>
+                    </div>
+                    <div className="source-card__metric" title="Publishing, resubmitted, or replaced by a corrected draft">
+                      <div className="source-card__metric-label">Other lifecycle</div>
+                      <div className="source-card__metric-value tnum">{otherLifecycleCount}</div>
                     </div>
                   </div>
 
@@ -531,7 +553,7 @@ export default function SourcesPage() {
                   )}
 
                   <div className="source-card__row">
-                    <span className="source-card__row-label">Cron schedule</span>
+                    <span className="source-card__row-label">Schedule</span>
                     {editingSchedule === source.id ? (
                       <form
                         onSubmit={event => {
@@ -560,12 +582,12 @@ export default function SourcesPage() {
                     ) : (
                       <button
                         type="button"
-                        className="btn-ghost tnum"
+                        className="btn-ghost"
                         style={{ minHeight: 32, paddingInline: 10 }}
-                        title={schedulePreset?.label || 'Custom five-field cron expression'}
+                        title={`Edit advanced schedule (${source.schedule_cron})`}
                         onClick={() => beginScheduleEdit(source)}
                       >
-                        <Pencil size={12} /> {source.schedule_cron}
+                        <Pencil size={12} /> {scheduleDescription}
                       </button>
                     )}
                   </div>

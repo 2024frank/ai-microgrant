@@ -155,6 +155,34 @@ describe('triggerEmailIngest', () => {
     expect(terminalUpdate()).toBeUndefined();
   });
 
+  it('leaves an email unread when the scheduler revokes the run after extraction', async () => {
+    mockFetchUnreadEmails.mockResolvedValue([EMAILS[0]]);
+    mockExtractEventsFromEmail.mockResolvedValue([{ ...EVENT }]);
+    let statusReads = 0;
+    db.default.query.mockImplementation((sql: unknown) => {
+      if (typeof sql === 'string' && /FROM sources/i.test(sql)) {
+        return Promise.resolve([[SOURCE]]);
+      }
+      if (typeof sql === 'string' && /SELECT status FROM agent_runs/i.test(sql)) {
+        statusReads++;
+        return Promise.resolve([[
+          { status: statusReads === 1 ? 'running' : 'failed' },
+        ]]);
+      }
+      return Promise.resolve([{ affectedRows: 1 }]);
+    });
+
+    await expect(triggerEmailIngest(SOURCE.id, 95)).resolves.toMatchObject({
+      inserted: 0,
+      skipped: 0,
+    });
+
+    expect(mockExtractEventsFromEmail).toHaveBeenCalledTimes(1);
+    expect(mockPersistExtractedEvents).not.toHaveBeenCalled();
+    expect(mockMarkEmailsRead).not.toHaveBeenCalled();
+    expect(terminalUpdate()).toBeUndefined();
+  });
+
   it('does not hide checkpoint failures or mark the run completed', async () => {
     mockFetchUnreadEmails.mockResolvedValue([EMAILS[0]]);
     mockExtractEventsFromEmail.mockResolvedValue([]);

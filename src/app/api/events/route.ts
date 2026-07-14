@@ -85,7 +85,7 @@ export async function GET(req: NextRequest) {
        re.location, re.place_name, re.room_num, re.url_link, re.display,
        re.buttons, re.contact_email, re.phone, re.website, re.image_cdn_url,
        re.calendar_source_name, re.calendar_source_url, re.ingested_post_url,
-       re.geo_scope, re.status, re.communityhub_post_id,
+       re.geo_scope, re.status, re.sent_for_correction, re.communityhub_post_id,
        re.created_at, re.updated_at,
        s.id AS source_id, s.name AS source_name, s.slug AS source_slug
      FROM raw_events re

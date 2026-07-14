@@ -1,5 +1,6 @@
 import {
   cronMatchesDate,
+  describeCronExpression,
   getDueScheduleSlot,
   getNextRunAt,
   parseCronExpression,
@@ -7,6 +8,25 @@ import {
 } from '@/lib/schedule';
 
 describe('cron scheduling in America/New_York', () => {
+  it.each([
+    ['0 8 * * 1', 'Every Monday at 8:00 AM'],
+    ['0 6 * * 1-5', 'Weekdays at 6:00 AM'],
+    ['30 14 * * *', 'Every day at 2:30 PM'],
+    ['0 * * * *', 'Every hour'],
+    ['15 */6 * * *', 'Every 6 hours at :15'],
+    ['0 9 * * 1,3', 'Every Monday and Wednesday at 9:00 AM'],
+    ['0 7 1 * *', 'Monthly on day 1 at 7:00 AM'],
+  ])('describes %s without exposing cron syntax', (expression, description) => {
+    expect(describeCronExpression(expression)).toBe(description);
+  });
+
+  it('labels unusual valid schedules as custom and malformed schedules as invalid', () => {
+    expect(describeCronExpression('0,30 6 * * *')).toBe('Custom schedule');
+    expect(describeCronExpression('0 */5 * * *')).toBe('Custom schedule');
+    expect(describeCronExpression('0 */25 * * *')).toBe('Custom schedule');
+    expect(describeCronExpression('not a schedule')).toBe('Invalid schedule');
+  });
+
   it('parses lists, ranges, steps, and Sunday=7 across all five fields', () => {
     const parsed = parseCronExpression('*/15 6-8 1,15 1-12/2 1-5,7');
     expect(parsed).not.toBeNull();
@@ -46,6 +66,16 @@ describe('cron scheduling in America/New_York', () => {
   it('finds the latest due slot in the hourly dispatch window', () => {
     const slot = getDueScheduleSlot('30 6 * * *', new Date('2026-07-13T11:00:00Z'));
     expect(slot?.toISOString()).toBe('2026-07-13T10:30:00.000Z');
+  });
+
+  it('can recover a slot when the external dispatcher starts more than an hour late', () => {
+    const slot = getDueScheduleSlot(
+      '0 6 * * *',
+      new Date('2026-07-14T11:46:00Z'),
+      undefined,
+      48 * 60,
+    );
+    expect(slot?.toISOString()).toBe('2026-07-14T10:00:00.000Z');
   });
 
   it('exports the next exact run for UI previews', () => {

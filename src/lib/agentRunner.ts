@@ -5,6 +5,10 @@ import { fetchUnreadEmails, extractEventsFromEmail, markEmailsRead } from './ema
 import {
   persistExtractedEvents,
 } from './eventIngestion';
+import {
+  OBERLIN_POST_TYPE_IDS,
+  OBERLIN_POST_TYPE_LABELS,
+} from './communityHubPayload';
 
 const DEFAULT_EMAILS_PER_RUN = 5;
 const MAX_EMAILS_PER_RUN = 25;
@@ -62,14 +66,20 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Unknown ingestion error';
 }
 
+const POST_TYPE_CONTRACT = OBERLIN_POST_TYPE_IDS
+  .map(id => `${id} ${OBERLIN_POST_TYPE_LABELS[id]}`)
+  .join('; ');
+
 const EXTRACTION_CONTRACT = `Use the CommunityHub payload contract exactly:
 - eventType is only "ot" (event), "an" (announcement), or "jp" (job). Categories never go in eventType.
 - title: 1-60 characters; description: one complete sentence, 10-200 characters; extendedDescription: at most 1000 characters.
-- sponsors, postTypeId, and sessions are non-empty arrays. Session startTime/endTime are integer Unix seconds and endTime is not before startTime.
-- postTypeId uses Oberlin IDs only: 1,2,3,4,5,6,7,8,9,10,11,12,13,59,89.
+- sponsors is a non-empty array containing only organizers or sponsors explicitly supported by the source.
+- postTypeId is a non-empty array using only these Oberlin categories: ${POST_TYPE_CONTRACT}.
+- sessions is a non-empty array. startTime/endTime are integer Unix seconds interpreted in America/New_York; never return ISO strings or millisecond timestamps. Do not estimate an unstated end time—use the stated start time for both values when no end is provided.
+- Include only future or currently ongoing records; at least one session must not have ended.
 - locationType is ph2/on/bo/ne. ph2 and bo require location; on and bo require urlLink.
-- display is all/ps/sps/ss. ss requires screensIds.
-- Never invent facts. Return only the JSON array of events.`;
+- display is all (all public screens), ps (school screens), sps (school + public screens), or ss (specific screens). ss requires one or more positive integer screensIds.
+- Never invent facts. Do not infer missing details or reuse stale facts. Re-read the current source each run and return only the JSON array of events.`;
 
 function getClient(apiKey: string) {
   // In test env the SDK is mocked — don't throw on missing key
@@ -157,9 +167,12 @@ export async function triggerAgentRun(
         'SELECT status FROM agent_runs WHERE id = ?', [runId]
       ) as any;
       const currentRun = Array.isArray(statusResult?.[0]) ? statusResult[0][0] : null;
-      if (currentRun?.status === 'stopped') {
-        console.log(`[agentRunner] run=${runId} stopped externally — aborting`);
-        return { run_id: runId, inserted: 0, events: [] };
+      if (currentRun?.status !== 'running') {
+        if (currentRun?.status === 'stopped') {
+          console.log(`[agentRunner] run=${runId} stopped externally — aborting`);
+          return { run_id: runId, inserted: 0, events: [] };
+        }
+        throw new Error('Agent run lease is no longer active');
       }
 
       const page = await client.beta.sessions.events.list(session.id, {
@@ -265,6 +278,9 @@ export async function triggerAgentRun(
     if (preWriteRun?.status === 'stopped') {
       return { run_id: runId, inserted: 0, skipped: 0, invalid: 0, events: [] };
     }
+    if (preWriteRun?.status !== 'running') {
+      throw new Error('Agent run lease is no longer active');
+    }
 
     // Write events to MySQL
     const result = await persistExtractedEvents(events, source, runId, options);
@@ -279,7 +295,7 @@ export async function triggerAgentRun(
         events.length,
         result.inserted.length,
         result.duplicates,
-        result.failed,
+        result.invalid,
         result.errors.length ? JSON.stringify(result.errors) : null,
         runId,
       ]
@@ -338,7 +354,7 @@ export async function triggerEmailIngest(sourceId: number, runId: number): Promi
     let invalid = 0;
     let successfulEmails = 0;
     let attemptedEmails = 0;
-    let stopped = false;
+    let leaseLost = false;
     const failures: Array<Record<string, unknown>> = [];
 
     for (const email of emails) {
@@ -351,8 +367,8 @@ export async function triggerEmailIngest(sourceId: number, runId: number): Promi
         'SELECT status FROM agent_runs WHERE id=?',
         [runId],
       ) as any;
-      if (run?.status === 'stopped') {
-        stopped = true;
+      if (run?.status !== 'running') {
+        leaseLost = true;
         break;
       }
 
@@ -361,6 +377,15 @@ export async function triggerEmailIngest(sourceId: number, runId: number): Promi
         const requestTimeoutMs = Math.max(1_000, Math.min(60_000, deadline - Date.now()));
         const events = await extractEventsFromEmail(email, requestTimeoutMs);
         eventsFound += events.length;
+
+        const [[postExtractionRun]] = await pool.query(
+          'SELECT status FROM agent_runs WHERE id=?',
+          [runId],
+        ) as any;
+        if (postExtractionRun?.status !== 'running') {
+          leaseLost = true;
+          break;
+        }
 
         // Tag each event with where it came from
         for (const ev of events) {
@@ -374,7 +399,7 @@ export async function triggerEmailIngest(sourceId: number, runId: number): Promi
           inserted += result.inserted.length;
           skipped += result.skipped;
           duplicateSkips += result.duplicates;
-          invalid += result.failed;
+          invalid += result.invalid;
 
           const fatalReports = result.errors.filter(report => !report.inserted);
           if (fatalReports.length > 0) {
@@ -392,6 +417,14 @@ export async function triggerEmailIngest(sourceId: number, runId: number): Promi
 
         // [] is a legitimate, successfully parsed result. Mark it read just
         // like a successfully persisted or duplicate-only event email.
+        const [[preCheckpointRun]] = await pool.query(
+          'SELECT status FROM agent_runs WHERE id=?',
+          [runId],
+        ) as any;
+        if (preCheckpointRun?.status !== 'running') {
+          leaseLost = true;
+          break;
+        }
         await markEmailsRead([email.uid]);
         successfulEmails++;
         console.log(`[emailIngest] run=${runId} email uid=${email.uid} subject="${email.subject}" → ${events.length} events`);
@@ -408,7 +441,7 @@ export async function triggerEmailIngest(sourceId: number, runId: number): Promi
       }
     }
 
-    if (stopped) {
+    if (leaseLost) {
       return { run_id: runId, inserted, skipped };
     }
 
