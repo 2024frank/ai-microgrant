@@ -60,6 +60,7 @@ export async function GET(req: NextRequest) {
     `SELECT re.id, re.title, re.event_type, re.description, re.sessions,
             re.location_type, re.geo_scope, re.created_at, re.source_id,
             re.sent_for_correction, re.corrected_from_id, re.sent_for_fix_by,
+            re.validation_errors,
             s.name AS source_name, s.slug AS source_slug
      FROM raw_events re
      JOIN sources s ON re.source_id = s.id
@@ -79,8 +80,9 @@ export async function GET(req: NextRequest) {
   const [sources] = await pool.query(
     `SELECT DISTINCT s.id, s.name FROM raw_events re
      JOIN sources s ON re.source_id = s.id
-     WHERE re.status = 'pending'
-     ORDER BY s.name ASC`
+     WHERE re.status IN ('pending','pending_fix') ${scopeClause}
+     ORDER BY s.name ASC`,
+    scopeParams,
   ) as any;
 
   return Response.json({ events, total, page, limit, sources });

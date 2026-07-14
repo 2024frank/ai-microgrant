@@ -11,7 +11,7 @@ jobs:
     steps:
       - name: Delete past events
         run: |
-          curl -s -X POST "${{ secrets.APP_URL }}/api/cleanup" \
+          curl -fsS -X POST "${{ secrets.APP_URL }}/api/cleanup" \
             -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
             -H "Content-Type: application/json" | tee /tmp/result.json
           cat /tmp/result.json

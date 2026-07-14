@@ -14,41 +14,49 @@ Each event must have these fields:
 
 REQUIRED:
 - title        (string, ≤ 60 chars) — the event or announcement name
-- eventType    — "ev" for single-time events, "an" for multi-day/ongoing announcements
-- sessions     — array of { startTime, endTime } objects in ISO 8601 UTC.
+- eventType    — "ot" for events, "an" for announcements, "jp" for jobs
+- sponsors     — non-empty string array containing only organizers/sponsors stated in the email
+- postTypeId   — non-empty number array. Choose only from the Oberlin IDs listed below.
+- sessions     — non-empty array of { startTime, endTime } integer Unix timestamps in seconds.
                  For announcements spanning a date range use one session covering the full range.
-                 If no date is mentioned, use an empty array [].
-- description  (string, ≤ 200 chars) — one-sentence teaser, complete, no trailing "..."
+                 Never use ISO strings or 13-digit millisecond timestamps.
+- description  (string, 10-200 chars) — one-sentence teaser, complete, no trailing "..."
 - extendedDescription (string, ≤ 1000 chars) — full details: date/time, location,
                  registration, cost, who it's for, contact info. Faithful to the email.
+- locationType — "ph2" physical, "on" online, "bo" both, "ne" neither
+- display      — "all", "ps", "sps", or "ss"; normally use "all"
 
 OPTIONAL (include when present in the email):
 - location     (string) — physical address or room
-- locationType — "ph2" physical, "on" online, "bo" both, "ne" not specified
 - urlLink      (string) — event URL or registration link
-- postTypeId   (number[]) — choose from: 2 Exhibit, 7 Workshop/Class, 10 Community Event,
-                 11 Arts & Culture, 12 Sports & Recreation, 13 Family & Kids, 14 Food & Drink,
-                 15 Music, 16 Film, 17 Lecture & Discussion, 18 Fundraiser
 - calendarSourceName (string) — name of the organisation sending the email
 - calendarSourceUrl  (string) — URL of event page if linked in email
+
+OBERLIN POST TYPE IDS:
+1 Volunteer Opportunity; 2 Exhibit; 3 Fair/Festival/Public Celebration; 4 Tour/Open House;
+5 Film; 6 Presentation/Lecture; 7 Workshop/Class; 8 Music Performance; 9 Theatre/Dance;
+10 City Government; 11 Spectator Sport; 12 Participatory Sport/Game; 13 Networking;
+59 Environmental/Ecolympics; 89 Other.
 
 RULES:
 - Extract ALL events mentioned in the email, even brief ones.
 - If the email has no events (e.g. purely transactional), return [].
 - Never invent information not in the email.
-- All times must be in Eastern Time converted to UTC.
+- Interpret local dates in America/New_York, then return Unix seconds for the correct instant.
 - Return ONLY the raw JSON array, no markdown, no commentary.`;
 
 interface ExtractedEvent {
   title: string;
   eventType: string;
-  sessions: { startTime: string; endTime: string }[];
+  sponsors: string[];
+  postTypeId: number[];
+  sessions: { startTime: number; endTime: number }[];
   description: string;
   extendedDescription?: string;
   location?: string;
   locationType?: string;
   urlLink?: string;
-  postTypeId?: number[];
+  display: string;
   calendarSourceName?: string;
   calendarSourceUrl?: string;
 }
@@ -74,7 +82,20 @@ export interface FetchedEmail {
   body: string;
 }
 
-export async function fetchUnreadEmails(): Promise<FetchedEmail[]> {
+export class EmailExtractionError extends Error {
+  constructor(
+    message: string,
+    readonly code: 'missing_json' | 'malformed_json' | 'invalid_shape',
+  ) {
+    super(message);
+    this.name = 'EmailExtractionError';
+  }
+}
+
+export async function fetchUnreadEmails(maxEmails = 5): Promise<FetchedEmail[]> {
+  const limit = Number.isFinite(maxEmails)
+    ? Math.min(Math.max(Math.floor(maxEmails), 1), 100)
+    : 5;
   const client = new ImapFlow({
     host:   process.env.IMAP_HOST || 'imap.titan.email',
     port:   parseInt(process.env.IMAP_PORT || '993'),
@@ -99,6 +120,7 @@ export async function fetchUnreadEmails(): Promise<FetchedEmail[]> {
       }
 
       for (const uid of uids) {
+        if (emails.length >= limit) break;
         const msg = await client.fetchOne(String(uid), { source: true }, { uid: true });
         if (!msg || !msg.source) continue;
 
@@ -154,7 +176,10 @@ export async function markEmailsRead(uids: number[]): Promise<void> {
   }
 }
 
-export async function extractEventsFromEmail(email: FetchedEmail): Promise<ExtractedEvent[]> {
+export async function extractEventsFromEmail(
+  email: FetchedEmail,
+  timeoutMs = 60_000,
+): Promise<ExtractedEvent[]> {
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
   const userContent = [
@@ -164,12 +189,15 @@ export async function extractEventsFromEmail(email: FetchedEmail): Promise<Extra
     email.body,
   ].join('\n');
 
-  const response = await anthropic.messages.create({
-    model:      'claude-sonnet-5',
-    max_tokens: 4096,
-    system:     SYSTEM_PROMPT,
-    messages:   [{ role: 'user', content: userContent }],
-  });
+  const response = await anthropic.messages.create(
+    {
+      model:      'claude-sonnet-5',
+      max_tokens: 4096,
+      system:     SYSTEM_PROMPT,
+      messages:   [{ role: 'user', content: userContent }],
+    },
+    { timeout: Math.min(Math.max(Math.floor(timeoutMs), 1_000), 60_000) },
+  );
 
   const text = response.content
     .filter(b => b.type === 'text')
@@ -177,11 +205,27 @@ export async function extractEventsFromEmail(email: FetchedEmail): Promise<Extra
     .join('');
 
   const match = text.match(/\[[\s\S]*\]/);
-  if (!match) return [];
+  if (!match) {
+    throw new EmailExtractionError(
+      'Email extractor returned no JSON array',
+      'missing_json',
+    );
+  }
 
   try {
-    return JSON.parse(match[0]);
-  } catch {
-    return [];
+    const parsed = JSON.parse(match[0]);
+    if (!Array.isArray(parsed)) {
+      throw new EmailExtractionError(
+        'Email extractor JSON was not an array',
+        'invalid_shape',
+      );
+    }
+    return parsed;
+  } catch (error) {
+    if (error instanceof EmailExtractionError) throw error;
+    throw new EmailExtractionError(
+      'Email extractor returned malformed JSON',
+      'malformed_json',
+    );
   }
 }

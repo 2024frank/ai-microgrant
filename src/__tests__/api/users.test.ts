@@ -1,23 +1,30 @@
 /**
  * Users API — GET /api/users, POST /api/users/invite, PATCH /api/users/:id
  *
- * Resend is mocked so no real emails are sent.
+ * Email delivery and Next's deferred lifecycle are mocked so no real email is sent.
  */
 
-jest.mock('resend', () => ({
-  Resend: jest.fn(() => ({
-    emails: { send: jest.fn().mockResolvedValue({ id: 'mock-id' }) },
-  })),
+jest.mock('next/server', () => ({
+  ...jest.requireActual('next/server'),
+  after: jest.fn(),
 }));
 
-import { NextRequest } from 'next/server';
+jest.mock('@/lib/email', () => ({
+  sendWelcomeEmail: jest.fn().mockResolvedValue(undefined),
+}));
+
+import { after, NextRequest } from 'next/server';
 import { GET } from '@/app/api/users/route';
 import { POST } from '@/app/api/users/invite/route';
 import { PATCH } from '@/app/api/users/[id]/route';
 import { adminAuth } from '@/lib/firebase-admin';
+import { sendWelcomeEmail } from '@/lib/email';
 
 const db         = require('@/lib/db');
 const mockVerify = adminAuth.verifyIdToken as jest.Mock;
+const mockAfter = after as jest.Mock;
+const mockSendWelcomeEmail = sendWelcomeEmail as jest.Mock;
+const afterCallbacks: Array<() => Promise<void> | void> = [];
 
 const ADMIN    = { id: 1, email: 'admin@oberlin.edu', role: 'admin',    full_name: 'Admin', active: 1, firebase_uid: 'uid-admin' };
 const REVIEWER = { id: 2, email: 'rev@oberlin.edu',   role: 'reviewer', full_name: 'Rev',   active: 1, firebase_uid: 'uid-rev' };
@@ -38,6 +45,11 @@ beforeEach(() => {
   db.default.query.mockReset();
   mockVerify.mockReset();
   mockVerify.mockResolvedValue({ uid: 'uid-admin', email: 'admin@oberlin.edu' });
+  mockSendWelcomeEmail.mockReset().mockResolvedValue(undefined);
+  afterCallbacks.length = 0;
+  mockAfter.mockReset().mockImplementation((callback: () => Promise<void> | void) => {
+    afterCallbacks.push(callback);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -91,6 +103,17 @@ describe('POST /api/users/invite', () => {
     expect(res.status).toBe(201);
     expect(data.email).toBe('jane@oberlin.edu');
     expect(data.role).toBe('reviewer');
+    expect(mockAfter).toHaveBeenCalledTimes(1);
+    expect(mockSendWelcomeEmail).not.toHaveBeenCalled();
+
+    await afterCallbacks[0]();
+
+    expect(mockSendWelcomeEmail).toHaveBeenCalledWith({
+      email: 'jane@oberlin.edu',
+      name: 'Jane Smith',
+      role: 'reviewer',
+      pendingCount: 0,
+    });
   });
 
   it('lowercases and trims the email on insert', async () => {

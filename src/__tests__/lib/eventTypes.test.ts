@@ -1,22 +1,37 @@
-import { EVENT_TYPES, getEventTypeLabel, isEventType, normalizeEventType } from '@/lib/eventTypes';
+import {
+  EVENT_TYPES,
+  getEventTypeLabel,
+  isEventType,
+  isRecognizedEventType,
+  normalizeEventType,
+} from '@/lib/eventTypes';
 
 describe('event type contract', () => {
-  it('keeps every database ENUM code in the shared list', () => {
-    expect(EVENT_TYPES.map(type => type.value)).toEqual([
-      'ot', 'an', 'jp', 'ev', 'cl', 'ex', 'vt', 'sp', 'pe', 'wk', 'ms', 'ws',
+  it('exposes only the three CommunityHub post kinds', () => {
+    expect(EVENT_TYPES).toEqual([
+      { value: 'ot', label: 'Event' },
+      { value: 'an', label: 'Announcement' },
+      { value: 'jp', label: 'Job' },
     ]);
   });
 
-  it('normalizes valid agent output and safely defaults unknown values', () => {
-    expect(normalizeEventType(' EV ')).toBe('ev');
+  it('normalizes legacy category-like agent output to Event', () => {
+    expect(normalizeEventType(' EV ')).toBe('ot');
+    expect(normalizeEventType('wk')).toBe('ot');
+    expect(normalizeEventType('Announcement')).toBe('an');
+    expect(normalizeEventType('job posting')).toBe('jp');
     expect(normalizeEventType('invented')).toBe('ot');
     expect(normalizeEventType(undefined)).toBe('ot');
   });
 
-  it('provides human-readable labels without exposing unknown codes', () => {
+  it('keeps strict validation separate from compatibility normalization', () => {
     expect(getEventTypeLabel('an')).toBe('Announcement');
-    expect(getEventTypeLabel('not-real')).toBe('Other');
+    expect(getEventTypeLabel('ev')).toBe('Event');
+    expect(getEventTypeLabel('not-real')).toBe('Event');
     expect(isEventType('jp')).toBe(true);
+    expect(isEventType('ev')).toBe(false);
     expect(isEventType('JP')).toBe(false);
+    expect(isRecognizedEventType('ev')).toBe(true);
+    expect(isRecognizedEventType('not-real')).toBe(false);
   });
 });

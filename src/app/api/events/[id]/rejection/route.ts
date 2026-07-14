@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
-import { getAuthUser, unauthorized } from '@/lib/auth';
+import { forbidden, getAuthUser, unauthorized } from '@/lib/auth';
+import { canAccessSource } from '@/lib/reviewerAccess';
 
 export async function GET(
   req: NextRequest,
@@ -13,8 +14,9 @@ export async function GET(
 
   const [[rejection]] = await pool.query(
     `SELECT rl.reason_codes, rl.reviewer_note, rl.created_at,
-            u.full_name AS reviewer_name
+            u.full_name AS reviewer_name, re.source_id
      FROM rejection_log rl
+     JOIN raw_events re ON re.id = rl.raw_event_id
      LEFT JOIN users u ON rl.reviewer_id = u.id
      WHERE rl.raw_event_id = ?
      ORDER BY rl.created_at DESC LIMIT 1`,
@@ -22,5 +24,11 @@ export async function GET(
   ) as any;
 
   if (!rejection) return Response.json(null, { status: 404 });
-  return Response.json(rejection);
+  if (!(await canAccessSource(user, Number(rejection.source_id)))) return forbidden();
+
+  const response = { ...rejection };
+  delete response.source_id;
+  return Response.json(response, {
+    headers: { 'Cache-Control': 'private, no-store' },
+  });
 }

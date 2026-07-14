@@ -41,7 +41,7 @@ export default function EventDetailPage() {
   useEffect(() => {
     setTzLabel(getTimezoneLabel());
     if (!ready || !token) return;
-    fetch(`/api/events/${id}`)
+    fetch(`/api/events/${id}`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.json()).then(setEvent);
     fetch(`/api/events/${id}/rejection`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.ok ? r.json() : null).then(d => { if (d) setRejection(d); }).catch(() => {});

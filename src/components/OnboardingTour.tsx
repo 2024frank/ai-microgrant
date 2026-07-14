@@ -10,8 +10,8 @@ interface Step {
 
 const ADMIN_STEPS: Step[] = [
   {
-    title: 'Welcome, Admin',
-    body:  'This is your AI Events Ingestion Software control centre. You have full visibility over every agent, every event, and every reviewer. This tour takes about 60 seconds.',
+    title: 'Welcome to Event Intake',
+    body:  'This workspace brings source runs, incoming records, and reviewer decisions together. This tour takes about 60 seconds.',
     icon: (
       <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
         <circle cx="32" cy="32" r="30" fill="#e8f5e9"/>
@@ -37,8 +37,8 @@ const ADMIN_STEPS: Step[] = [
     tip: 'Find it in the sidebar under Stats',
   },
   {
-    title: 'AI Agent analytics',
-    body:  'Operational metrics for each source agent: hit rates, review outcomes, run time, frequently corrected fields, and a simple grade based on those observed results.',
+    title: 'Extraction quality signals',
+    body:  'Operational metrics for each source: review outcomes, run time, frequently corrected fields, and a simple grade based on observed results.',
     icon: (
       <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
         <rect x="2" y="2" width="60" height="60" rx="10" fill="#e3f2fd"/>
@@ -50,11 +50,11 @@ const ADMIN_STEPS: Step[] = [
         <text x="32" y="57" textAnchor="middle" fontSize="7" fill="#1565c0" fontWeight="700">A</text>
       </svg>
     ),
-    tip: 'Find it in the sidebar under Analytics',
+    tip: 'Find it in the sidebar under Quality signals',
   },
   {
     title: 'Review queue',
-    body:  'Every incoming event lands here first. You and your reviewers approve, reject, or send events back to the AI for correction. Approved events go live on CommunityHub automatically.',
+    body:  'Every incoming record lands here first. Reviewers compare source evidence, correct fields, and validate the outgoing payload. Publishing submits the record to CommunityHub immediately.',
     icon: (
       <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
         <rect x="2" y="2" width="60" height="60" rx="10" fill="#fff8e1"/>
@@ -66,7 +66,7 @@ const ADMIN_STEPS: Step[] = [
         <rect x="12" y="40" width="15" height="8" rx="3" fill="#e67e22" opacity=".4"/>
       </svg>
     ),
-    tip: 'Find it in the sidebar under Queue',
+    tip: 'Find it in the sidebar under Review queue',
   },
   {
     title: 'Manage your team',
@@ -86,7 +86,7 @@ const ADMIN_STEPS: Step[] = [
   },
   {
     title: "You're all set",
-    body:  "Everything is live and ready. Start by reviewing the events in the queue or check the stats dashboard to see how your agents are performing. Your team has been notified.",
+    body:  "Setup status depends on your configured sources and deployment. Start in Sources & runs to confirm source health, then review any waiting records.",
     icon: (
       <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
         <circle cx="32" cy="32" r="30" fill="#e8f5e9"/>
@@ -98,8 +98,8 @@ const ADMIN_STEPS: Step[] = [
 
 const REVIEWER_STEPS: Step[] = [
   {
-    title: 'Welcome to AI Events Ingestion Software',
-    body:  'AI agents automatically pull events from multiple sources and bring them here for your review before they go live. This tour takes about 60 seconds.',
+    title: 'Welcome to Event Intake',
+    body:  'Configured extractors bring records from multiple sources here for human review before publication. This tour takes about 60 seconds.',
     icon: (
       <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
         <circle cx="32" cy="32" r="30" fill="#e8f5e9"/>
@@ -110,7 +110,7 @@ const REVIEWER_STEPS: Step[] = [
   },
   {
     title: 'The review queue',
-    body:  'Every event the AI extracts lands in the queue. You will see the event title, source, date, and type at a glance. Click any event to open it and review the full details.',
+    body:  'Every extracted record lands in the queue. You will see its title, source, date, and post kind at a glance. Open a record to inspect source context and payload readiness.',
     icon: (
       <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
         <rect x="2" y="2" width="60" height="60" rx="10" fill="#e8f5e9"/>
@@ -122,11 +122,11 @@ const REVIEWER_STEPS: Step[] = [
         <rect x="10" y="40" width="20" height="9" rx="3" fill="#3a8c3f" opacity=".3"/>
       </svg>
     ),
-    tip: 'Find it in the sidebar under Queue',
+    tip: 'Find it in the sidebar under Review queue',
   },
   {
     title: 'Approving an event',
-    body:  'When an event looks good, hit Approve. You can edit any field first — title, description, location, time — and your changes will be saved. Approved events go live on CommunityHub immediately.',
+    body:  'Correct the draft, then use the readiness checklist. The publish action remains blocked until documented payload requirements pass; publishing submits immediately to CommunityHub.',
     icon: (
       <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
         <rect x="2" y="2" width="60" height="60" rx="10" fill="#e8f5e9"/>
@@ -137,7 +137,7 @@ const REVIEWER_STEPS: Step[] = [
   },
   {
     title: 'Rejecting an event',
-    body:  'If an event is wrong, spam, or irrelevant, reject it and choose a reason. Recent feedback is included as context on the source agent’s next run; every result still needs human review.',
+    body:  'If a record is wrong, spam, or irrelevant, reject it and choose a reason. Saved feedback may be included as context in later source runs; it does not retrain a model.',
     icon: (
       <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
         <rect x="2" y="2" width="60" height="60" rx="10" fill="#fdecea"/>
@@ -148,7 +148,7 @@ const REVIEWER_STEPS: Step[] = [
   },
   {
     title: 'Sending back for correction',
-    body:  'If the event is real but needs work, send it back with a specific note. A correction agent will attempt the changes and return the result to the review queue; you will get a notification when it finishes.',
+    body:  'If the record is real but needs work, send a specific note to the correction workflow. It attempts a new draft and returns it to the queue for another human review.',
     icon: (
       <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
         <rect x="2" y="2" width="60" height="60" rx="10" fill="#fff8e1"/>
@@ -158,7 +158,7 @@ const REVIEWER_STEPS: Step[] = [
         <path d="M14 44 C14 44 28 44 44 38" stroke="#c05e00" strokeWidth="2" strokeLinecap="round" fill="none"/>
       </svg>
     ),
-    tip: 'Look for the Send for correction button inside any event',
+    tip: 'Look for Request correction inside Review Studio',
   },
   {
     title: 'Your personal dashboard',
@@ -172,11 +172,11 @@ const REVIEWER_STEPS: Step[] = [
         <polyline points="15,36 29,26 43,18" stroke="#1565c0" strokeWidth="2" strokeLinecap="round" fill="none"/>
       </svg>
     ),
-    tip: 'Find it in the sidebar under Dashboard',
+    tip: 'Find it in the sidebar under Overview',
   },
   {
     title: "You're ready",
-    body:  "Head to the review queue and start working through the events. If you have questions or feedback, reply to the email you received — Kwaku reads everything.",
+    body:  "Head to the review queue and start with the oldest record. Verify the source, resolve every readiness blocker, and publish only when the payload is accurate.",
     icon: (
       <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
         <circle cx="32" cy="32" r="30" fill="#e8f5e9"/>
@@ -217,14 +217,14 @@ export default function OnboardingTour({ role, token, onDone }: Props) {
   function back() { setStep(s => Math.max(0, s - 1)); }
 
   return (
-    <div style={{
+    <div role="presentation" style={{
       position: 'fixed', inset: 0, zIndex: 9999,
       background: 'rgba(0,0,0,0.55)',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       opacity: leaving ? 0 : 1, transition: 'opacity .3s ease',
       backdropFilter: 'blur(3px)',
     }}>
-      <div style={{
+      <section role="dialog" aria-modal="true" aria-labelledby="onboarding-title" style={{
         background: 'white', borderRadius: 16,
         width: '100%', maxWidth: 460,
         padding: '2.5rem 2.5rem 2rem',
@@ -233,7 +233,7 @@ export default function OnboardingTour({ role, token, onDone }: Props) {
       }}>
 
         {/* Skip */}
-        <button onClick={finish} style={{
+        <button type="button" onClick={finish} style={{
           position: 'absolute', top: 16, right: 16,
           background: 'none', border: 'none', cursor: 'pointer',
           fontSize: 12, color: '#bbb', fontWeight: 600,
@@ -253,7 +253,7 @@ export default function OnboardingTour({ role, token, onDone }: Props) {
         </div>
 
         {/* Title */}
-        <h2 style={{ fontSize: 20, fontWeight: 800, color: '#1a1a1a', textAlign: 'center', margin: '0 0 12px' }}>
+        <h2 id="onboarding-title" style={{ fontSize: 20, fontWeight: 800, color: '#1a1a1a', textAlign: 'center', margin: '0 0 12px' }}>
           {current.title}
         </h2>
 
@@ -276,11 +276,12 @@ export default function OnboardingTour({ role, token, onDone }: Props) {
         {/* Progress dots */}
         <div style={{ display: 'flex', justifyContent: 'center', gap: 6, marginBottom: '1.5rem' }}>
           {steps.map((_, i) => (
-            <div key={i} onClick={() => setStep(i)} style={{
+            <button type="button" aria-label={`Go to step ${i + 1}`} key={i} onClick={() => setStep(i)} style={{
               width: i === step ? 20 : 7, height: 7,
               borderRadius: 4, cursor: 'pointer',
               background: i === step ? '#3a8c3f' : i < step ? '#a5d6a7' : '#e0e0e0',
               transition: 'all .3s ease',
+              border: 0, padding: 0,
             }}/>
           ))}
         </div>
@@ -288,7 +289,7 @@ export default function OnboardingTour({ role, token, onDone }: Props) {
         {/* Buttons */}
         <div style={{ display: 'flex', gap: 8 }}>
           {step > 0 && (
-            <button onClick={back} style={{
+            <button type="button" onClick={back} style={{
               flex: 1, padding: '0.75rem', borderRadius: 8,
               border: '1.5px solid #ddd', background: 'white',
               fontSize: 14, fontWeight: 600, color: '#666', cursor: 'pointer',
@@ -296,15 +297,15 @@ export default function OnboardingTour({ role, token, onDone }: Props) {
               Back
             </button>
           )}
-          <button onClick={next} style={{
+          <button type="button" onClick={next} style={{
             flex: 2, padding: '0.75rem', borderRadius: 8,
             border: 'none', background: '#3a8c3f',
             fontSize: 14, fontWeight: 700, color: 'white', cursor: 'pointer',
           }}>
-            {isLast ? (role === 'admin' ? 'Go to dashboard' : 'Go to queue') : 'Next'}
+            {isLast ? 'Finish tour' : 'Next'}
           </button>
         </div>
-      </div>
+      </section>
     </div>
   );
 }

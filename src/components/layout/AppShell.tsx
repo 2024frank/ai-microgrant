@@ -1,65 +1,120 @@
 'use client';
-import { useState } from 'react';
+
+import { useEffect, useRef, useState } from 'react';
+import { usePathname } from 'next/navigation';
+import { Menu, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import Sidebar from './Sidebar';
-import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 
 interface AppShellProps {
-  role:     'admin' | 'reviewer';
-  name:     string;
-  email?:   string;
-  token?:   string;
+  role: 'admin' | 'reviewer';
+  name: string;
+  email?: string;
+  token?: string;
   children: React.ReactNode;
+  workspaceLabel?: string;
 }
 
-export default function AppShell({ role, name, email, token, children }: AppShellProps) {
-  const [open, setOpen] = useState(true);
+export default function AppShell({
+  role,
+  name,
+  email,
+  token,
+  children,
+  workspaceLabel = 'Community publishing workspace',
+}: AppShellProps) {
+  const pathname = usePathname();
+  const mobileToggleRef = useRef<HTMLButtonElement>(null);
+  const wasMobileOpen = useRef(false);
+  const [collapsed, setCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname]);
+
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 900px)');
+    const update = () => setIsMobile(media.matches);
+    update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
+
+  useEffect(() => {
+    if (!isMobile) {
+      wasMobileOpen.current = false;
+      return;
+    }
+    if (mobileOpen) {
+      wasMobileOpen.current = true;
+      window.requestAnimationFrame(() => {
+        document.querySelector<HTMLAnchorElement>('#app-navigation a')?.focus();
+      });
+    } else if (wasMobileOpen.current) {
+      wasMobileOpen.current = false;
+      mobileToggleRef.current?.focus();
+    }
+  }, [isMobile, mobileOpen]);
 
   return (
-    <div style={{ display: 'flex', minHeight: '100vh', background: '#f8f9fa' }}>
-      {/* Sidebar */}
-      <div style={{
-        width: open ? 224 : 0,
-        minWidth: open ? 224 : 0,
-        overflow: 'hidden',
-        transition: 'width 0.2s ease, min-width 0.2s ease',
-        flexShrink: 0,
-      }}>
-        <Sidebar role={role} name={name} email={email} token={token}/>
-      </div>
+    <div className="app-shell">
+      <Sidebar
+        role={role}
+        name={name}
+        email={email}
+        token={token}
+        collapsed={collapsed}
+        mobileOpen={mobileOpen}
+        navigationHidden={isMobile && !mobileOpen}
+        onMobileClose={() => setMobileOpen(false)}
+      />
 
-      {/* Toggle button */}
       <button
-        onClick={() => setOpen(o => !o)}
-        title={open ? 'Collapse sidebar' : 'Open sidebar'}
-        style={{
-          position: 'fixed',
-          top: 14,
-          left: open ? 188 : 8,
-          zIndex: 200,
-          width: 28,
-          height: 28,
-          borderRadius: 7,
-          border: '1.5px solid #e0e0e0',
-          background: 'white',
-          cursor: 'pointer',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: '#888',
-          boxShadow: '0 1px 4px rgba(0,0,0,0.08)',
-          transition: 'left 0.2s ease',
-          padding: 0,
-        }}
-        onMouseEnter={e => { e.currentTarget.style.borderColor = '#3a8c3f'; e.currentTarget.style.color = '#3a8c3f'; }}
-        onMouseLeave={e => { e.currentTarget.style.borderColor = '#e0e0e0'; e.currentTarget.style.color = '#888'; }}
-      >
-        {open ? <PanelLeftClose size={14}/> : <PanelLeftOpen size={14}/>}
-      </button>
+        type="button"
+        className="app-shell__overlay"
+        data-open={mobileOpen}
+        aria-label="Close navigation"
+        aria-hidden={!mobileOpen}
+        disabled={!mobileOpen}
+        tabIndex={mobileOpen ? 0 : -1}
+        onClick={() => setMobileOpen(false)}
+      />
 
-      {/* Main content */}
-      <main style={{ flex: 1, minWidth: 0, paddingTop: 0 }}>
+      <div className="app-shell__body">
+        <header className="app-topbar">
+          <button
+            type="button"
+            ref={mobileToggleRef}
+            className="app-topbar__toggle app-topbar__toggle--mobile"
+            aria-label={mobileOpen ? 'Close navigation' : 'Open navigation'}
+            aria-controls="app-navigation"
+            aria-expanded={mobileOpen}
+            onClick={() => setMobileOpen(open => !open)}
+          >
+            <Menu size={18} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className="app-topbar__toggle app-topbar__toggle--desktop"
+            aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
+            aria-controls="app-navigation"
+            onClick={() => setCollapsed(value => !value)}
+          >
+            {collapsed
+              ? <PanelLeftOpen size={18} aria-hidden="true" />
+              : <PanelLeftClose size={18} aria-hidden="true" />}
+          </button>
+          <div className="app-topbar__identity">
+            <span className="app-topbar__mark" aria-hidden="true">CH</span>
+            <div>
+              <div className="app-topbar__eyebrow">CommunityHub intake</div>
+              <div className="app-topbar__name">{workspaceLabel}</div>
+            </div>
+          </div>
+        </header>
         {children}
-      </main>
+      </div>
     </div>
   );
 }

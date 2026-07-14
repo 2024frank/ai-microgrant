@@ -1,571 +1,923 @@
 'use client';
+
+import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
-import { useAuth } from '@/hooks/useAuth';
 import { useParams, useRouter } from 'next/navigation';
-import Sidebar from '@/components/layout/Sidebar';
-import { ExternalLink, Check, X, Plus, Trash2, Save, RotateCcw } from 'lucide-react';
-import { getTimezoneLabel } from '@/lib/timezone';
-import { EVENT_TYPES } from '@/lib/eventTypes';
+import {
+  AlertTriangle,
+  ArrowLeft,
+  CalendarDays,
+  Check,
+  CheckCircle2,
+  Circle,
+  ExternalLink,
+  FileJson2,
+  ImageIcon,
+  Mail,
+  MapPin,
+  Plus,
+  RefreshCcw,
+  Save,
+  ShieldCheck,
+  Trash2,
+  X,
+  XCircle,
+} from 'lucide-react';
+import AppShell from '@/components/layout/AppShell';
 import EventTypeBadge from '@/components/EventTypeBadge';
+import { useAuth } from '@/hooks/useAuth';
+import { getTimezoneLabel } from '@/lib/timezone';
+import { OBERLIN_POST_TYPE_IDS, OBERLIN_POST_TYPE_LABELS } from '@/lib/communityHubPayload';
+import { validatePublicHttpUrl } from '@/lib/publicHttpUrl';
 
-const REASON_CODES = [
-  { code: 'wrong_audience',           label: 'Wrong audience (staff/students only)' },
-  { code: 'bad_date_parse',           label: 'Date or time extracted incorrectly' },
-  { code: 'duplicate_missed',         label: 'Duplicate — already in CommunityHub' },
-  { code: 'description_hallucinated', label: 'Description has invented details' },
-  { code: 'missing_fields',           label: 'Required fields left empty' },
-  { code: 'wrong_geo_scope',          label: 'Geographic scope tagged incorrectly' },
-  { code: 'not_public_event',         label: 'Private or invitation-only' },
-  { code: 'wrong_post_type',          label: 'Post type category incorrect' },
-  { code: 'bad_location',             label: 'Location missing or wrong' },
-  { code: 'other',                    label: 'Other (see note)' },
-];
+type PostKind = 'ot' | 'an' | 'jp';
+type Session = { startTime: number; endTime: number };
+type ActionButton = { title: string; link: string };
 
-const LOCATION_TYPES  = ['ph2','on','bo','ne'];
-const LOCATION_LABELS: Record<string,string> = { ph2:'In-person', on:'Online', bo:'Hybrid', ne:'None' };
-const GEO_SCOPES      = ['hyper_local','city_wide','county','regional'];
-const GEO_LABELS: Record<string,string> = { hyper_local:'Hyper-local', city_wide:'City-wide', county:'County', regional:'Regional' };
-const DISPLAY_OPTIONS = [['all','All screens'],['ps','Primary'],['sps','Secondary'],['ss','Single']] as const;
-const POST_TYPES = [
-  { id:1,  label:'Volunteer Opportunity' },
-  { id:2,  label:'Exhibit' },
-  { id:3,  label:'Fair / Festival / Celebration' },
-  { id:4,  label:'Tour / Open House' },
-  { id:5,  label:'Film' },
-  { id:6,  label:'Presentation / Lecture' },
-  { id:7,  label:'Workshop / Class' },
-  { id:8,  label:'Music Performance' },
-  { id:9,  label:'Theatre / Dance' },
-  { id:10, label:'City Government' },
-  { id:11, label:'Spectator Sport' },
-  { id:12, label:'Participatory Sport / Game' },
-  { id:13, label:'Networking Event' },
-  { id:59, label:'Ecolympics / Environmental' },
-  { id:89, label:'Other' },
-];
-
-function toDatetimeLocal(unixSeconds: number | string): string {
-  if (!unixSeconds) return '';
-  const d = typeof unixSeconds === 'string' ? new Date(unixSeconds) : new Date(unixSeconds * 1000);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+interface ReadinessCheck {
+  id: string;
+  label: string;
+  detail: string;
+  pass: boolean;
 }
 
-function fromDatetimeLocal(val: string): number {
-  if (!val) return 0;
-  return Math.floor(new Date(val).getTime() / 1000);
+const POST_KINDS: Array<{ value: PostKind; label: string; description: string }> = [
+  { value: 'ot', label: 'Event', description: 'A scheduled public event' },
+  { value: 'an', label: 'Announcement', description: 'A time-bound public notice' },
+  { value: 'jp', label: 'Job', description: 'A public employment post' },
+];
+
+const POST_CATEGORIES = OBERLIN_POST_TYPE_IDS.map(id => ({
+  id,
+  label: OBERLIN_POST_TYPE_LABELS[id],
+}));
+const DOCUMENTED_CATEGORY_IDS = new Set<number>(POST_CATEGORIES.map(category => category.id));
+
+const LOCATION_OPTIONS = [
+  { value: 'ph2', label: 'In person' },
+  { value: 'on', label: 'Online' },
+  { value: 'bo', label: 'Hybrid' },
+  { value: 'ne', label: 'No location' },
+];
+
+const DISPLAY_OPTIONS = [
+  { value: 'all', label: 'All public screens' },
+  { value: 'ps', label: 'School screens' },
+  { value: 'sps', label: 'School + public' },
+  { value: 'ss', label: 'Specific screens' },
+];
+
+const GEO_OPTIONS = [
+  { value: 'hyper_local', label: 'Hyper-local' },
+  { value: 'city_wide', label: 'City-wide' },
+  { value: 'county', label: 'County' },
+  { value: 'regional', label: 'Regional' },
+];
+
+const REASON_CODES = [
+  { code: 'wrong_audience', label: 'Wrong audience (staff or students only)' },
+  { code: 'bad_date_parse', label: 'Date or time extracted incorrectly' },
+  { code: 'duplicate_missed', label: 'Duplicate already in CommunityHub' },
+  { code: 'description_hallucinated', label: 'Description contains invented details' },
+  { code: 'missing_fields', label: 'Required fields are missing' },
+  { code: 'wrong_geo_scope', label: 'Geographic scope is wrong' },
+  { code: 'not_public_event', label: 'Private or invitation-only' },
+  { code: 'wrong_post_type', label: 'Post kind or category is wrong' },
+  { code: 'bad_location', label: 'Location is missing or wrong' },
+  { code: 'other', label: 'Other' },
+];
+
+function parseJson<T>(value: unknown, fallback: T): T {
+  if (value === null || value === undefined || value === '') return fallback;
+  if (typeof value === 'string') {
+    try { return JSON.parse(value) as T; } catch { return fallback; }
+  }
+  return value as T;
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  const parsed = parseJson<unknown>(value, []);
+  if (!Array.isArray(parsed)) return [];
+  return parsed
+    .filter(item => typeof item === 'string' || typeof item === 'number')
+    .map(item => String(item).trim())
+    .filter(Boolean);
+}
+
+function normalizeNumberArray(value: unknown): number[] {
+  const parsed = parseJson<unknown>(value, []);
+  if (!Array.isArray(parsed)) return [];
+  return parsed
+    .map(item => Number(item))
+    .filter(item => Number.isInteger(item) && item > 0);
+}
+
+function normalizeSessions(value: unknown): Session[] {
+  const parsed = parseJson<unknown>(value, []);
+  if (!Array.isArray(parsed)) return [];
+  return parsed
+    .filter(item => item !== null && typeof item === 'object')
+    .map(item => {
+      const session = item as Record<string, unknown>;
+      return {
+        startTime: Number(session.startTime) || 0,
+        endTime: Number(session.endTime) || 0,
+      };
+    });
+}
+
+function normalizeButtons(value: unknown): ActionButton[] {
+  const parsed = parseJson<unknown>(value, []);
+  if (!Array.isArray(parsed)) return [];
+  return parsed
+    .filter(item => item !== null && typeof item === 'object')
+    .map(item => {
+      const button = item as Record<string, unknown>;
+      return {
+        title: typeof button.title === 'string' ? button.title : '',
+        link: typeof button.link === 'string' ? button.link : '',
+      };
+    });
+}
+
+function toDatetimeLocal(value: number | string): string {
+  if (!value) return '';
+  const numeric = Number(value);
+  const date = Number.isFinite(numeric) && numeric > 10_000
+    ? new Date(numeric * 1000)
+    : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = (part: number) => String(part).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function fromDatetimeLocal(value: string): number {
+  const millis = new Date(value).getTime();
+  return Number.isFinite(millis) ? Math.floor(millis / 1000) : 0;
+}
+
+function validHttpUrl(value: string) {
+  if (!value.trim()) return false;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function validEmail(value: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function validPhone(value: string) {
+  return /^(?=.*\d)\+?[0-9().\-\s]{7,30}$/.test(value);
 }
 
 export default function ReviewEventPage() {
-  const { user, token: authToken, ready } = useAuth();
-  const { id }  = useParams();
-  const router  = useRouter();
-  const startMsRef = useRef(0);
-
-  const [event, setEvent]           = useState<any>(null);
-  const [edits, setEdits]           = useState<Record<string,any>>({});
-  const [showReject, setShowReject] = useState(false);
-  const [showSendBack, setShowSendBack] = useState(false);
-  const [correctionNotes, setCorrectionNotes] = useState('');
-  const [sendingBack, setSendingBack]         = useState(false);
-  const [reasons, setReasons]       = useState<string[]>([]);
-  const [note, setNote]             = useState('');
+  const { user, token, ready } = useAuth();
+  const params = useParams<{ id: string }>();
+  const router = useRouter();
+  const reviewStartedAt = useRef(0);
+  const [event, setEvent] = useState<Record<string, any> | null>(null);
+  const [edits, setEdits] = useState<Record<string, any>>({});
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [toast, setToast] = useState<{ message: string; error?: boolean } | null>(null);
+  const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [saving, setSaving]         = useState(false);
-  const [toast, setToast]           = useState('');
-  const [tzLabel]                   = useState(getTimezoneLabel);
-
-  useEffect(() => { startMsRef.current = Date.now(); }, []);
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [correctionOpen, setCorrectionOpen] = useState(false);
+  const [reasons, setReasons] = useState<string[]>([]);
+  const [reviewNote, setReviewNote] = useState('');
+  const [correctionNote, setCorrectionNote] = useState('');
+  const [timezoneLabel] = useState(getTimezoneLabel);
 
   useEffect(() => {
-    if (!ready || !authToken) return;
-    fetch(`/api/review/events/${id}`, { headers: { Authorization: `Bearer ${authToken}` } })
-      .then(r => r.json()).then(setEvent);
-  }, [ready, authToken, id]);
+    reviewStartedAt.current = Date.now();
+  }, []);
 
-  function field(key: string) {
-    return edits[key] !== undefined ? edits[key] : (event?.[key] ?? '');
-  }
-  function set(key: string, val: any) { setEdits(e => ({ ...e, [key]: val })); }
-  function parseJson(val: any, fallback: any = []) {
-    if (val === null || val === undefined) return fallback;
-    if (typeof val === 'string') { try { return JSON.parse(val); } catch { return fallback; } }
-    return val;
+  useEffect(() => {
+    if (!rejectOpen && !correctionOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setRejectOpen(false);
+      setCorrectionOpen(false);
+    };
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [rejectOpen, correctionOpen]);
+
+  useEffect(() => {
+    if (!ready || !token || !params.id) return;
+    let cancelled = false;
+    setLoading(true);
+    setLoadError('');
+    fetch(`/api/review/events/${params.id}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(async response => {
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || 'This record could not be loaded.');
+        return payload;
+      })
+      .then(payload => {
+        if (!cancelled) setEvent(payload);
+      })
+      .catch(error => {
+        if (!cancelled) setLoadError(error instanceof Error ? error.message : 'This record could not be loaded.');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [ready, token, params.id]);
+
+  function field<T = any>(key: string, fallback: T = '' as T): T {
+    if (edits[key] !== undefined) return edits[key] as T;
+    if (event?.[key] !== null && event?.[key] !== undefined) return event[key] as T;
+    return fallback;
   }
 
-  // Sessions
-  const editSessions: Array<{startTime: number, endTime: number}> = parseJson(field('sessions'));
-  function updateSession(i: number, key: 'startTime'|'endTime', val: string) {
-    set('sessions', editSessions.map((s, idx) => idx === i ? { ...s, [key]: fromDatetimeLocal(val) } : s));
+  function setField(key: string, value: any) {
+    setEdits(current => ({ ...current, [key]: value }));
   }
-  function addSession() { set('sessions', [...editSessions, { startTime: 0, endTime: 0 }]); }
-  function removeSession(i: number) { set('sessions', editSessions.filter((_, idx) => idx !== i)); }
 
-  // Buttons
-  const editButtons: Array<{title: string, link: string}> = parseJson(field('buttons'), []);
-  function updateButton(i: number, key: 'title'|'link', val: string) {
-    set('buttons', editButtons.map((b, idx) => idx === i ? { ...b, [key]: val } : b));
+  function showToast(message: string, error = false) {
+    setToast({ message, error });
+    window.setTimeout(() => setToast(null), 4200);
   }
-  function addButton() { set('buttons', [...editButtons, { title: '', link: '' }]); }
-  function removeButton(i: number) { set('buttons', editButtons.filter((_, idx) => idx !== i)); }
 
-  function showToast(msg: string) {
-    setToast(msg);
-    setTimeout(() => setToast(''), 3500);
+  const postKind = String(field('event_type', ''));
+  const title = String(field('title', ''));
+  const description = String(field('description', ''));
+  const extendedDescription = String(field('extended_description', ''));
+  const locationType = String(field('location_type', ''));
+  const location = String(field('location', ''));
+  const urlLink = String(field('url_link', ''));
+  const contactEmail = String(field('contact_email', ''));
+  const phone = String(field('phone', ''));
+  const website = String(field('website', ''));
+  const imageUrl = String(field('image_cdn_url', ''));
+  const safeImageUrl = imageUrl && validatePublicHttpUrl(imageUrl).success ? imageUrl : '';
+  const display = String(field('display', ''));
+  const sessions = normalizeSessions(field('sessions', []));
+  const sponsors = normalizeStringArray(field('sponsors', []));
+  const postTypeIds = normalizeNumberArray(field('post_type_ids', []));
+  const screenIds = normalizeNumberArray(field('screen_ids', []));
+  const buttons = normalizeButtons(field('buttons', []));
+  const ingestionValidationIssues = parseJson<Array<{ path?: string; message?: string }>>(
+    event?.validation_errors,
+    [],
+  );
+  const unsupportedCategoryIds = postTypeIds.filter(id => !DOCUMENTED_CATEGORY_IDS.has(id));
+  const addressChangedWithPlaceId = ['ph2', 'bo'].includes(locationType)
+    && edits.location !== undefined
+    && String(edits.location).trim() !== String(event?.location || '').trim()
+    && Boolean(event?.place_id);
+
+  const readiness: ReadinessCheck[] = (() => {
+    const validSessions = sessions.length > 0 && sessions.every(session => (
+      Number.isSafeInteger(Number(session.startTime)) && Number(session.startTime) > 0
+      && Number(session.startTime) <= 9_999_999_999
+      && Number.isSafeInteger(Number(session.endTime))
+      && Number(session.endTime) <= 9_999_999_999
+      && Number(session.endTime) >= Number(session.startTime)
+    ));
+    const physicalReady = !['ph2', 'bo'].includes(locationType) || location.trim().length > 0;
+    const onlineReady = !['on', 'bo'].includes(locationType) || validHttpUrl(urlLink);
+    const displayReady = ['all', 'ps', 'sps', 'ss'].includes(display) && (display !== 'ss' || screenIds.length > 0);
+    const optionalContactsReady = (!contactEmail || validEmail(contactEmail))
+      && (!website || validHttpUrl(website))
+      && (!imageUrl || Boolean(safeImageUrl))
+      && (!phone || validPhone(phone));
+    const sourceLinksReady = (!event?.calendar_source_url || validHttpUrl(String(event.calendar_source_url)))
+      && (!event?.ingested_post_url || validHttpUrl(String(event.ingested_post_url)));
+    const buttonsReady = buttons.every(button => button.title.trim().length > 0 && validHttpUrl(button.link));
+
+    return [
+      {
+        id: 'kind',
+        label: 'Post kind',
+        detail: ['ot', 'an', 'jp'].includes(postKind) ? 'Event, announcement, or job selected.' : 'Select Event, Announcement, or Job.',
+        pass: ['ot', 'an', 'jp'].includes(postKind),
+      },
+      {
+        id: 'email',
+        label: 'Publishing email',
+        detail: event?.publishing_email_configured
+          ? 'A valid publishing identity is configured on the server.'
+          : 'An administrator must configure a valid CommunityHub publishing email.',
+        pass: event?.publishing_email_configured === true,
+      },
+      {
+        id: 'title',
+        label: 'Title',
+        detail: title.trim().length >= 1 && title.length <= 60 ? `${title.length}/60 characters.` : 'Required; 1–60 characters and not whitespace only.',
+        pass: title.trim().length >= 1 && title.length <= 60,
+      },
+      {
+        id: 'description',
+        label: 'Description',
+        detail: description.trim().length >= 10 && description.length <= 200 ? `${description.length}/200 characters.` : 'Required; 10–200 meaningful characters.',
+        pass: description.trim().length >= 10 && description.length <= 200,
+      },
+      {
+        id: 'sponsors',
+        label: 'Sponsors',
+        detail: sponsors.length ? `${sponsors.length} sponsor${sponsors.length === 1 ? '' : 's'} supplied.` : 'Add at least one sponsor.',
+        pass: sponsors.length > 0,
+      },
+      {
+        id: 'categories',
+        label: 'Categories',
+        detail: postTypeIds.length && !unsupportedCategoryIds.length
+          ? `${postTypeIds.length} documented categor${postTypeIds.length === 1 ? 'y' : 'ies'} selected.`
+          : unsupportedCategoryIds.length ? `Unsupported category IDs: ${unsupportedCategoryIds.join(', ')}.` : 'Select at least one CommunityHub category.',
+        pass: postTypeIds.length > 0 && unsupportedCategoryIds.length === 0,
+      },
+      {
+        id: 'sessions',
+        label: 'Sessions',
+        detail: validSessions ? `${sessions.length} valid session${sessions.length === 1 ? '' : 's'}.` : 'Add a valid start and end time; end cannot precede start.',
+        pass: validSessions,
+      },
+      {
+        id: 'location',
+        label: 'Location',
+        detail: physicalReady && onlineReady && LOCATION_OPTIONS.some(option => option.value === locationType)
+          ? 'Conditional location fields are complete.'
+          : 'Choose a location type and complete its required address or URL.',
+        pass: physicalReady && onlineReady && LOCATION_OPTIONS.some(option => option.value === locationType),
+      },
+      {
+        id: 'place-id',
+        label: 'Place identity',
+        detail: addressChangedWithPlaceId
+          ? 'The address changed but the stored Google place ID cannot be updated by this form. Revert the address or resolve the place ID upstream.'
+          : 'The stored place identity is consistent with this draft.',
+        pass: !addressChangedWithPlaceId,
+      },
+      {
+        id: 'display',
+        label: 'Display',
+        detail: displayReady ? (display === 'ss' ? `${screenIds.length} specific screen${screenIds.length === 1 ? '' : 's'}.` : 'A valid screen audience is selected.') : 'Specific screens requires at least one existing screen ID.',
+        pass: displayReady,
+      },
+      {
+        id: 'optional',
+        label: 'Links and contact fields',
+        detail: optionalContactsReady && buttonsReady && extendedDescription.length <= 1000
+          ? 'Optional values use valid formats.'
+          : 'Correct invalid email, phone, URL, button, or long-description values.',
+        pass: optionalContactsReady && sourceLinksReady && buttonsReady && extendedDescription.length <= 1000,
+      },
+      {
+        id: 'ingestion-validation',
+        label: 'Ingestion validation',
+        detail: ingestionValidationIssues.length === 0
+          ? 'The last server validation found no unresolved extractor issues.'
+          : 'Save corrected fields to rerun server validation before publishing.',
+        pass: ingestionValidationIssues.length === 0,
+      },
+    ];
+  })();
+
+  const failedChecks = readiness.filter(check => !check.pass);
+  const payloadReady = failedChecks.length === 0;
+  const hasEdits = Object.keys(edits).length > 0;
+
+  const payloadPreview = (() => {
+    const payload: Record<string, any> = {
+      eventType: postKind || null,
+      email: event?.publishing_email_configured ? '[server configured]' : '[missing server configuration]',
+      subscribe: true,
+      phone: phone || '',
+      website: website || '',
+      urlLink: urlLink || '',
+      placeId: String(event?.place_id || ''),
+      title,
+      sponsors,
+      postTypeId: postTypeIds,
+      sessions,
+      description,
+      extendedDescription: extendedDescription || undefined,
+      locationType: locationType || null,
+      display: display || null,
+      screensIds: screenIds,
+      calendarSourceName: event?.calendar_source_name || '',
+      calendarSourceUrl: event?.calendar_source_url || '',
+      ingestedPostUrl: event?.ingested_post_url || '',
+      public: '1',
+    };
+    if (contactEmail) payload.contactEmail = contactEmail;
+    if (['ph2', 'bo'].includes(locationType)) payload.location = location;
+    if (['on', 'bo'].includes(locationType)) payload.urlLink = urlLink;
+    if (field('place_name', '')) payload.placeName = field('place_name');
+    if (field('room_num', '')) payload.roomNum = field('room_num');
+    payload.buttons = buttons;
+    if (field('image_cdn_url', '') || event?.image_data) payload.image_cdn_url = '[application poster endpoint]';
+    return Object.fromEntries(Object.entries(payload).filter(([, value]) => value !== undefined));
+  })();
+
+  function updateSession(index: number, key: keyof Session, value: string) {
+    setField('sessions', sessions.map((session, sessionIndex) => (
+      sessionIndex === index ? { ...session, [key]: fromDatetimeLocal(value) } : session
+    )));
+  }
+
+  function updateButton(index: number, key: keyof ActionButton, value: string) {
+    setField('buttons', buttons.map((button, buttonIndex) => (
+      buttonIndex === index ? { ...button, [key]: value } : button
+    )));
   }
 
   async function saveEdits() {
-    if (!Object.keys(edits).length) return;
+    if (!token || !hasEdits) return;
     setSaving(true);
-    const res = await fetch(`/api/events/${id}/edit`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-      body: JSON.stringify({ edits }),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      setEvent(data.event);
+    try {
+      const response = await fetch(`/api/events/${params.id}/edit`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ edits }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'Edits could not be saved.');
+      setEvent(current => ({ ...current, ...payload.event }));
       setEdits({});
-      showToast(`✓ Saved${data.changed_fields.length ? ': ' + data.changed_fields.join(', ') : ''}`);
-    } else {
-      const d = await res.json().catch(() => ({}));
-      showToast(`Error: ${d.error || 'Save failed'}`);
+      const changed = Array.isArray(payload.changed_fields) ? payload.changed_fields.length : 0;
+      showToast(`${changed || 'Field'} ${changed === 1 ? 'change' : 'changes'} saved as reviewer feedback.`);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Edits could not be saved.', true);
+    } finally {
+      setSaving(false);
     }
-    setSaving(false);
   }
 
   async function approve() {
+    if (!token || !payloadReady || submitting || saving) return;
     setSubmitting(true);
-    const time_spent_sec = Math.round((Date.now() - startMsRef.current) / 1000);
-    const res = await fetch(`/api/review/events/${id}/action`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-      body: JSON.stringify({ action: 'approve', edits, time_spent_sec }),
-    });
-    if (res.ok) {
-      showToast('✓ Approved and submitted to CommunityHub');
-      setTimeout(() => router.push('/reviewer/queue'), 1200);
-    } else {
-      const d = await res.json().catch(() => ({}));
-      showToast(`Error: ${d.error || 'Please try again'}`);
+    try {
+      const response = await fetch(`/api/review/events/${params.id}/action`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          action: 'approve',
+          edits,
+          time_spent_sec: reviewStartedAt.current ? Math.round((Date.now() - reviewStartedAt.current) / 1000) : 0,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'CommunityHub did not accept this payload.');
+      showToast('Published to CommunityHub.');
+      window.setTimeout(() => router.push('/reviewer/queue'), 900);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'This record could not be published.', true);
       setSubmitting(false);
     }
   }
 
-  async function sendBackForCorrection() {
-    if (!correctionNotes.trim()) return;
-    setSendingBack(true);
-    const res = await fetch(`/api/review/events/${id}/send-for-correction`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-      body: JSON.stringify({ correction_notes: correctionNotes }),
-    });
-    if (res.ok) {
-      showToast('Queued for an automated correction attempt');
-      setShowSendBack(false);
-      setCorrectionNotes('');
-      setTimeout(() => router.push('/reviewer/queue'), 1200);
-    } else {
-      const d = await res.json().catch(() => ({}));
-      showToast(`Error: ${d.error || 'Please try again'}`);
-      setSendingBack(false);
+  async function reject() {
+    if (!token || !reasons.length || submitting) return;
+    setSubmitting(true);
+    try {
+      const response = await fetch(`/api/review/events/${params.id}/action`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          action: 'reject',
+          edits: { reason_codes: reasons, reviewer_note: reviewNote },
+          time_spent_sec: reviewStartedAt.current ? Math.round((Date.now() - reviewStartedAt.current) / 1000) : 0,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'This record could not be rejected.');
+      showToast('Record rejected and reviewer feedback saved.');
+      window.setTimeout(() => router.push('/reviewer/queue'), 800);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'This record could not be rejected.', true);
+      setSubmitting(false);
     }
   }
 
-  async function reject() {
-    if (!reasons.length) return;
+  async function requestCorrection() {
+    if (!token || !correctionNote.trim() || submitting) return;
     setSubmitting(true);
-    const time_spent_sec = Math.round((Date.now() - startMsRef.current) / 1000);
-    const res = await fetch(`/api/review/events/${id}/action`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
-      body: JSON.stringify({ action: 'reject', edits: { reason_codes: reasons, reviewer_note: note }, time_spent_sec }),
-    });
-    if (res.ok) {
-      showToast('Event rejected');
-      setTimeout(() => router.push('/reviewer/queue'), 1000);
-    } else {
-      const d = await res.json().catch(() => ({}));
-      showToast(`Error: ${d.error || 'Please try again'}`);
+    try {
+      const response = await fetch(`/api/review/events/${params.id}/send-for-correction`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ correction_notes: correctionNote.trim() }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'The correction request could not be queued.');
+      showToast('Correction attempt queued for another review pass.');
+      window.setTimeout(() => router.push('/reviewer/queue'), 900);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'The correction request could not be queued.', true);
       setSubmitting(false);
     }
   }
 
   if (!ready || !user) return null;
 
-  if (!event) return (
-    <div style={{ display:'flex', minHeight:'100vh' }}>
-      <Sidebar role={user.role} name={user.name} email={user.email} token={authToken}/>
-      <main style={{ flex:1, padding:'2rem', color:'#888', fontSize:14 }}>Loading…</main>
-    </div>
-  );
-
-  const hasEdits    = Object.keys(edits).length > 0;
-  const postTypeIds: number[] = parseJson(field('post_type_ids'), []);
-
   return (
-    <div style={{ display:'flex', minHeight:'100vh', background:'#f8f9fa' }}>
-      <Sidebar role={user.role} name={user.name} email={user.email} token={authToken}/>
+    <AppShell role={user.role} name={user.name} email={user.email} token={token} workspaceLabel="Payload review studio">
+      <div aria-live="polite" aria-atomic="true">
+        {toast && <div className={`toast ${toast.error ? 'toast--error' : ''}`} role={toast.error ? 'alert' : 'status'}>{toast.message}</div>}
+      </div>
 
-      <main className="page-main" style={{ maxWidth:900 }}>
-        {toast && (
-          <div style={{ position:'fixed', top:20, right:20, background: toast.startsWith('Error') ? '#c0392b' : '#3a8c3f', color:'white', padding:'0.75rem 1.25rem', borderRadius:8, fontSize:13, fontWeight:500, zIndex:999 }}>
-            {toast}
+      <main className="page-main">
+        {loading ? (
+          <div className="loading-state" role="status"><span className="spinner" /> Loading source and payload fields…</div>
+        ) : loadError || !event ? (
+          <div className="empty-state">
+            <span className="empty-state__icon" style={{ background: 'var(--red-50)', color: 'var(--red-700)' }}><XCircle size={23} /></span>
+            <h2>Record unavailable</h2>
+            <p>{loadError || 'The requested record was not found.'}</p>
+            <Link href="/reviewer/queue" className="btn-secondary" style={{ marginTop: 16 }}>Return to queue</Link>
           </div>
+        ) : (
+          <>
+            <header className="studio-header">
+              <div>
+                <Link href="/reviewer/queue" className="studio-back"><ArrowLeft size={14} /> Back to queue</Link>
+                <h1>Review Studio</h1>
+                <p>Compare the extracted record, correct the draft, and inspect the exact outgoing payload before publishing.</p>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <EventTypeBadge value={postKind} />
+                <span className={payloadReady ? 'badge badge-green' : 'badge badge-red'}>
+                  {payloadReady ? <CheckCircle2 size={12} /> : <AlertTriangle size={12} />}
+                  {payloadReady ? 'Ready to publish' : `${failedChecks.length} blocker${failedChecks.length === 1 ? '' : 's'}`}
+                </span>
+              </div>
+            </header>
+
+            <div className="studio-grid">
+              <div>
+                <form className="studio-form" onSubmit={event => event.preventDefault()}>
+                  <StudioSection title="Post identity" hint="Post kind and categories are separate CommunityHub fields.">
+                    <fieldset className="fieldset">
+                      <legend className="fieldset__legend">Post kind · eventType</legend>
+                      <div className="segmented">
+                        {POST_KINDS.map(kind => (
+                          <button
+                            type="button"
+                            key={kind.value}
+                            className="segment"
+                            aria-pressed={postKind === kind.value}
+                            title={kind.description}
+                            onClick={() => setField('event_type', kind.value)}
+                          >
+                            {kind.label}
+                          </button>
+                        ))}
+                      </div>
+                      {!['ot', 'an', 'jp'].includes(postKind) && <div className="field__error" style={{ marginTop: 7 }}>The extracted code “{postKind || 'empty'}” is not a supported CommunityHub post kind. Choose one explicitly.</div>}
+                    </fieldset>
+
+                    <div className="field">
+                      <label className="field__label" htmlFor="record-title">Title · {title.length}/60</label>
+                      <input id="record-title" className="input" aria-invalid={title.trim().length < 1 || title.length > 60} maxLength={60} value={title} onChange={event => setField('title', event.target.value)} />
+                      {(title.trim().length < 1 || title.length > 60) && <div className="field__error">A meaningful title between 1 and 60 characters is required.</div>}
+                    </div>
+
+                    <div className="field">
+                      <label className="field__label" htmlFor="record-description">Short description · {description.length}/200</label>
+                      <textarea id="record-description" className="input" aria-invalid={description.trim().length < 10 || description.length > 200} maxLength={200} rows={3} value={description} onChange={event => setField('description', event.target.value)} />
+                      {(description.trim().length < 10 || description.length > 200) && <div className="field__error">The short description must contain 10–200 meaningful characters.</div>}
+                    </div>
+
+                    <div className="field">
+                      <label className="field__label" htmlFor="record-extended-description">Long description · {extendedDescription.length}/1,000</label>
+                      <textarea id="record-extended-description" className="input" aria-invalid={extendedDescription.length > 1000} maxLength={1000} rows={6} value={extendedDescription} onChange={event => setField('extended_description', event.target.value)} />
+                    </div>
+
+                    <div className="field">
+                      <label className="field__label" htmlFor="record-sponsors">Sponsors · minimum 1</label>
+                      <input
+                        id="record-sponsors"
+                        className="input"
+                        aria-invalid={!sponsors.length}
+                        value={sponsors.join(', ')}
+                        onChange={event => setField('sponsors', event.target.value.split(',').map(value => value.trim()).filter(Boolean))}
+                        placeholder="Organization One, Organization Two"
+                      />
+                      <span className="field__hint">Separate multiple sponsors with commas.</span>
+                    </div>
+                  </StudioSection>
+
+                  <StudioSection title="Schedule" hint={`All times shown in ${timezoneLabel}.`}>
+                    {sessions.map((session, index) => (
+                      <div className="studio-session" key={index}>
+                        <div className="field">
+                          <label className="field__label" htmlFor={`session-${index}-start`}>Session {index + 1} start</label>
+                          <input id={`session-${index}-start`} type="datetime-local" className="input" value={toDatetimeLocal(session.startTime)} onChange={event => updateSession(index, 'startTime', event.target.value)} />
+                        </div>
+                        <div className="field">
+                          <label className="field__label" htmlFor={`session-${index}-end`}>End</label>
+                          <input id={`session-${index}-end`} type="datetime-local" className="input" aria-invalid={!session.endTime || Number(session.endTime) < Number(session.startTime)} value={toDatetimeLocal(session.endTime)} onChange={event => updateSession(index, 'endTime', event.target.value)} />
+                        </div>
+                        <button type="button" className="icon-btn" aria-label={`Remove session ${index + 1}`} onClick={() => setField('sessions', sessions.filter((_, sessionIndex) => sessionIndex !== index))}><Trash2 size={15} /></button>
+                      </div>
+                    ))}
+                    {!sessions.length && <div className="alert alert--error"><CalendarDays size={16} /> At least one valid session is required.</div>}
+                    <button type="button" className="btn-secondary" style={{ width: 'fit-content' }} onClick={() => setField('sessions', [...sessions, { startTime: 0, endTime: 0 }])}><Plus size={14} /> Add session</button>
+                  </StudioSection>
+
+                  <StudioSection title="Location" hint="Required fields change with the selected location type.">
+                    <fieldset className="fieldset">
+                      <legend className="fieldset__legend">Location type</legend>
+                      <div className="segmented">
+                        {LOCATION_OPTIONS.map(option => (
+                          <button type="button" className="segment" aria-pressed={locationType === option.value} key={option.value} onClick={() => setField('location_type', option.value)}>{option.label}</button>
+                        ))}
+                      </div>
+                    </fieldset>
+                    {['ph2', 'bo'].includes(locationType) && (
+                      <div className="field">
+                        <label className="field__label" htmlFor="record-location">Street address · required</label>
+                        <input id="record-location" className="input" aria-invalid={!location.trim()} value={location} onChange={event => setField('location', event.target.value)} placeholder="Street, city, state, ZIP" />
+                      </div>
+                    )}
+                    {['on', 'bo'].includes(locationType) && (
+                      <div className="field">
+                        <label className="field__label" htmlFor="record-online-url">Online event URL · required</label>
+                        <input id="record-online-url" className="input" type="url" aria-invalid={!validHttpUrl(urlLink)} value={urlLink} onChange={event => setField('url_link', event.target.value)} placeholder="https://…" />
+                      </div>
+                    )}
+                    <div className="field-grid">
+                      <div className="field">
+                        <label className="field__label" htmlFor="record-place-name">Place name</label>
+                        <input id="record-place-name" className="input" value={String(field('place_name', ''))} onChange={event => setField('place_name', event.target.value)} />
+                      </div>
+                      <div className="field">
+                        <label className="field__label" htmlFor="record-room">Room or space</label>
+                        <input id="record-room" className="input" value={String(field('room_num', ''))} onChange={event => setField('room_num', event.target.value)} />
+                      </div>
+                    </div>
+                  </StudioSection>
+
+                  <StudioSection title="Categories and distribution" hint="Categories are postTypeId values; they do not change the post kind.">
+                    <fieldset className="fieldset">
+                      <legend className="fieldset__legend">CommunityHub categories · minimum 1</legend>
+                      <div className="segmented">
+                        {POST_CATEGORIES.map(category => {
+                          const checked = postTypeIds.includes(category.id);
+                          return (
+                            <label className="chip-check" key={category.id}>
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={event => setField('post_type_ids', event.target.checked ? [...postTypeIds, category.id] : postTypeIds.filter(id => id !== category.id))}
+                              />
+                              <span>{category.label}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                      {!postTypeIds.length && <div className="field__error" style={{ marginTop: 8 }}>Select at least one category.</div>}
+                      {unsupportedCategoryIds.length > 0 && (
+                        <div className="alert alert--error" style={{ marginTop: 8 }}>
+                          <AlertTriangle size={15} />
+                          <span>Unsupported category IDs: {unsupportedCategoryIds.join(', ')}.</span>
+                          <button type="button" className="btn-secondary" style={{ marginLeft: 'auto' }} onClick={() => setField('post_type_ids', postTypeIds.filter(id => DOCUMENTED_CATEGORY_IDS.has(id)))}>Remove</button>
+                        </div>
+                      )}
+                    </fieldset>
+
+                    <fieldset className="fieldset">
+                      <legend className="fieldset__legend">Screen distribution</legend>
+                      <div className="segmented">
+                        {DISPLAY_OPTIONS.map(option => (
+                          <button type="button" className="segment" aria-pressed={display === option.value} key={option.value} onClick={() => setField('display', option.value)}>{option.label}</button>
+                        ))}
+                      </div>
+                    </fieldset>
+                    {display === 'ss' && (
+                      screenIds.length ? (
+                        <div className="alert alert--info"><ShieldCheck size={16} /> Existing screen IDs: {screenIds.join(', ')}. Screen assignment is managed by ingestion configuration.</div>
+                      ) : (
+                        <div className="alert alert--error"><AlertTriangle size={16} /> No screen IDs were ingested. Choose another distribution or correct the source configuration before publishing.</div>
+                      )
+                    )}
+
+                    <fieldset className="fieldset">
+                      <legend className="fieldset__legend">Internal geographic scope · not sent to CommunityHub</legend>
+                      <div className="segmented">
+                        {GEO_OPTIONS.map(option => (
+                          <button type="button" className="segment" aria-pressed={field('geo_scope', '') === option.value} key={option.value} onClick={() => setField('geo_scope', option.value)}>{option.label}</button>
+                        ))}
+                      </div>
+                    </fieldset>
+                  </StudioSection>
+
+                  <StudioSection title="Contact and media" hint="Optional values must be valid when supplied.">
+                    <div className="alert alert--info"><Mail size={16} /> The required publishing email is supplied by the server. Contact email below is public event information.</div>
+                    <div className="field-grid">
+                      <div className="field">
+                        <label className="field__label" htmlFor="record-contact-email">Contact email</label>
+                        <input id="record-contact-email" className="input" type="email" aria-invalid={Boolean(contactEmail && !validEmail(contactEmail))} value={contactEmail} onChange={event => setField('contact_email', event.target.value)} />
+                      </div>
+                      <div className="field">
+                        <label className="field__label" htmlFor="record-phone">Phone</label>
+                        <input id="record-phone" className="input" type="tel" aria-invalid={Boolean(phone && !validPhone(phone))} value={phone} onChange={event => setField('phone', event.target.value)} />
+                      </div>
+                    </div>
+                    <div className="field">
+                      <label className="field__label" htmlFor="record-website">Website</label>
+                      <input id="record-website" className="input" type="url" aria-invalid={Boolean(website && !validHttpUrl(website))} value={website} onChange={event => setField('website', event.target.value)} placeholder="https://…" />
+                    </div>
+                    <div className="field">
+                      <label className="field__label" htmlFor="record-image">Image URL</label>
+                        <input id="record-image" className="input" type="url" aria-invalid={Boolean(imageUrl && !validHttpUrl(imageUrl))} value={imageUrl} onChange={event => setField('image_cdn_url', event.target.value)} placeholder="https://…" />
+                      <span className="field__hint">CommunityHub receives a stable application-served poster URL, not the third-party URL directly.</span>
+                    </div>
+                  </StudioSection>
+
+                  <StudioSection title="Action buttons" hint="Every supplied button needs a label and a valid http(s) URL.">
+                    {buttons.map((button, index) => (
+                      <div className="studio-button-row" key={index}>
+                        <div className="field">
+                          <label className="field__label" htmlFor={`button-${index}-title`}>Button {index + 1} label</label>
+                          <input id={`button-${index}-title`} className="input" aria-invalid={!button.title.trim()} value={button.title} onChange={event => updateButton(index, 'title', event.target.value)} placeholder="Learn more" />
+                        </div>
+                        <div className="field">
+                          <label className="field__label" htmlFor={`button-${index}-link`}>URL</label>
+                          <input id={`button-${index}-link`} className="input" type="url" aria-invalid={!validHttpUrl(button.link)} value={button.link} onChange={event => updateButton(index, 'link', event.target.value)} placeholder="https://…" />
+                        </div>
+                        <button type="button" className="icon-btn" aria-label={`Remove button ${index + 1}`} onClick={() => setField('buttons', buttons.filter((_, buttonIndex) => buttonIndex !== index))}><Trash2 size={15} /></button>
+                      </div>
+                    ))}
+                    <button type="button" className="btn-secondary" style={{ width: 'fit-content' }} onClick={() => setField('buttons', [...buttons, { title: '', link: '' }])}><Plus size={14} /> Add button</button>
+                  </StudioSection>
+                </form>
+
+                <div className="studio-actions" aria-label="Review actions">
+                  <div className="studio-actions__status">
+                    {hasEdits
+                      ? 'Draft fields changed. Save feedback before rejecting or requesting a correction; publishing can include the current draft directly.'
+                      : payloadReady
+                      ? 'All documented payload checks pass. Publishing submits immediately to CommunityHub.'
+                      : `${failedChecks.length} documented requirement${failedChecks.length === 1 ? '' : 's'} must be fixed before publishing.`}
+                  </div>
+                  <button type="button" className="btn-secondary" onClick={saveEdits} disabled={!hasEdits || saving || submitting}><Save size={14} /> {saving ? 'Saving…' : 'Save feedback'}</button>
+                  {event.source_slug !== 'fixed-events' && <button type="button" className="btn-warning" onClick={() => setCorrectionOpen(true)} disabled={submitting || hasEdits} title={hasEdits ? 'Save or revert draft edits first' : undefined}><RefreshCcw size={14} /> Request correction</button>}
+                  <button type="button" className="btn-danger" onClick={() => setRejectOpen(true)} disabled={submitting || hasEdits} title={hasEdits ? 'Save or revert draft edits first' : undefined}><X size={14} /> Reject</button>
+                  <button type="button" className="btn-primary" onClick={approve} disabled={!payloadReady || submitting || saving} title={!payloadReady ? 'Fix every readiness blocker before publishing' : undefined}><Check size={15} /> {submitting ? 'Submitting…' : 'Publish to CommunityHub'}</button>
+                </div>
+              </div>
+
+              <aside className="studio-aside" aria-label="Source evidence and payload readiness">
+                <section className="card source-evidence">
+                  {safeImageUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- reviewer evidence can originate from arbitrary external hosts.
+                    <img className="source-evidence__image" src={safeImageUrl} alt="Extracted poster preview" />
+                  ) : (
+                    <div className="source-evidence__image" style={{ display: 'grid', placeItems: 'center', color: 'var(--ink-400)' }}><ImageIcon size={28} /><span className="sr-only">No poster image</span></div>
+                  )}
+                  <div className="card__header">
+                    <div>
+                      <h2 className="card__title">Source evidence</h2>
+                      <p className="card__subtitle">Review the extraction against the original links before editing.</p>
+                    </div>
+                  </div>
+                  <div className="source-evidence__meta">
+                    <div><ShieldCheck size={14} aria-hidden="true" /><span><strong>{event.source_name}</strong><br />Received {new Date(event.created_at).toLocaleString()}</span></div>
+                    {event.calendar_source_url && <div><ExternalLink size={14} /><a href={event.calendar_source_url} target="_blank" rel="noreferrer">Open calendar source</a></div>}
+                    {event.ingested_post_url && <div><ExternalLink size={14} /><a href={event.ingested_post_url} target="_blank" rel="noreferrer">Open ingested post</a></div>}
+                    {event.location && <div><MapPin size={14} /><span>{event.location}</span></div>}
+                  </div>
+                  <details className="payload-preview" style={{ marginTop: 16 }}>
+                    <summary>Original extracted values</summary>
+                    <pre>{JSON.stringify({ eventType: event.event_type, title: event.title, description: event.description, sessions: parseJson(event.sessions, []), sponsors: parseJson(event.sponsors, []), postTypeId: parseJson(event.post_type_ids, []) }, null, 2)}</pre>
+                  </details>
+                </section>
+
+                <section className="card readiness-card">
+                  <div className="readiness-score">
+                    <div>
+                      <div className="readiness-score__label">Payload readiness</div>
+                      <div className="readiness-score__count">{readiness.length - failedChecks.length} of {readiness.length} checks pass</div>
+                    </div>
+                    <span className={payloadReady ? 'badge badge-green' : 'badge badge-red'}>{payloadReady ? 'Ready' : 'Blocked'}</span>
+                  </div>
+                  <div className="readiness-list">
+                    {readiness.map(check => (
+                      <div className="readiness-item" data-pass={check.pass} key={check.id}>
+                        {check.pass ? <CheckCircle2 size={16} aria-hidden="true" /> : <XCircle size={16} aria-hidden="true" />}
+                        <div><strong>{check.label}</strong><br />{check.detail}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {ingestionValidationIssues.length > 0 && (
+                    <div className="alert alert--error" style={{ marginTop: 14 }}>
+                      <AlertTriangle size={16} aria-hidden="true" />
+                      <span>
+                        <strong>Ingestion flagged {ingestionValidationIssues.length} issue{ingestionValidationIssues.length === 1 ? '' : 's'}.</strong>{' '}
+                        {ingestionValidationIssues.slice(0, 3).map(issue => `${issue.path || 'payload'}: ${issue.message || 'invalid value'}`).join(' · ')}
+                      </span>
+                    </div>
+                  )}
+                </section>
+
+                <details className="card payload-preview">
+                  <summary><FileJson2 size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />Outgoing payload preview</summary>
+                  <pre>{JSON.stringify(payloadPreview, null, 2)}</pre>
+                </details>
+              </aside>
+            </div>
+          </>
         )}
-
-        <div style={{ marginBottom:'1rem', display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:12 }}>
-          <div>
-            <button onClick={() => router.push('/reviewer/queue')} style={{ background:'none', border:'none', cursor:'pointer', color:'var(--gray-mid)', fontSize:12, fontWeight:500, padding:0, marginBottom:7 }}>← Back to queue</button>
-            <h1 style={{ fontSize:24, fontWeight:800 }}>Review event</h1>
-          </div>
-          <div style={{ display:'flex', gap:8, flexWrap:'wrap', justifyContent:'flex-end' }}>
-            <button onClick={saveEdits} disabled={!hasEdits || saving} className="btn-ghost"
-              style={{ fontSize:13, display:'flex', alignItems:'center', gap:5, opacity: hasEdits ? 1 : 0.4 }}>
-              <Save size={14}/> {saving ? 'Saving…' : 'Save edits'}
-            </button>
-            {event?.source_slug !== 'fixed-events' && (
-              <button onClick={() => { setShowSendBack(true); setCorrectionNotes(''); }} disabled={submitting} className="btn-ghost"
-                style={{ fontSize:13, display:'flex', alignItems:'center', gap:5, borderColor:'#c05e00', color:'#c05e00' }}>
-                <RotateCcw size={14}/> Send for fix
-              </button>
-            )}
-            <button onClick={() => setShowReject(true)} disabled={submitting} className="btn-ghost"
-              style={{ fontSize:13, display:'flex', alignItems:'center', gap:5, borderColor:'#c0392b', color:'#c0392b' }}>
-              <X size={14}/> Reject
-            </button>
-            <button onClick={approve} disabled={submitting} className="btn-primary"
-              style={{ fontSize:13, display:'flex', alignItems:'center', gap:5 }}>
-              <Check size={14}/> Approve & submit
-            </button>
-          </div>
-        </div>
-
-        {/* Source info bar */}
-        <div style={{ background:'linear-gradient(180deg, #ecf7ed, #e3f3e5)', border:'1px solid var(--green-200)', borderRadius:'var(--r-md)', padding:'0.7rem 1rem', marginBottom:'1.25rem', fontSize:12, display:'flex', gap:16, alignItems:'center', flexWrap:'wrap' }}>
-          <span style={{ fontWeight:700, color:'var(--green-700)' }}>{event.source_name}</span>
-          {event.calendar_source_url && (
-            <a href={event.calendar_source_url} target="_blank" rel="noreferrer"
-              style={{ display:'flex', alignItems:'center', gap:4, color:'#3a8c3f', textDecoration:'none', fontSize:11 }}>
-              <ExternalLink size={11}/> View source
-            </a>
-          )}
-          <span style={{ color:'#666' }}>Received: {new Date(event.created_at).toLocaleDateString()}</span>
-          <EventTypeBadge value={field('event_type')}/>
-          {tzLabel && <span style={{ color:'#aaa', marginLeft:'auto', fontSize:11 }}>Times in {tzLabel}</span>}
-        </div>
-
-        {/* Basic Info */}
-        <SectionCard title="Basic Info">
-          <Field label="Event type">
-            <select className="input" value={field('event_type') || 'ot'} onChange={e => set('event_type', e.target.value)}>
-              {EVENT_TYPES.map(type => <option key={type.value} value={type.value}>{type.label}</option>)}
-            </select>
-          </Field>
-
-          <Field label={`Title (${(field('title')?.length||0)}/60 chars)`}>
-            <input value={field('title')} onChange={e=>set('title',e.target.value)} maxLength={60} style={inputStyle}/>
-          </Field>
-
-          <Field label={`Short description (${(field('description')?.length||0)}/200 chars)`}>
-            <textarea value={field('description')} onChange={e=>set('description',e.target.value)} maxLength={200} rows={2} style={{...inputStyle,resize:'vertical'}}/>
-          </Field>
-
-          <Field label="Long description (max 1000 chars)">
-            <textarea value={field('extended_description')||''} onChange={e=>set('extended_description',e.target.value)} maxLength={1000} rows={4} style={{...inputStyle,resize:'vertical'}}/>
-          </Field>
-        </SectionCard>
-
-        {/* Date & Time */}
-        <SectionCard title="Date & Time">
-          <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
-            {editSessions.map((s, i) => (
-              <div key={i} style={{ display:'grid', gridTemplateColumns:'1fr 1fr auto', gap:8, alignItems:'flex-end' }}>
-                <Field label={`Session ${i+1} — Start`}>
-                  <input type="datetime-local" value={toDatetimeLocal(s.startTime)}
-                    onChange={e=>updateSession(i,'startTime',e.target.value)} style={inputStyle}/>
-                </Field>
-                <Field label="End">
-                  <input type="datetime-local" value={toDatetimeLocal(s.endTime)}
-                    onChange={e=>updateSession(i,'endTime',e.target.value)} style={inputStyle}/>
-                </Field>
-                <button onClick={()=>removeSession(i)}
-                  style={{ background:'none', border:'1.5px solid #fca5a5', borderRadius:6, cursor:'pointer', padding:'0.4rem 0.6rem', color:'#c0392b', marginBottom:1 }}>
-                  <Trash2 size={13}/>
-                </button>
-              </div>
-            ))}
-            {editSessions.length === 0 && (
-              <div style={{ fontSize:12, color:'#aaa' }}>No sessions — add one below.</div>
-            )}
-            <button onClick={addSession}
-              style={{ display:'flex', alignItems:'center', gap:5, background:'none', border:'1.5px dashed #bbb', borderRadius:6, padding:'0.4rem 0.75rem', cursor:'pointer', fontSize:12, color:'#666', width:'fit-content' }}>
-              <Plus size={12}/> Add session
-            </button>
-          </div>
-        </SectionCard>
-
-        {/* Location */}
-        <SectionCard title="Location">
-          <Field label="Location type">
-            <div style={{ display:'flex', gap:6 }}>
-              {LOCATION_TYPES.map(lt => (
-                <ToggleBtn key={lt} active={field('location_type')===lt} onClick={()=>set('location_type',lt)}>
-                  {LOCATION_LABELS[lt]}
-                </ToggleBtn>
-              ))}
-            </div>
-          </Field>
-
-          <div className="responsive-grid" style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'1rem' }}>
-            <Field label="Place name">
-              <input value={field('place_name')||''} onChange={e=>set('place_name',e.target.value)} style={inputStyle} placeholder="Venue name"/>
-            </Field>
-            <Field label="Room / suite">
-              <input value={field('room_num')||''} onChange={e=>set('room_num',e.target.value)} style={inputStyle} placeholder="Room 101"/>
-            </Field>
-          </div>
-
-          {['ph2','bo'].includes(field('location_type')) && (
-            <Field label="Address">
-              <input value={field('location')||''} onChange={e=>set('location',e.target.value)} style={inputStyle} placeholder="Street, City, State ZIP"/>
-            </Field>
-          )}
-          {['on','bo'].includes(field('location_type')) && (
-            <Field label="Stream / event URL">
-              <input value={field('url_link')||''} onChange={e=>set('url_link',e.target.value)} style={inputStyle} placeholder="https://…"/>
-            </Field>
-          )}
-        </SectionCard>
-
-        {/* Categorization */}
-        <SectionCard title="Categorization">
-          <Field label="Post type categories">
-            <div style={{ display:'flex', flexWrap:'wrap', gap:5 }}>
-              {POST_TYPES.map(({ id: ptId, label }) => {
-                const selected = postTypeIds.includes(ptId);
-                return (
-                  <label key={ptId} style={{ display:'flex', alignItems:'center', gap:4, fontSize:12, padding:'0.3rem 0.65rem', borderRadius:6, border:'1.5px solid', cursor:'pointer',
-                    borderColor: selected ? '#3a8c3f' : '#ddd',
-                    background:  selected ? '#e8f5e9' : 'white',
-                    color:       selected ? '#2a6b2e' : '#555',
-                    fontWeight:  selected ? 600 : 400 }}>
-                    <input type="checkbox" style={{ display:'none' }} checked={selected}
-                      onChange={e => {
-                        const next = e.target.checked
-                          ? [...postTypeIds, ptId]
-                          : postTypeIds.filter((x: number) => x !== ptId);
-                        set('post_type_ids', next);
-                      }}/>
-                    {label}
-                  </label>
-                );
-              })}
-            </div>
-          </Field>
-
-          <Field label="Geographic scope">
-            <div style={{ display:'flex', gap:6 }}>
-              {GEO_SCOPES.map(gs => (
-                <ToggleBtn key={gs} active={field('geo_scope')===gs} onClick={()=>set('geo_scope',gs)}>
-                  {GEO_LABELS[gs]}
-                </ToggleBtn>
-              ))}
-            </div>
-          </Field>
-
-          <Field label="Display">
-            <div style={{ display:'flex', gap:6 }}>
-              {DISPLAY_OPTIONS.map(([val, lbl]) => (
-                <ToggleBtn key={val} active={field('display')===val} onClick={()=>set('display',val)}>{lbl}</ToggleBtn>
-              ))}
-            </div>
-          </Field>
-
-          <Field label="Sponsors">
-            <input value={parseJson(field('sponsors'), []).join(', ')}
-              onChange={e=>set('sponsors', e.target.value.split(',').map((s:string)=>s.trim()).filter(Boolean))}
-              style={inputStyle} placeholder="Sponsor 1, Sponsor 2"/>
-          </Field>
-        </SectionCard>
-
-        {/* Contact & Media */}
-        <SectionCard title="Contact & Media">
-          <div className="responsive-grid" style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'1rem' }}>
-            <Field label="Email">
-              <input value={field('email')||''} onChange={e=>set('email',e.target.value)} style={inputStyle}/>
-            </Field>
-            <Field label="Contact email">
-              <input value={field('contact_email')||''} onChange={e=>set('contact_email',e.target.value)} style={inputStyle}/>
-            </Field>
-          </div>
-          <div className="responsive-grid" style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'1rem' }}>
-            <Field label="Phone">
-              <input value={field('phone')||''} onChange={e=>set('phone',e.target.value)} style={inputStyle}/>
-            </Field>
-          </div>
-
-          <Field label="Website">
-            <input value={field('website')||''} onChange={e=>set('website',e.target.value)} style={inputStyle} placeholder="https://…"/>
-          </Field>
-
-          <Field label="Image URL">
-            <input value={field('image_cdn_url')||''} onChange={e=>set('image_cdn_url',e.target.value)} style={inputStyle} placeholder="https://…"/>
-            {field('image_cdn_url') && (
-              // eslint-disable-next-line @next/next/no-img-element -- reviewer preview accepts arbitrary source hosts
-              <img src={field('image_cdn_url')} alt="preview" style={{ marginTop:8, maxHeight:120, borderRadius:6, objectFit:'cover' }}/>
-            )}
-          </Field>
-        </SectionCard>
-
-        {/* Buttons / Links */}
-        <SectionCard title="Buttons / Links">
-          <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-            {editButtons.map((btn, i) => (
-              <div key={i} style={{ display:'grid', gridTemplateColumns:'1fr 2fr auto', gap:8, alignItems:'flex-end' }}>
-                <Field label={i === 0 ? 'Label' : ''}>
-                  <input value={btn.title} onChange={e=>updateButton(i,'title',e.target.value)} style={inputStyle} placeholder="Get Tickets"/>
-                </Field>
-                <Field label={i === 0 ? 'URL' : ''}>
-                  <input value={btn.link} onChange={e=>updateButton(i,'link',e.target.value)} style={inputStyle} placeholder="https://…"/>
-                </Field>
-                <button onClick={()=>removeButton(i)}
-                  style={{ background:'none', border:'1.5px solid #fca5a5', borderRadius:6, cursor:'pointer', padding:'0.4rem 0.6rem', color:'#c0392b', marginBottom:1 }}>
-                  <Trash2 size={13}/>
-                </button>
-              </div>
-            ))}
-            {editButtons.length === 0 && (
-              <div style={{ fontSize:12, color:'#aaa' }}>No buttons.</div>
-            )}
-            <button onClick={addButton}
-              style={{ display:'flex', alignItems:'center', gap:5, background:'none', border:'1.5px dashed #bbb', borderRadius:6, padding:'0.4rem 0.75rem', cursor:'pointer', fontSize:12, color:'#666', width:'fit-content' }}>
-              <Plus size={12}/> Add button
-            </button>
-          </div>
-        </SectionCard>
-
-        {/* Source */}
-        <SectionCard title="Source">
-          <div className="responsive-grid" style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'1rem' }}>
-            <Field label="Source name">
-              <input value={field('calendar_source_name')||''} onChange={e=>set('calendar_source_name',e.target.value)} style={inputStyle}/>
-            </Field>
-            <Field label="Source URL">
-              <input value={field('calendar_source_url')||''} onChange={e=>set('calendar_source_url',e.target.value)} style={inputStyle} placeholder="https://…"/>
-            </Field>
-          </div>
-
-          {event.ingested_post_url && (
-            <Field label="Deep link (ingestedPostUrl)">
-              <a href={event.ingested_post_url} target="_blank" rel="noreferrer"
-                style={{ fontSize:12, color:'#3a8c3f', textDecoration:'none', display:'flex', alignItems:'center', gap:4 }}>
-                <ExternalLink size={12}/> {event.ingested_post_url}
-              </a>
-            </Field>
-          )}
-        </SectionCard>
       </main>
 
-      {showSendBack && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.4)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:100 }}
-          onClick={e => { if (e.target === e.currentTarget) setShowSendBack(false); }}>
-          <div style={{ background:'white', borderRadius:12, padding:'1.75rem', width:'100%', maxWidth:440 }}>
-            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'0.5rem' }}>
-              <h2 style={{ fontSize:17, fontWeight:700 }}>Send back for correction</h2>
-              <button onClick={() => setShowSendBack(false)} style={{ background:'none', border:'none', cursor:'pointer', color:'#bbb' }}><X size={16}/></button>
+      {correctionOpen && (
+        <div className="dialog-backdrop" role="presentation" onMouseDown={event => {
+          if (event.target === event.currentTarget) setCorrectionOpen(false);
+        }}>
+          <section className="dialog" role="dialog" aria-modal="true" aria-labelledby="correction-title">
+            <div className="dialog__header">
+              <div>
+                <h2 id="correction-title">Request a correction attempt</h2>
+                <p>Your note is sent to the correction workflow. The returned record must be reviewed again.</p>
+              </div>
+              <button type="button" className="icon-btn" aria-label="Close correction dialog" onClick={() => setCorrectionOpen(false)}><X size={16} /></button>
             </div>
-            <p style={{ fontSize:13, color:'#888', marginBottom:'1rem' }}>Describe what the fix agent should change:</p>
-            <textarea
-              value={correctionNotes}
-              onChange={e => setCorrectionNotes(e.target.value)}
-              placeholder="e.g. geo_scope should be city_wide. The poster image is wrong — use a different one."
-              rows={4}
-              autoFocus
-              style={{...inputStyle, resize:'vertical', marginBottom:'1rem'}}
-            />
-            <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
-              <button onClick={() => setShowSendBack(false)} className="btn-ghost" style={{ fontSize:13 }}>Cancel</button>
-              <button
-                onClick={sendBackForCorrection}
-                disabled={!correctionNotes.trim() || sendingBack}
-                style={{ background: correctionNotes.trim() ? '#c05e00' : '#ddd', color:'white', border:'none', borderRadius:7, padding:'8px 18px', fontSize:13, fontWeight:700, cursor: correctionNotes.trim() ? 'pointer' : 'not-allowed', display:'flex', alignItems:'center', gap:6 }}>
-                <RotateCcw size={13}/> {sendingBack ? 'Sending…' : 'Send for correction'}
-              </button>
+            <div className="field">
+              <label className="field__label" htmlFor="correction-note">Specific correction instructions</label>
+              <textarea id="correction-note" className="input" rows={5} value={correctionNote} onChange={event => setCorrectionNote(event.target.value)} placeholder="State the incorrect field, the evidence, and the expected value." autoFocus />
+              <span className="field__hint">This requests one automated correction attempt; it does not train or self-modify a model.</span>
             </div>
-          </div>
+            <div className="dialog__actions">
+              <button type="button" className="btn-secondary" onClick={() => setCorrectionOpen(false)}>Cancel</button>
+              <button type="button" className="btn-warning" onClick={requestCorrection} disabled={!correctionNote.trim() || submitting}><RefreshCcw size={14} /> Queue correction</button>
+            </div>
+          </section>
         </div>
       )}
 
-      {showReject && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.4)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:100 }}>
-          <div style={{ background:'white', borderRadius:12, padding:'1.75rem', width:'100%', maxWidth:440 }}>
-            <h2 style={{ fontSize:17, fontWeight:700, marginBottom:'0.25rem' }}>Reject event</h2>
-            <p style={{ fontSize:13, color:'#888', marginBottom:'1rem' }}>Select all reasons that apply. This feedback is added to future agent context.</p>
-            <div style={{ display:'flex', flexDirection:'column', gap:6, marginBottom:'1rem' }}>
-              {REASON_CODES.map(({ code, label }) => (
-                <label key={code} style={{ display:'flex', alignItems:'center', gap:8, fontSize:13, cursor:'pointer', padding:'0.4rem 0.5rem', borderRadius:6, background:reasons.includes(code)?'#fdecea':'transparent' }}>
-                  <input type="checkbox" checked={reasons.includes(code)}
-                    onChange={e => setReasons(r => e.target.checked ? [...r,code] : r.filter(x=>x!==code))}/>
-                  {label}
-                </label>
-              ))}
+      {rejectOpen && (
+        <div className="dialog-backdrop" role="presentation" onMouseDown={event => {
+          if (event.target === event.currentTarget) setRejectOpen(false);
+        }}>
+          <section className="dialog" role="dialog" aria-modal="true" aria-labelledby="reject-title">
+            <div className="dialog__header">
+              <div>
+                <h2 id="reject-title">Reject this record</h2>
+                <p>Structured reasons and notes are retained as reviewer-feedback context for later extraction runs.</p>
+              </div>
+              <button type="button" className="icon-btn" aria-label="Close rejection dialog" onClick={() => setRejectOpen(false)}><X size={16} /></button>
             </div>
-            <textarea value={note} onChange={e=>setNote(e.target.value)} placeholder="Optional note for the agent…" rows={2}
-              style={{...inputStyle,resize:'vertical',marginBottom:'1rem'}}/>
-            <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
-              <button onClick={()=>setShowReject(false)} className="btn-ghost" style={{ fontSize:13 }}>Cancel</button>
-              <button onClick={reject} disabled={!reasons.length||submitting} className="btn-danger" style={{ fontSize:13 }}>
-                Confirm reject
-              </button>
+            <div className="dialog__body">
+              <fieldset className="fieldset">
+                <legend className="fieldset__legend">Select every applicable reason</legend>
+                <div style={{ display: 'grid', gap: 6 }}>
+                  {REASON_CODES.map(reason => (
+                    <label className="list-row" style={{ minHeight: 42, cursor: 'pointer' }} key={reason.code}>
+                      <input type="checkbox" checked={reasons.includes(reason.code)} onChange={event => setReasons(current => event.target.checked ? [...current, reason.code] : current.filter(code => code !== reason.code))} />
+                      <span className="list-row__title">{reason.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+              <div className="field">
+                <label className="field__label" htmlFor="rejection-note">Reviewer note</label>
+                <textarea id="rejection-note" className="input" rows={3} value={reviewNote} onChange={event => setReviewNote(event.target.value)} placeholder="Optional evidence or correction guidance" />
+              </div>
+              <div className="alert alert--info"><Circle size={15} /> Feedback can influence future prompt context, but it is not model retraining and does not guarantee a corrected result.</div>
             </div>
-          </div>
+            <div className="dialog__actions">
+              <button type="button" className="btn-secondary" onClick={() => setRejectOpen(false)}>Cancel</button>
+              <button type="button" className="btn-danger" onClick={reject} disabled={!reasons.length || submitting}><XCircle size={14} /> Confirm rejection</button>
+            </div>
+          </section>
         </div>
       )}
-    </div>
+    </AppShell>
   );
 }
 
-function SectionCard({ title, children }: { title: string; children: React.ReactNode }) {
+function StudioSection({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
   return (
-    <div className="card" style={{ display:'flex', flexDirection:'column', gap:'1rem', marginBottom:'1rem' }}>
-      <div style={{ display:'flex', alignItems:'center', gap:8, fontSize:11, fontWeight:700, color:'var(--green-700)', textTransform:'uppercase', letterSpacing:0.9, borderBottom:'1px solid var(--border-soft)', paddingBottom:'0.6rem' }}>
-        <span style={{ width:5, height:5, borderRadius:'50%', background:'var(--green-500)' }}/>
-        {title}
+    <section className="studio-section">
+      <div className="studio-section__header">
+        <h2 className="studio-section__title">{title}</h2>
+        {hint && <span className="studio-section__hint">{hint}</span>}
       </div>
-      {children}
-    </div>
+      <div className="studio-section__body">{children}</div>
+    </section>
   );
 }
-
-function Field({ label, children }: { label?: string; children: React.ReactNode }) {
-  return (
-    <div>
-      {label && <label style={{ fontSize:11, fontWeight:600, color:'#888', textTransform:'uppercase', letterSpacing:0.5, display:'block', marginBottom:4 }}>{label}</label>}
-      {children}
-    </div>
-  );
-}
-
-function ToggleBtn({ active, onClick, children }: { active: boolean; onClick: ()=>void; children: React.ReactNode }) {
-  return (
-    <button onClick={onClick}
-      style={{ padding:'0.4rem 0.8rem', borderRadius:'var(--r-sm)', border:'1px solid', fontSize:12, cursor:'pointer',
-        transition:'all 0.14s var(--ease)',
-        borderColor: active ? 'var(--green-400)' : 'var(--gray-300)',
-        background:  active ? 'var(--green-100)' : 'var(--surface)',
-        color:       active ? 'var(--green-700)' : 'var(--gray-700)',
-        boxShadow:   active ? 'var(--shadow-xs)' : 'none',
-        fontWeight:  active ? 700 : 500 }}>
-      {children}
-    </button>
-  );
-}
-
-const inputStyle: React.CSSProperties = {
-  width:'100%', padding:'0.6rem 0.8rem',
-  border:'1px solid var(--gray-300)', borderRadius:'var(--r-sm)',
-  fontSize:13, outline:'none', boxSizing:'border-box', fontFamily:'inherit',
-  color:'var(--black)', background:'var(--surface)',
-  transition:'border-color 0.15s var(--ease), box-shadow 0.15s var(--ease)',
-};

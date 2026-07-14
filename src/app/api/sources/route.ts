@@ -1,23 +1,138 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
 import { getAuthUser, unauthorized, forbidden } from '@/lib/auth';
+import {
+  getNextRunAt,
+  SCHEDULE_TIME_ZONE,
+  validateCronExpression,
+} from '@/lib/schedule';
+
+type AgentRunSummary = {
+  id: number;
+  status: 'running' | 'completed' | 'failed' | 'stopped';
+  started_at: Date | string;
+  finished_at: Date | string | null;
+  events_found: number;
+  events_extracted: number;
+  events_skipped_dup: number;
+  events_errored: number;
+  error_log: unknown;
+  elapsed_sec: number;
+};
+
+function errorSummary(errorLog: unknown): string | null {
+  if (errorLog === null || errorLog === undefined || errorLog === '') return null;
+
+  let parsed = errorLog;
+  if (typeof errorLog === 'string') {
+    try {
+      parsed = JSON.parse(errorLog);
+    } catch {
+      return errorLog.slice(0, 500);
+    }
+  }
+
+  if (Array.isArray(parsed)) {
+    const latest = parsed.at(-1);
+    if (latest === undefined || latest === null) return null;
+    return (typeof latest === 'string' ? latest : JSON.stringify(latest)).slice(0, 500);
+  }
+  if (typeof parsed === 'object') {
+    const record = parsed as Record<string, unknown>;
+    const candidate = record.message ?? record.error ?? record.detail;
+    if (candidate !== undefined) return String(candidate).slice(0, 500);
+    return JSON.stringify(parsed).slice(0, 500);
+  }
+  return String(parsed).slice(0, 500);
+}
+
+function operationalState(
+  active: unknown,
+  scheduleValid: boolean,
+  latestRun: AgentRunSummary | undefined,
+): { health_status: string; health_reason: string } {
+  const isActive = active === true || active === 1 || active === '1';
+  if (!isActive) {
+    return { health_status: 'disabled', health_reason: 'Source is disabled' };
+  }
+  if (!scheduleValid) {
+    return { health_status: 'invalid_schedule', health_reason: 'Schedule cannot be dispatched' };
+  }
+  if (!latestRun) {
+    return { health_status: 'no_run_history', health_reason: 'No agent run has been recorded' };
+  }
+
+  const statusMap: Record<AgentRunSummary['status'], [string, string]> = {
+    running: ['running', 'Latest run is still in progress'],
+    completed: ['last_run_completed', 'Latest run completed'],
+    failed: ['last_run_failed', 'Latest run failed'],
+    stopped: ['last_run_stopped', 'Latest run was stopped'],
+  };
+  const [health_status, health_reason] = statusMap[latestRun.status] ?? [
+    'unknown_run_state',
+    'Latest run has an unknown status',
+  ];
+  return { health_status, health_reason };
+}
 
 export async function GET(req: NextRequest) {
   const user = await getAuthUser(req);
   if (!user) return unauthorized();
 
+  if (user.role !== 'admin') {
+    const [rows] = await pool.query(
+      `SELECT s.id, s.name
+       FROM sources s
+       WHERE s.active=1 AND (
+         NOT EXISTS (
+           SELECT 1 FROM reviewer_sources rs0
+           JOIN users u0 ON u0.id=rs0.reviewer_id
+           WHERE u0.firebase_uid=?
+         )
+         OR EXISTS (
+           SELECT 1 FROM reviewer_sources rs
+           JOIN users u ON u.id=rs.reviewer_id
+           WHERE u.firebase_uid=? AND rs.source_id=s.id
+         )
+       )
+       ORDER BY s.name ASC`,
+      [user.uid, user.uid],
+    ) as any;
+    return Response.json(Array.isArray(rows) ? rows : []);
+  }
+
   try {
     const [rows] = await pool.query('SELECT * FROM sources ORDER BY name ASC') as any;
+    const now = new Date();
     const enriched = await Promise.all(rows.map(async (s: any) => {
+      const schedule = validateCronExpression(s.schedule_cron);
+      const isActive = s.active === true || s.active === 1 || s.active === '1';
+      const nextRunAt = isActive && schedule.valid
+        ? getNextRunAt(schedule.schedule.expression, now)
+        : null;
+
       try {
-        const [[counts]] = await pool.query(
-          `SELECT COUNT(*) AS total_events, SUM(status='approved') AS total_approved
-           FROM raw_events WHERE source_id = ?`, [s.id]
-        ) as any;
-        const [[lastRun]] = await pool.query(
-          `SELECT status, finished_at FROM agent_runs
-           WHERE source_id = ? ORDER BY started_at DESC LIMIT 1`, [s.id]
-        ) as any;
+        const [countResult, runResult] = await Promise.all([
+          pool.query(
+            `SELECT COUNT(*) AS total_events, SUM(status='approved') AS total_approved,
+                    SUM(status='pending') AS pending_review,
+                    SUM(JSON_LENGTH(COALESCE(validation_errors, JSON_ARRAY())) > 0) AS validation_issues
+             FROM raw_events WHERE source_id = ?`,
+            [s.id],
+          ),
+          pool.query(
+            `SELECT id, status, started_at, finished_at, events_found, events_extracted,
+                    events_skipped_dup, events_errored, error_log,
+                    TIMESTAMPDIFF(SECOND, started_at, IFNULL(finished_at, NOW())) AS elapsed_sec
+             FROM agent_runs
+             WHERE source_id = ? ORDER BY started_at DESC LIMIT 5`,
+            [s.id],
+          ),
+        ]) as any;
+        const counts = countResult?.[0]?.[0] ?? {};
+        const recentRuns = (Array.isArray(runResult?.[0]) ? runResult[0] : []) as AgentRunSummary[];
+        const lastRun = recentRuns[0];
+        const state = operationalState(s.active, schedule.valid, lastRun);
 
         // For the Fixed Events source, attach correction stats
         let fix_stats: any = null;
@@ -33,9 +148,45 @@ export async function GET(req: NextRequest) {
           fix_stats = fs;
         }
 
-        return { ...s, ...counts, last_run_status: lastRun?.status || null, last_run_at: lastRun?.finished_at || null, fix_stats };
-      } catch {
-        return { ...s, total_events: 0, total_approved: 0, last_run_status: null, last_run_at: null, fix_stats: null };
+        return {
+          ...s,
+          ...counts,
+          schedule_valid: schedule.valid,
+          schedule_error: schedule.valid ? null : schedule.error,
+          schedule_timezone: SCHEDULE_TIME_ZONE,
+          next_run_at: nextRunAt?.toISOString() ?? null,
+          ...state,
+          last_run_status: lastRun?.status ?? null,
+          last_run_at: lastRun?.finished_at ?? null,
+          last_run_started_at: lastRun?.started_at ?? null,
+          last_error: errorSummary(lastRun?.error_log),
+          recent_runs: recentRuns.map(({ error_log, ...run }) => ({
+            ...run,
+            error_summary: errorSummary(error_log),
+          })),
+          fix_stats,
+        };
+      } catch (error) {
+        console.error(`[sources GET] enrichment failed for source ${s.id}:`, error);
+        const state = operationalState(s.active, schedule.valid, undefined);
+        return {
+          ...s,
+          total_events: 0,
+          total_approved: 0,
+          pending_review: 0,
+          validation_issues: 0,
+          schedule_valid: schedule.valid,
+          schedule_error: schedule.valid ? null : schedule.error,
+          schedule_timezone: SCHEDULE_TIME_ZONE,
+          next_run_at: nextRunAt?.toISOString() ?? null,
+          ...state,
+          last_run_status: null,
+          last_run_at: null,
+          last_run_started_at: null,
+          last_error: null,
+          recent_runs: [],
+          fix_stats: null,
+        };
       }
     }));
     return Response.json(enriched);
@@ -64,6 +215,10 @@ export async function POST(req: NextRequest) {
   const { name, agent_id, schedule_cron = '0 6 * * *' } = await req.json();
   if (!name?.trim())     return Response.json({ error: 'name is required' },     { status: 400 });
   if (!agent_id?.trim()) return Response.json({ error: 'agent_id is required' }, { status: 400 });
+  const schedule = validateCronExpression(schedule_cron);
+  if (!schedule.valid) {
+    return Response.json({ error: `Invalid schedule: ${schedule.error}` }, { status: 400 });
+  }
   console.log('[POST /api/sources] 3 - body ok, name:', name);
 
   // Step 3: check uniqueness
@@ -83,7 +238,7 @@ export async function POST(req: NextRequest) {
     const [result] = await pool.query(
       `INSERT INTO sources (name, slug, agent_id, schedule_cron, calendar_source_name, active)
        VALUES (?, ?, ?, ?, ?, 1)`,
-      [name.trim(), slug, agent_id.trim(), schedule_cron, name.trim()]
+      [name.trim(), slug, agent_id.trim(), schedule.schedule.expression, name.trim()]
     ) as any;
 
     const sourceId = result.insertId;

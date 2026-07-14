@@ -1,4 +1,5 @@
 import { getSharp } from './sharp';
+import { fetchPublicImage } from './safeRemoteImage';
 
 /**
  * Download poster images from `urls`, merge them side-by-side at a fixed height,
@@ -14,15 +15,7 @@ export async function mergePosterImages(urls: string[]): Promise<string | null> 
   const results = await Promise.all(
     urls.map(async (url) => {
       try {
-        const res = await fetch(url, {
-          headers: {
-            'Accept': 'image/jpeg,image/png,image/gif,*/*;q=0.5',
-            'User-Agent': 'CommunityHub-ImageProxy/1.0',
-          },
-          signal: AbortSignal.timeout(10_000),
-        });
-        if (!res.ok) return null;
-        return Buffer.from(await res.arrayBuffer());
+        return (await fetchPublicImage(url)).bytes;
       } catch {
         return null;
       }

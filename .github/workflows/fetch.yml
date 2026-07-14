@@ -1,9 +1,10 @@
-name: Fetch Events
+name: Hourly Event Dispatcher
 
 on:
   schedule:
-    # Runs daily at 6am UTC — adjust as needed
-    - cron: '0 6 * * *'
+    # Avoid the top-of-hour GitHub Actions traffic spike. The application
+    # evaluates each source's own America/New_York cron expression.
+    - cron: '17 * * * *'
   # Also allow manual trigger from GitHub Actions UI
   workflow_dispatch:
     inputs:
@@ -16,21 +17,9 @@ jobs:
   fetch:
     name: Run agent fetchers
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
       - name: Trigger fetch via app API
         env:
           APP_URL: ${{ secrets.APP_URL }}
@@ -39,14 +28,16 @@ jobs:
         run: |
           if [ -n "$SOURCE_ID" ]; then
             echo "Triggering fetch for source $SOURCE_ID..."
-            curl -f -X POST \
+            SCHEDULE_SLOT="$(date -u +'%Y-%m-%dT%H:%M:00.000Z')"
+            curl -fsS --retry 3 --retry-all-errors --connect-timeout 10 --max-time 60 -X POST \
               "$APP_URL/api/agent/trigger/$SOURCE_ID" \
-              -H "Authorization: Bearer $CRON_SECRET" \
+              -H "x-cron-secret: $CRON_SECRET" \
+              -H "x-schedule-slot: $SCHEDULE_SLOT" \
               -H "Content-Type: application/json" \
               | tee response.json
           else
             echo "Triggering fetch for all sources..."
-            curl -f -X GET \
+            curl -fsS --retry 3 --retry-all-errors --connect-timeout 10 --max-time 60 -X GET \
               "$APP_URL/api/agent/schedule" \
               -H "Authorization: Bearer $CRON_SECRET" \
               | tee response.json
@@ -57,9 +48,8 @@ jobs:
 
       - name: Check for errors
         run: |
-          # Fail the workflow if any source had an error
-          if cat response.json | grep -q '"status":"error"'; then
-            echo "⚠️ One or more sources failed — check logs above"
+          if jq -e '(.failed // 0) > 0 or ((.invalid_schedules // []) | length > 0)' response.json >/dev/null; then
+            echo "One or more sources failed or have an invalid schedule — check logs above"
             exit 1
           fi
-          echo "✅ All sources fetched successfully"
+          echo "All due sources dispatched successfully"

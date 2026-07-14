@@ -1,94 +1,139 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
-import { triggerAgentRun, triggerEmailIngest } from '@/lib/agentRunner';
-import { sendAgentRunSummary, sendReviewNotification } from '@/lib/email';
-import { shouldRunToday } from '@/lib/schedule';
+import { getDueScheduleSlot, validateCronExpression } from '@/lib/schedule';
 
-// Vercel Cron hits this — Authorization: Bearer <CRON_SECRET>
+export const maxDuration = 60;
+
+type SourceRow = {
+  id: number;
+  name: string;
+  schedule_cron: string;
+};
+
+type DispatchResult = {
+  source_id: number;
+  source: string;
+  slot: string;
+  status: 'dispatched' | 'skipped' | 'error';
+  run_id?: number;
+  error?: string;
+};
+
+async function readJson(response: Response): Promise<any> {
+  try {
+    return await response.json();
+  } catch {
+    return {};
+  }
+}
+
+async function dispatchSource(
+  req: NextRequest,
+  source: SourceRow,
+  slot: Date,
+  cronSecret: string,
+): Promise<DispatchResult> {
+  const slotIso = slot.toISOString();
+  try {
+    const response = await fetch(new URL(`/api/agent/trigger/${source.id}`, req.url), {
+      method: 'POST',
+      headers: {
+        'x-cron-secret': cronSecret,
+        'x-schedule-slot': slotIso,
+      },
+      cache: 'no-store',
+    });
+    const body = await readJson(response);
+
+    if (response.ok) {
+      return {
+        source_id: source.id,
+        source: source.name,
+        slot: slotIso,
+        status: 'dispatched',
+        run_id: body.run_id,
+      };
+    }
+    if (response.status === 409 && body.duplicate) {
+      return {
+        source_id: source.id,
+        source: source.name,
+        slot: slotIso,
+        status: 'skipped',
+        run_id: body.run_id,
+        error: body.reason || 'Run already claimed',
+      };
+    }
+    return {
+      source_id: source.id,
+      source: source.name,
+      slot: slotIso,
+      status: 'error',
+      error: body.error || `Trigger returned ${response.status}`,
+    };
+  } catch (error) {
+    return {
+      source_id: source.id,
+      source: source.name,
+      slot: slotIso,
+      status: 'error',
+      error: error instanceof Error ? error.message : 'Trigger request failed',
+    };
+  }
+}
+
+// The hourly GitHub Actions dispatcher and daily Vercel safety run authenticate
+// with Authorization: Bearer <CRON_SECRET>. Agent work runs in the trigger route.
 export async function GET(req: NextRequest) {
-  const auth = req.headers.get('authorization');
-  if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
+  const cronSecret = process.env.CRON_SECRET?.trim();
+  if (!cronSecret) {
+    return Response.json({ error: 'CRON_SECRET is not configured' }, { status: 503 });
+  }
+  if (req.headers.get('authorization') !== `Bearer ${cronSecret}`) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const [allSources] = await pool.query(
-    'SELECT id, name, schedule_cron, source_type FROM sources WHERE active = 1'
-  ) as any;
-  // Respect each source's cron schedule. The daily trigger only checks the date
-  // fields, so e.g. FAVA '0 6 * * 1' runs Mondays while Apollo '0 6 * * *' runs
-  // daily. Each run only ingests NEW events (existing ones are de-duplicated),
-  // so "every week" and "when new events appear" are the same scheduled pass.
-  const sources = (allSources as any[]).filter((s: any) => shouldRunToday(s.schedule_cron));
+  let sources: SourceRow[];
+  try {
+    const [rows] = await pool.query(
+      'SELECT id, name, schedule_cron FROM sources WHERE active = 1 ORDER BY id',
+    ) as any;
+    sources = Array.isArray(rows) ? rows : [];
+  } catch (error) {
+    console.error('[scheduler] source lookup failed:', error);
+    return Response.json({ error: 'Unable to load scheduled sources' }, { status: 500 });
+  }
 
-  const results: { source: string; status: string; inserted: number; error?: string }[] = [];
-  let totalNew = 0;
-
-  // Capture env vars here (guaranteed in route handler context)
-  const anthropicKey  = process.env.ANTHROPIC_API_KEY  ?? '';
-  const environmentId = process.env.SOURCE_BUILDER_ENVIRONMENT_ID ?? '';
+  const now = new Date();
+  const invalid: Array<{ source_id: number; source: string; schedule: string; error: string }> = [];
+  const due: Array<{ source: SourceRow; slot: Date }> = [];
 
   for (const source of sources) {
-    // Pre-create the run record so we have a runId to pass
-    const [runRes] = await pool.query(
-      "INSERT INTO agent_runs (source_id, status) VALUES (?, 'running')", [source.id]
-    ) as any;
-    const runId = runRes.insertId;
-
-    try {
-      const result = source.source_type === 'email'
-        ? await triggerEmailIngest(source.id, runId)
-        : await triggerAgentRun(source.id, runId, anthropicKey, environmentId);
-      results.push({ source: source.name, status: 'ok', inserted: result.inserted });
-      totalNew += result.inserted;
-    } catch (err: any) {
-      results.push({ source: source.name, status: 'error', inserted: 0, error: err.message });
-      // Ensure the run record is marked failed even if triggerAgentRun threw before its own catch
-      await pool.query(
-        "UPDATE agent_runs SET status='failed', finished_at=NOW(), error_log=? WHERE id=? AND status='running'",
-        [JSON.stringify([err.message]), runId]
-      ).catch(() => {});
+    const validation = validateCronExpression(source.schedule_cron);
+    if (!validation.valid) {
+      invalid.push({
+        source_id: source.id,
+        source: source.name,
+        schedule: source.schedule_cron,
+        error: validation.error,
+      });
+      continue;
     }
+    const slot = getDueScheduleSlot(source.schedule_cron, now);
+    if (slot) due.push({ source, slot });
   }
 
-  // Email admin with run summary
-  if (process.env.ADMIN_EMAIL && (totalNew > 0 || results.some(r => r.status === 'error'))) {
-    sendAgentRunSummary({
-      adminEmail: process.env.ADMIN_EMAIL,
-      results,
-      totalNew,
-    }).catch(console.error);
-  }
+  const results = await Promise.all(
+    due.map(({ source, slot }) => dispatchSource(req, source, slot, cronSecret)),
+  );
 
-  // Email reviewers about new pending events
-  if (totalNew > 0) {
-    // Get all active reviewers and notify them
-    const [reviewers] = await pool.query(
-      `SELECT u.id, u.email, u.full_name FROM users u
-       WHERE u.active = 1 AND u.role = 'reviewer'`
-    ) as any;
-
-    for (const reviewer of reviewers) {
-      const [[{ pending }]] = await pool.query(
-        `SELECT COUNT(*) AS pending FROM raw_events re
-         LEFT JOIN reviewer_sources rs ON rs.source_id = re.source_id AND rs.reviewer_id = ?
-         WHERE re.status = 'pending'
-           AND (rs.reviewer_id IS NOT NULL OR NOT EXISTS (
-             SELECT 1 FROM reviewer_sources WHERE reviewer_id = ?
-           ))`,
-        [reviewer.id, reviewer.id]
-      ) as any;
-
-      if (pending > 0) {
-        sendReviewNotification({
-          reviewerEmail: reviewer.email,
-          reviewerName:  reviewer.full_name,
-          pendingCount:  pending,
-          sources:       results.filter(r => r.status === 'ok').map(r => ({ name: r.source, count: r.inserted })),
-          oldestDate:    null,
-        }).catch(console.error);
-      }
-    }
-  }
-
-  return Response.json({ ran: results.length, totalNew, results });
+  return Response.json({
+    checked: sources.length,
+    due: due.length,
+    dispatched: results.filter(result => result.status === 'dispatched').length,
+    skipped: results.filter(result => result.status === 'skipped').length,
+    failed: results.filter(result => result.status === 'error').length,
+    invalid_schedules: invalid,
+    results,
+  });
 }

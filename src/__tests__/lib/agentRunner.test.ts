@@ -84,6 +84,13 @@ beforeEach(() => {
   db.default.query.mockImplementation((sql: unknown) =>
     typeof sql === 'string' && /SELECT status FROM agent_runs/i.test(sql)
       ? Promise.resolve([[{ status: 'running' }]])
+      : typeof sql === 'string' && /SELECT ar\.status, ar\.events_found/i.test(sql)
+      ? Promise.resolve([[
+          {
+            status: 'running', events_found: 0, events_extracted: 0,
+            events_skipped_dup: 0, events_errored: 0, persisted_events: 0,
+          },
+        ]])
       : typeof sql === 'string' && /FROM sources/i.test(sql)
       ? Promise.resolve([[SOURCE]])
       : Promise.resolve([{ affectedRows: 1 }]),
@@ -189,7 +196,7 @@ describe('triggerAgentRun — happy path', () => {
 
 // ── Multiple events ───────────────────────────────────────────────────────────
 describe('triggerAgentRun — multiple events', () => {
-  it('inserts all events in one transaction', async () => {
+  it('isolates each inserted event in its own transaction', async () => {
     const events = [
       { ...AGENT_EVENT, title: 'Event A' },
       { ...AGENT_EVENT, title: 'Event B' },
@@ -209,8 +216,33 @@ describe('triggerAgentRun — multiple events', () => {
 
     const result = await triggerAgentRun(1, 99, 'test-key', 'test-env');
     expect(result.inserted).toBe(3);
-    expect(db.mockConn.beginTransaction).toHaveBeenCalledTimes(1);
-    expect(db.mockConn.commit).toHaveBeenCalledTimes(1);
+    expect(db.mockConn.beginTransaction).toHaveBeenCalledTimes(3);
+    expect(db.mockConn.commit).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not report a rejected multi-item correction as duplicate skips', async () => {
+    mockSessionsEventsList.mockResolvedValue(makeSessionEvents([
+      { ...AGENT_EVENT, title: 'Correction A' },
+      { ...AGENT_EVENT, title: 'Correction B' },
+    ]));
+    db.default.query
+      .mockResolvedValueOnce([[SOURCE]])
+      .mockResolvedValueOnce([{ affectedRows: 1 }]);
+
+    const result = await triggerAgentRun(
+      1,
+      99,
+      'test-key',
+      'test-env',
+      'Correct event 7',
+      { expectedCorrectionEventId: 7 },
+    );
+
+    expect(result).toMatchObject({ inserted: 0, skipped: 2, invalid: 2 });
+    const completedUpdate = db.default.query.mock.calls.find(
+      (c: any[]) => typeof c[0] === 'string' && c[0].includes("status='completed'")
+    );
+    expect(completedUpdate?.[1]?.[2]).toBe(0);
   });
 });
 
@@ -227,7 +259,7 @@ describe('triggerAgentRun — source validation', () => {
 describe('triggerAgentRun — agent failures', () => {
   beforeEach(setupPoolHappyPath);
 
-  it('treats no-JSON agent response as a direct-post run (success, 0 events)', async () => {
+  it('fails a no-JSON response when this run has no direct-post evidence', async () => {
     mockSessionsEventsList.mockResolvedValue({
       data: [
         { type: 'agent.message', created_at: 'x', content: [{ type: 'text', text: 'No events found.' }] },
@@ -235,14 +267,81 @@ describe('triggerAgentRun — agent failures', () => {
       ],
     });
 
-    const result = await triggerAgentRun(1, 99, 'test-key', 'test-env');
-    expect(result.inserted).toBe(0);
-    expect(result.events).toHaveLength(0);
+    await expect(triggerAgentRun(1, 99, 'test-key', 'test-env'))
+      .rejects.toThrow('no JSON array');
 
+    const failedUpdate = db.default.query.mock.calls.find(
+      (c: any[]) => typeof c[0] === 'string' && c[0].includes("status='failed'")
+    );
+    expect(failedUpdate).toBeDefined();
+  });
+
+  it('accepts no JSON only when the same run has durable direct-post evidence', async () => {
+    mockSessionsEventsList.mockResolvedValue({
+      data: [
+        { type: 'agent.message', created_at: 'x', content: [{ type: 'text', text: 'Posted through ingest.' }] },
+        { type: 'session.status_idle', created_at: 'y', stop_reason: { type: 'end_turn' } },
+      ],
+    });
+    db.default.query.mockImplementation((sql: unknown) =>
+      typeof sql === 'string' && /SELECT status FROM agent_runs/i.test(sql)
+        ? Promise.resolve([[{ status: 'running' }]])
+        : typeof sql === 'string' && /SELECT ar\.status, ar\.events_found/i.test(sql)
+        ? Promise.resolve([[
+            {
+              status: 'running', events_found: 2, events_extracted: 1,
+              events_skipped_dup: 1, events_errored: 0, persisted_events: 1,
+            },
+          ]])
+        : typeof sql === 'string' && /FROM sources/i.test(sql)
+        ? Promise.resolve([[SOURCE]])
+        : Promise.resolve([{ affectedRows: 1 }]),
+    );
+
+    const result = await triggerAgentRun(1, 99, 'test-key', 'test-env');
+    expect(result).toMatchObject({ inserted: 1, skipped: 1, invalid: 0 });
     const completedUpdate = db.default.query.mock.calls.find(
       (c: any[]) => typeof c[0] === 'string' && c[0].includes("status='completed'")
     );
-    expect(completedUpdate).toBeDefined();
+    expect(completedUpdate?.[0]).toContain("status='running'");
+  });
+
+  it('does not treat a direct-post error counter by itself as successful output', async () => {
+    mockSessionsEventsList.mockResolvedValue({
+      data: [
+        { type: 'agent.message', created_at: 'x', content: [{ type: 'text', text: 'Post failed.' }] },
+        { type: 'session.status_idle', created_at: 'y', stop_reason: { type: 'end_turn' } },
+      ],
+    });
+    db.default.query.mockImplementation((sql: unknown) =>
+      typeof sql === 'string' && /SELECT status FROM agent_runs/i.test(sql)
+        ? Promise.resolve([[{ status: 'running' }]])
+        : typeof sql === 'string' && /SELECT ar\.status, ar\.events_found/i.test(sql)
+        ? Promise.resolve([[
+            {
+              status: 'running', events_found: 0, events_extracted: 0,
+              events_skipped_dup: 0, events_errored: 1, persisted_events: 0,
+            },
+          ]])
+        : typeof sql === 'string' && /FROM sources/i.test(sql)
+        ? Promise.resolve([[SOURCE]])
+        : Promise.resolve([{ affectedRows: 1 }]),
+    );
+
+    await expect(triggerAgentRun(1, 99, 'test-key', 'test-env'))
+      .rejects.toThrow('no direct-post output');
+  });
+
+  it('fails malformed JSON when no direct-post output exists', async () => {
+    mockSessionsEventsList.mockResolvedValue({
+      data: [
+        { type: 'agent.message', created_at: 'x', content: [{ type: 'text', text: '[{" }]' }] },
+        { type: 'session.status_idle', created_at: 'y', stop_reason: { type: 'end_turn' } },
+      ],
+    });
+
+    await expect(triggerAgentRun(1, 99, 'test-key', 'test-env'))
+      .rejects.toThrow('malformed JSON');
   });
 
   it('marks run as failed when sessions.create throws', async () => {
@@ -254,6 +353,7 @@ describe('triggerAgentRun — agent failures', () => {
       (c: any[]) => typeof c[0] === 'string' && c[0].includes("status='failed'")
     );
     expect(failUpdate).toBeDefined();
+    expect(failUpdate[0]).toContain("status='running'");
   });
 
   it('stores error message in error_log', async () => {
@@ -268,17 +368,28 @@ describe('triggerAgentRun — agent failures', () => {
   });
 });
 
-// ── DB write failure → rollback ───────────────────────────────────────────────
+// ── DB write failure → isolated item error ───────────────────────────────────
 describe('triggerAgentRun — DB write failure', () => {
-  it('rolls back transaction and marks run failed when conn.query throws', async () => {
+  it('rolls back only the failed event and completes the run with an error report', async () => {
     db.default.query
       .mockResolvedValueOnce([[SOURCE]])
       .mockResolvedValueOnce([{ affectedRows: 1 }]);
 
-    db.mockConn.query.mockReset();
-    db.mockConn.query.mockRejectedValueOnce(new Error('Deadlock found'));
+    db.mockConn.query
+      .mockReset()
+      .mockResolvedValueOnce([[]])
+      .mockRejectedValueOnce(new Error('Deadlock found'));
 
-    await expect(triggerAgentRun(1, 99, 'test-key', 'test-env')).rejects.toThrow();
+    const result = await triggerAgentRun(1, 99, 'test-key', 'test-env');
+    expect(result.inserted).toBe(0);
+    expect(result.invalid).toBe(1);
+    expect(result.errors?.[0].issues).toContainEqual(expect.objectContaining({
+      code: 'database_error',
+    }));
+    const completedUpdate = db.default.query.mock.calls.find(
+      (c: any[]) => typeof c[0] === 'string' && c[0].includes("status='completed'")
+    );
+    expect(completedUpdate?.[1]?.[2]).toBe(0);
     expect(db.mockConn.rollback).toHaveBeenCalledTimes(1);
     expect(db.mockConn.release).toHaveBeenCalledTimes(1);
   });

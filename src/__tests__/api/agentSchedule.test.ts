@@ -1,22 +1,7 @@
-jest.mock('@/lib/agentRunner', () => ({ triggerAgentRun: jest.fn() }));
-jest.mock('@/lib/email', () => ({
-  sendAgentRunSummary:    jest.fn().mockResolvedValue(undefined),
-  sendReviewNotification: jest.fn().mockResolvedValue(undefined),
-}));
-
 import { NextRequest } from 'next/server';
 import { GET } from '@/app/api/agent/schedule/route';
-import { triggerAgentRun }       from '@/lib/agentRunner';
-import { sendAgentRunSummary, sendReviewNotification } from '@/lib/email';
 
-const db          = require('@/lib/db');
-const mockTrigger = triggerAgentRun as jest.Mock;
-const mockSummary = sendAgentRunSummary as jest.Mock;
-const mockNotify  = sendReviewNotification as jest.Mock;
-
-const TWO_SOURCES = [{ id: 1, name: 'Apollo Theatre' }, { id: 2, name: 'Oberlin College' }];
-const ONE_SOURCE  = [{ id: 1, name: 'Apollo' }];
-const REVIEWER    = { id: 10, email: 'rev@oberlin.edu', full_name: 'Jane Reviewer' };
+const db = require('@/lib/db');
 
 function makeReq(secret = 'test-cron-secret') {
   return new NextRequest('http://localhost/api/agent/schedule', {
@@ -24,106 +9,90 @@ function makeReq(secret = 'test-cron-secret') {
   });
 }
 
-// Helper: set up pool mocks for N sources
-// Route does: [sources] + N×[INSERT agent_runs] + (if totalNew>0) [reviewers] + N×[pending per reviewer]
-function mockForSources(sources: any[], triggerResults: any[], reviewerPending = 0) {
-  db.default.query.mockReset();
-  db.default.query.mockResolvedValueOnce([sources]); // active sources query
-  // Route processes each source sequentially: insert, then an error update if needed.
-  for (let i = 0; i < sources.length; i++) {
-    db.default.query.mockResolvedValueOnce([{ insertId: i + 1 }]);
-    if (triggerResults[i] instanceof Error) {
-      db.default.query.mockResolvedValueOnce([{ affectedRows: 1 }]);
-    }
-  }
-  // reviewers + pending (only if at least one source succeeds)
-  const totalNew = triggerResults.reduce((s, r) => s + (r?.inserted || 0), 0);
-  if (totalNew > 0) {
-    db.default.query.mockResolvedValueOnce([[REVIEWER]]);
-    db.default.query.mockResolvedValueOnce([[{ pending: reviewerPending }]]);
-  }
-  // Set up triggerAgentRun mocks
-  mockTrigger.mockReset();
-  triggerResults.forEach(r => {
-    if (r instanceof Error) mockTrigger.mockRejectedValueOnce(r);
-    else mockTrigger.mockResolvedValueOnce(r);
-  });
-}
-
-beforeEach(() => {
-  mockSummary.mockReset().mockResolvedValue(undefined);
-  mockNotify.mockReset().mockResolvedValue(undefined);
-  process.env.CRON_SECRET = 'test-cron-secret';
-  process.env.ADMIN_EMAIL = 'admin@oberlin.edu';
-});
-
 describe('GET /api/agent/schedule', () => {
-  it('returns 401 with wrong CRON_SECRET', async () => {
-    expect((await GET(makeReq('wrong'))).status).toBe(401);
-  });
+  const originalFetch = global.fetch;
 
-  it('returns 401 with missing auth header', async () => {
-    expect((await GET(new NextRequest('http://localhost/api/agent/schedule', {}))).status).toBe(401);
-  });
-
-  it('runs all active sources and returns summary', async () => {
-    mockForSources(TWO_SOURCES, [{ inserted: 3, run_id: 1 }, { inserted: 5, run_id: 2 }], 0);
-    const data = await (await GET(makeReq())).json();
-    expect(data.ran).toBe(2);
-    expect(data.totalNew).toBe(8);
-    expect(data.results[0].status).toBe('ok');
-    expect(data.results[1].status).toBe('ok');
-  });
-
-  it('marks source as error and continues when triggerAgentRun throws', async () => {
-    mockForSources(TWO_SOURCES, [new Error('Agent timeout'), { inserted: 4, run_id: 2 }], 0);
-    const data = await (await GET(makeReq())).json();
-    expect(data.ran).toBe(2);
-    expect(data.results[0].status).toBe('error');
-    expect(data.results[0].error).toBe('Agent timeout');
-    expect(data.results[1].status).toBe('ok');
-  });
-
-  it('sends admin summary email when ADMIN_EMAIL is set', async () => {
-    mockForSources(TWO_SOURCES, [{ inserted: 2, run_id: 1 }, { inserted: 2, run_id: 2 }], 0);
-    await GET(makeReq());
-    await new Promise(r => setTimeout(r, 10));
-    expect(mockSummary).toHaveBeenCalledWith(expect.objectContaining({
-      adminEmail: 'admin@oberlin.edu', totalNew: 4,
-    }));
-  });
-
-  it('does not send admin email when ADMIN_EMAIL is not set', async () => {
-    delete process.env.ADMIN_EMAIL;
-    mockForSources(ONE_SOURCE, [{ inserted: 1, run_id: 1 }], 0);
-    await GET(makeReq());
-    await new Promise(r => setTimeout(r, 10));
-    expect(mockSummary).not.toHaveBeenCalled();
-  });
-
-  it('emails reviewers when they have pending events', async () => {
-    mockForSources(ONE_SOURCE, [{ inserted: 5, run_id: 1 }], 7);
-    await GET(makeReq());
-    await new Promise(r => setTimeout(r, 10));
-    expect(mockNotify).toHaveBeenCalledWith(expect.objectContaining({
-      reviewerEmail: REVIEWER.email, pendingCount: 7,
-    }));
-  });
-
-  it('does not email reviewers when they have no pending events', async () => {
-    mockForSources(ONE_SOURCE, [{ inserted: 0, run_id: 1 }], 0);
-    await GET(makeReq());
-    await new Promise(r => setTimeout(r, 10));
-    expect(mockNotify).not.toHaveBeenCalled();
-  });
-
-  it('handles empty sources list gracefully', async () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-07-13T11:00:00Z')); // 07:00 EDT
+    process.env.CRON_SECRET = 'test-cron-secret';
     db.default.query.mockReset();
-    db.default.query.mockResolvedValueOnce([[]]); // no active sources
-    mockTrigger.mockReset();
+    global.fetch = jest.fn();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    global.fetch = originalFetch;
+  });
+
+  it('rejects execution when CRON_SECRET is missing', async () => {
+    delete process.env.CRON_SECRET;
+    const response = await GET(makeReq());
+    expect(response.status).toBe(503);
+    expect(db.default.query).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 for the wrong secret', async () => {
+    const response = await GET(makeReq('wrong'));
+    expect(response.status).toBe(401);
+    expect(db.default.query).not.toHaveBeenCalled();
+  });
+
+  it('dispatches only due sources and fails closed on invalid schedules', async () => {
+    db.default.query.mockResolvedValueOnce([[
+      { id: 1, name: 'Due source', schedule_cron: '30 6 * * *' },
+      { id: 2, name: 'Later source', schedule_cron: '0 9 * * *' },
+      { id: 3, name: 'Broken source', schedule_cron: 'not a cron' },
+    ]]);
+    (global.fetch as jest.Mock).mockResolvedValueOnce(new Response(
+      JSON.stringify({ ok: true, run_id: 77 }),
+      { status: 202, headers: { 'Content-Type': 'application/json' } },
+    ));
+
+    const response = await GET(makeReq());
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(data).toMatchObject({ checked: 3, due: 1, dispatched: 1, failed: 0 });
+    expect(data.invalid_schedules).toHaveLength(1);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch).toHaveBeenCalledWith(
+      new URL('http://localhost/api/agent/trigger/1'),
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          'x-cron-secret': 'test-cron-secret',
+          'x-schedule-slot': '2026-07-13T10:30:00.000Z',
+        }),
+      }),
+    );
+  });
+
+  it('reports duplicate leases as skipped and trigger failures as errors', async () => {
+    db.default.query.mockResolvedValueOnce([[
+      { id: 1, name: 'Already running', schedule_cron: '30 6 * * *' },
+      { id: 2, name: 'Trigger failure', schedule_cron: '45 6 * * *' },
+    ]]);
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce(new Response(
+        JSON.stringify({ duplicate: true, reason: 'source_already_running', run_id: 9 }),
+        { status: 409, headers: { 'Content-Type': 'application/json' } },
+      ))
+      .mockResolvedValueOnce(new Response(
+        JSON.stringify({ error: 'Unavailable' }),
+        { status: 503, headers: { 'Content-Type': 'application/json' } },
+      ));
+
     const data = await (await GET(makeReq())).json();
-    expect(data.ran).toBe(0);
-    expect(data.totalNew).toBe(0);
-    expect(mockTrigger).not.toHaveBeenCalled();
+    expect(data).toMatchObject({ due: 2, dispatched: 0, skipped: 1, failed: 1 });
+    expect(data.results[0]).toMatchObject({ status: 'skipped', run_id: 9 });
+    expect(data.results[1]).toMatchObject({ status: 'error', error: 'Unavailable' });
+  });
+
+  it('handles an empty active-source list without dispatching', async () => {
+    db.default.query.mockResolvedValueOnce([[]]);
+    const data = await (await GET(makeReq())).json();
+    expect(data).toMatchObject({ checked: 0, due: 0, dispatched: 0 });
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 });

@@ -274,7 +274,7 @@ describe('Scenario 1 – Agent run writes events with schema-correct structure',
     const finalUpdate = db.default.query.mock.calls.find(
       (c: any[]) => typeof c[0] === 'string' && c[0].includes('events_found')
     );
-    expect(finalUpdate[1]).toEqual([2, 2, 0, 99]);
+    expect(finalUpdate[1]).toEqual([2, 2, 0, 0, null, 99]);
   });
 
   it('returns event list containing id and ingestedPostUrl for each event', async () => {
@@ -350,7 +350,8 @@ describe('Scenario 2 – Reviewer queue serves events with correct structure', (
   it('full event detail includes all fields needed for the review card', async () => {
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_USER]])
-      .mockResolvedValueOnce([[{ ...RAW_EVENT, source_name: SOURCE.name, calendar_source_name: SOURCE.calendar_source_name }]]);
+      .mockResolvedValueOnce([[{ ...RAW_EVENT, source_name: SOURCE.name, calendar_source_name: SOURCE.calendar_source_name }]])
+      .mockResolvedValueOnce([[{ allowed: 1 }]]);
 
     const res  = await getEvent(makeAuthReq('/api/review/events/10'), ctx('10'));
     const data = await res.json();
@@ -382,7 +383,19 @@ describe('Scenario 3 – Approve sends correct CommunityHub payload', () => {
   beforeEach(() => {
     db.default.query.mockReset();
     db.mockConn.query.mockReset();
-    db.mockConn.query.mockResolvedValue([{ affectedRows: 1 }]);
+    db.mockConn.query.mockImplementation((sql: unknown) => {
+      if (typeof sql !== 'string') return Promise.resolve([{ affectedRows: 1 }]);
+      if (sql.includes('SELECT * FROM raw_events') && sql.includes('FOR UPDATE')) {
+        return Promise.resolve([[RAW_EVENT]]);
+      }
+      if (sql.includes('communityhub_submissions') && sql.includes('SELECT id')) {
+        return Promise.resolve([[]]);
+      }
+      if (sql.includes('communityhub_submissions') && sql.includes('payload_hash=?')) {
+        return Promise.resolve([[]]);
+      }
+      return Promise.resolve([{ affectedRows: 1 }]);
+    });
     db.mockConn.beginTransaction = jest.fn().mockResolvedValue(undefined);
     db.mockConn.commit           = jest.fn().mockResolvedValue(undefined);
     db.mockConn.rollback         = jest.fn().mockResolvedValue(undefined);
@@ -391,6 +404,7 @@ describe('Scenario 3 – Approve sends correct CommunityHub payload', () => {
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_USER]])
       .mockResolvedValueOnce([[RAW_EVENT]])
+      .mockResolvedValueOnce([[{ allowed: 1 }]])
       .mockResolvedValueOnce([[{ id: 5 }]]); // reviewer db id
   });
 
@@ -483,7 +497,7 @@ describe('Scenario 3 – Approve sends correct CommunityHub payload', () => {
     expect(sessionInsert[0]).toContain('submitted_to_ch');
   });
 
-  it('rolls back and returns 500 if CommunityHub is unreachable', async () => {
+  it('leaves an ambiguous submission locked and returns 502 if CommunityHub is unreachable', async () => {
     mockFetch.mockReset();
     mockFetch.mockRejectedValueOnce(new Error('ECONNREFUSED'));
 
@@ -491,8 +505,11 @@ describe('Scenario 3 – Approve sends correct CommunityHub payload', () => {
       makeAuthReq('/api/review/events/10/action', 'POST', { action: 'approve' }),
       ctx('10')
     );
-    expect(res.status).toBe(500);
-    expect(db.mockConn.rollback).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(502);
+    expect(await res.json()).toMatchObject({
+      submission_state: 'unknown',
+      retry_safe: false,
+    });
     // Event stays pending — not marked approved
     const approveUpdate = db.mockConn.query.mock.calls.find(
       (c: any[]) => typeof c[0] === 'string' && c[0].includes("status='approved'")

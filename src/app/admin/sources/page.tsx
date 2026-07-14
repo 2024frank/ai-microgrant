@@ -1,154 +1,365 @@
 'use client';
-import { useEffect, useState, useRef, useCallback } from 'react';
-import { useAuth } from '@/hooks/useAuth';
-import Sidebar from '@/components/layout/Sidebar';
-import { Plus, Play, Square, Trash2, ToggleLeft, ToggleRight, CheckCircle, XCircle, Loader, Copy, Check, Pencil, Wrench, FileText, X, Mail } from 'lucide-react';
 
-const SCHEDULE_OPTIONS = [
-  { label: 'Every hour',    value: '0 * * * *'   },
-  { label: 'Every 6 hours', value: '0 */6 * * *' },
-  { label: 'Daily (6am)',   value: '0 6 * * *'   },
-  { label: 'Daily (noon)',  value: '0 12 * * *'  },
-  { label: 'Weekly',        value: '0 6 * * 1'   },
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  Activity,
+  AlertTriangle,
+  Check,
+  CheckCircle2,
+  Clock3,
+  Copy,
+  Database,
+  FileText,
+  LoaderCircle,
+  Mail,
+  PauseCircle,
+  Pencil,
+  Play,
+  Plus,
+  RefreshCcw,
+  ShieldCheck,
+  Square,
+  Trash2,
+  X,
+  XCircle,
+} from 'lucide-react';
+import AppShell from '@/components/layout/AppShell';
+import { useAuth } from '@/hooks/useAuth';
+
+const SCHEDULE_PRESETS = [
+  { label: 'Every hour', value: '0 * * * *' },
+  { label: 'Daily at 6:00 AM', value: '0 6 * * *' },
+  { label: 'Weekdays at 6:00 AM', value: '0 6 * * 1-5' },
+  { label: 'Mondays at 6:00 AM', value: '0 6 * * 1' },
 ];
 
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://ai-microgrant-research-oberlin.vercel.app';
+interface SourceRecord {
+  id: number;
+  name: string;
+  slug: string;
+  agent_id?: string;
+  source_type?: string;
+  active: number | boolean;
+  schedule_cron: string;
+  total_events?: number;
+  total_approved?: number;
+  pending_review?: number;
+  validation_issues?: number;
+  schedule_valid?: boolean;
+  schedule_error?: string | null;
+  schedule_timezone?: string;
+  next_run_at?: string | null;
+  health_status?:
+    | 'disabled'
+    | 'invalid_schedule'
+    | 'no_run_history'
+    | 'running'
+    | 'last_run_completed'
+    | 'last_run_failed'
+    | 'last_run_stopped'
+    | 'unknown_run_state';
+  health_reason?: string;
+  last_run_status?: string | null;
+  last_run_at?: string | null;
+  last_run_started_at?: string | null;
+  last_error?: string | null;
+  recent_runs?: Array<{
+    id: number;
+    status: string;
+    started_at: string;
+    finished_at?: string | null;
+    events_found?: number;
+    events_extracted?: number;
+    events_skipped_dup?: number;
+    events_errored?: number;
+    elapsed_sec?: number;
+    error_summary?: string | null;
+  }>;
+  fix_stats?: {
+    pending_fix?: number;
+    total_sent_for_fix?: number;
+    total_fixed?: number;
+    fixed_approved?: number;
+  } | null;
+}
+
+interface RunRecord {
+  id: number;
+  source_id: number;
+  source_name: string;
+  status: 'running' | 'completed' | 'failed' | 'stopped' | string;
+  started_at: string;
+  finished_at?: string | null;
+  events_found?: number;
+  events_extracted?: number;
+  events_skipped_dup?: number;
+  events_errored?: number;
+  error_log?: unknown;
+  elapsed_sec?: number;
+}
+
+type Health = 'running' | 'failed' | 'completed' | 'stopped' | 'invalid' | 'paused' | 'never' | 'monitoring';
 
 export default function SourcesPage() {
   const { user, token, ready, getFreshToken } = useAuth('admin');
-  const [sources, setSources]       = useState<any[]>([]);
-  const [runs, setRuns]             = useState<any[]>([]);
-  const [loading, setLoading]       = useState(true);
-  const [showAdd, setShowAdd]       = useState(false);
-  const [form, setForm]             = useState({ name: '', agent_id: '', schedule_cron: '0 6 * * *' });
-  const [adding, setAdding]         = useState(false);
-  const [addError, setAddError]     = useState('');
+  const [sources, setSources] = useState<SourceRecord[]>([]);
+  const [runs, setRuns] = useState<RunRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [runsError, setRunsError] = useState('');
+  const [toast, setToast] = useState<{ message: string; error?: boolean } | null>(null);
   const [triggering, setTriggering] = useState<number | null>(null);
-  const [toast, setToast]           = useState('');
-  const [copiedSlug, setCopiedSlug] = useState<string | null>(null);
   const [editingSchedule, setEditingSchedule] = useState<number | null>(null);
-  const pollRef = useRef<NodeJS.Timeout | null>(null);
+  const [scheduleDraft, setScheduleDraft] = useState('');
+  const [scheduleSaving, setScheduleSaving] = useState(false);
+  const [copiedSlug, setCopiedSlug] = useState<string | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [addError, setAddError] = useState('');
+  const [form, setForm] = useState({ name: '', agent_id: '', schedule_cron: '0 6 * * *' });
+  const [promptSource, setPromptSource] = useState<SourceRecord | null>(null);
+  const [promptText, setPromptText] = useState('');
+  const [promptVersion, setPromptVersion] = useState(0);
+  const [promptLoading, setPromptLoading] = useState(false);
+  const [promptSaving, setPromptSaving] = useState(false);
+  const [promptError, setPromptError] = useState('');
+  const pollRef = useRef<number | null>(null);
 
-  // System prompt drawer
-  const [promptSource, setPromptSource]     = useState<any | null>(null);
-  const [promptText, setPromptText]         = useState('');
-  const [promptVersion, setPromptVersion]   = useState(0);
-  const [promptLoading, setPromptLoading]   = useState(false);
-  const [promptSaving, setPromptSaving]     = useState(false);
-  const [promptError, setPromptError]       = useState('');
+  const authHeaders = useCallback(() => ({ Authorization: `Bearer ${token}` }), [token]);
 
-  const h = useCallback(() => ({ Authorization: `Bearer ${token}` }), [token]);
-
-  const loadSources = useCallback(() => {
+  const loadSources = useCallback(async () => {
     if (!token) return;
-    fetch('/api/sources', { headers: h() })
-      .then(r => r.json())
-      .then(d => { if (Array.isArray(d)) setSources(d); })
-      .catch(() => setSources([]))
-      .finally(() => setLoading(false));
-  }, [token, h]);
+    try {
+      const response = await fetch('/api/sources', { headers: authHeaders() });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !Array.isArray(payload)) throw new Error(payload?.error || 'Sources could not be loaded.');
+      setSources(payload);
+      setLoadError('');
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : 'Sources could not be loaded.');
+    } finally {
+      setLoading(false);
+    }
+  }, [token, authHeaders]);
 
-  const loadRuns = useCallback(() => {
+  const loadRuns = useCallback(async () => {
     if (!token) return;
-    fetch('/api/agent/runs?limit=20', { headers: h() })
-      .then(r => r.json())
-      .then(d => {
-        setRuns(d.runs || []);
-        if (!d.has_active) loadSources();
-      }).catch(() => {});
-  }, [token, h, loadSources]);
+    try {
+      const response = await fetch('/api/agent/runs?limit=30', { headers: authHeaders() });
+      if (!response.ok) throw new Error('Run telemetry could not be loaded.');
+      const payload = await response.json();
+      setRuns(Array.isArray(payload.runs) ? payload.runs : []);
+      setRunsError('');
+      if (!payload.has_active) loadSources();
+    } catch (error) {
+      setRunsError(error instanceof Error ? error.message : 'Run telemetry could not be loaded.');
+      void loadSources();
+    }
+  }, [token, authHeaders, loadSources]);
 
   useEffect(() => {
     if (!ready || !token) return;
     loadSources();
     loadRuns();
-    pollRef.current = setInterval(loadRuns, 10_000);
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [ready, token]); // eslint-disable-line
+    pollRef.current = window.setInterval(loadRuns, 10_000);
+    return () => {
+      if (pollRef.current) window.clearInterval(pollRef.current);
+    };
+  }, [ready, token, loadSources, loadRuns]);
 
-  function showToast(msg: string) { setToast(msg); setTimeout(() => setToast(''), 3000); }
+  useEffect(() => {
+    if (!addOpen && !promptSource) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setAddOpen(false);
+      setPromptSource(null);
+    };
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [addOpen, promptSource]);
 
-  function copyEndpoint(slug: string) {
-    const url = `${APP_URL}/api/ingest/${slug}`;
-    navigator.clipboard.writeText(url).then(() => {
-      setCopiedSlug(slug);
-      setTimeout(() => setCopiedSlug(null), 2000);
-    });
+  function showToast(message: string, error = false) {
+    setToast({ message, error });
+    window.setTimeout(() => setToast(null), 3800);
   }
 
-  async function addSource() {
-    setAdding(true); setAddError('');
-    const controller = new AbortController();
-    const tid = setTimeout(() => { controller.abort(); setAdding(false); setAddError('Request timed out — please try again'); }, 12000);
+  function latestRunFor(sourceId: number) {
+    return runs.find(run => run.source_id === sourceId);
+  }
+
+  function sourceHealth(source: SourceRecord, run?: RunRecord): Health {
+    if (!source.active) return 'paused';
+    if (run?.status === 'running') return 'running';
+    if (run?.status === 'failed') return 'failed';
+    if (run?.status === 'stopped') return 'stopped';
+    if (run?.status === 'completed') return 'completed';
+
+    const states: Record<NonNullable<SourceRecord['health_status']>, Health> = {
+      disabled: 'paused',
+      invalid_schedule: 'invalid',
+      no_run_history: 'never',
+      running: 'running',
+      last_run_completed: 'completed',
+      last_run_failed: 'failed',
+      last_run_stopped: 'stopped',
+      unknown_run_state: 'monitoring',
+    };
+    if (source.health_status) return states[source.health_status];
+    if (source.schedule_valid === false) return 'invalid';
+    if (source.last_run_status === 'failed') return 'failed';
+    if (source.last_run_status === 'completed') return 'completed';
+    if (source.last_run_status === 'stopped') return 'stopped';
+    if (!source.last_run_status) return 'never';
+    return 'monitoring';
+  }
+
+  function beginScheduleEdit(source: SourceRecord) {
+    setScheduleDraft(source.schedule_cron);
+    setEditingSchedule(source.id);
+  }
+
+  function copyEndpoint(slug: string) {
+    const origin = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
+    navigator.clipboard.writeText(`${origin}/api/ingest/${slug}`).then(() => {
+      setCopiedSlug(slug);
+      window.setTimeout(() => setCopiedSlug(null), 1800);
+    }).catch(() => showToast('The endpoint could not be copied.', true));
+  }
+
+  async function saveSchedule(sourceId: number, scheduleCron: string) {
+    if (!scheduleCron.trim()) {
+      showToast('Enter a five-field cron expression.', true);
+      return;
+    }
+    setScheduleSaving(true);
     try {
       const freshToken = await getFreshToken();
-      const res = await fetch('/api/sources', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
-        body: JSON.stringify(form),
-        signal: controller.signal,
+      const response = await fetch(`/api/sources/${sourceId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${freshToken}`,
+        },
+        body: JSON.stringify({ schedule_cron: scheduleCron.trim() }),
       });
-      clearTimeout(tid);
-      const data = await res.json();
-      if (!res.ok) { setAddError(data.error || 'Failed'); setAdding(false); return; }
-      setShowAdd(false);
-      setForm({ name: '', agent_id: '', schedule_cron: '0 6 * * *' });
-      setAdding(false);
-      loadSources();
-      showToast(`✓ ${data.name} added! Ingest endpoint ready.`);
-    } catch (err: any) {
-      clearTimeout(tid);
-      if (err.name !== 'AbortError') { setAddError(`Error: ${err.message}`); setAdding(false); }
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'Schedule could not be updated.');
+      setEditingSchedule(null);
+      await loadSources();
+      showToast('Source cron schedule updated.');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Schedule could not be updated.', true);
+    } finally {
+      setScheduleSaving(false);
     }
   }
 
-  async function saveSchedule(sourceId: number, schedule_cron: string) {
-    const freshToken = await getFreshToken();
-    await fetch(`/api/sources/${sourceId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
-      body: JSON.stringify({ schedule_cron }),
-    });
-    setEditingSchedule(null);
-    loadSources();
-    showToast('Schedule updated');
-  }
-
-  async function triggerRun(sourceId: number) {
-    setTriggering(sourceId);
+  async function triggerRun(source: SourceRecord) {
+    setTriggering(source.id);
     try {
       const freshToken = await getFreshToken();
-      const res  = await fetch(`/api/agent/trigger/${sourceId}`, { method: 'POST', headers: { Authorization: `Bearer ${freshToken}` } });
-      let data: any = {};
-      try { data = await res.json(); } catch {}
-      if (!res.ok) showToast(`Error: ${data.error || 'Failed'}`);
-      else { showToast(`Agent started for ${data.source || 'source'}`); setTimeout(loadRuns, 1000); }
-    } catch (err: any) { showToast(`Error: ${err.message}`); }
-    finally { setTriggering(null); }
+      const response = await fetch(`/api/agent/trigger/${source.id}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${freshToken}` },
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'The run could not be started.');
+      showToast(`${source.name} run requested.`);
+      window.setTimeout(loadRuns, 900);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'The run could not be started.', true);
+    } finally {
+      setTriggering(null);
+    }
   }
 
-  async function stopRun(runId: number) {
-    const freshToken = await getFreshToken();
-    const res = await fetch(`/api/agent/runs/${runId}/stop`, { method: 'POST', headers: { Authorization: `Bearer ${freshToken}` } });
-    const data = await res.json().catch(() => ({}));
-    if (res.ok) { showToast('Run stopped'); }
-    else if (res.status === 400) { showToast('Run already finished'); }
-    else { showToast(`Error: ${data.error || 'unknown'}`); }
-    loadRuns();
+  async function stopRun(run: RunRecord) {
+    try {
+      const freshToken = await getFreshToken();
+      const response = await fetch(`/api/agent/runs/${run.id}/stop`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${freshToken}` },
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'The run could not be stopped.');
+      showToast(`${run.source_name} stop requested.`);
+      loadRuns();
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'The run could not be stopped.', true);
+    }
   }
 
-  async function deleteSource(source: any) {
-    if (!confirm(`Delete "${source.name}"?\n\nThis will permanently delete the source and ALL its events and runs from the database.`)) return;
-    const freshToken = await getFreshToken();
-    const res = await fetch(`/api/sources/${source.id}`, {
-      method: 'DELETE',
-      headers: { Authorization: `Bearer ${freshToken}` },
-    });
-    if (res.ok) { showToast(`✓ ${source.name} deleted`); loadSources(); }
-    else showToast('Failed to delete source');
+  async function toggleActive(source: SourceRecord) {
+    try {
+      const freshToken = await getFreshToken();
+      const response = await fetch(`/api/sources/${source.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${freshToken}`,
+        },
+        body: JSON.stringify({ active: source.active ? 0 : 1 }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'Source status could not be changed.');
+      await loadSources();
+      showToast(`${source.name} ${source.active ? 'paused' : 'enabled'}.`);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Source status could not be changed.', true);
+    }
   }
 
-  async function openPromptDrawer(source: any) {
+  async function deleteSource(source: SourceRecord) {
+    const confirmed = window.confirm(`Delete “${source.name}”?\n\nThis permanently deletes the source and its events and run history.`);
+    if (!confirmed) return;
+    try {
+      const freshToken = await getFreshToken();
+      const response = await fetch(`/api/sources/${source.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${freshToken}` },
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'Source could not be deleted.');
+      showToast(`${source.name} deleted.`);
+      loadSources();
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Source could not be deleted.', true);
+    }
+  }
+
+  async function addSource() {
+    setAdding(true);
+    setAddError('');
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 12_000);
+    try {
+      const freshToken = await getFreshToken();
+      const response = await fetch('/api/sources', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${freshToken}`,
+        },
+        body: JSON.stringify(form),
+        signal: controller.signal,
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'Source could not be added.');
+      setAddOpen(false);
+      setForm({ name: '', agent_id: '', schedule_cron: '0 6 * * *' });
+      showToast(`${payload.name || form.name} added. The ingest endpoint is ready.`);
+      loadSources();
+    } catch (error) {
+      setAddError(error instanceof DOMException && error.name === 'AbortError'
+        ? 'The request timed out. Try again.'
+        : error instanceof Error ? error.message : 'Source could not be added.');
+    } finally {
+      window.clearTimeout(timeout);
+      setAdding(false);
+    }
+  }
+
+  async function openPrompt(source: SourceRecord) {
     setPromptSource(source);
     setPromptText('');
     setPromptVersion(0);
@@ -156,437 +367,451 @@ export default function SourcesPage() {
     setPromptLoading(true);
     try {
       const freshToken = await getFreshToken();
-      const res  = await fetch(`/api/sources/${source.id}/system-prompt`, { headers: { Authorization: `Bearer ${freshToken}` } });
-      const data = await res.json();
-      if (!res.ok) { setPromptError(data.error || 'Failed to load'); setPromptLoading(false); return; }
-      setPromptText(data.system);
-      setPromptVersion(data.version);
-    } catch (err: any) { setPromptError(err.message); }
-    setPromptLoading(false);
+      const response = await fetch(`/api/sources/${source.id}/system-prompt`, {
+        headers: { Authorization: `Bearer ${freshToken}` },
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'Extraction instructions could not be loaded.');
+      setPromptText(payload.system || '');
+      setPromptVersion(Number(payload.version) || 0);
+    } catch (error) {
+      setPromptError(error instanceof Error ? error.message : 'Extraction instructions could not be loaded.');
+    } finally {
+      setPromptLoading(false);
+    }
   }
 
   async function savePrompt() {
     if (!promptSource) return;
-    setPromptSaving(true); setPromptError('');
+    setPromptSaving(true);
+    setPromptError('');
     try {
       const freshToken = await getFreshToken();
-      const res  = await fetch(`/api/sources/${promptSource.id}/system-prompt`, {
+      const response = await fetch(`/api/sources/${promptSource.id}/system-prompt`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${freshToken}`,
+        },
         body: JSON.stringify({ system: promptText, version: promptVersion }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        if (res.status === 409) setPromptError('Version conflict — someone else updated this agent. Reload to get the latest version.');
-        else setPromptError(data.error || 'Save failed');
-        setPromptSaving(false);
-        return;
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        if (response.status === 409) throw new Error('These instructions changed elsewhere. Close and reopen the drawer before saving.');
+        throw new Error(payload.error || 'Extraction instructions could not be saved.');
       }
-      setPromptVersion(data.version);
-      showToast(`✓ System prompt updated (v${data.version})`);
-    } catch (err: any) { setPromptError(err.message); }
-    setPromptSaving(false);
-  }
-
-  async function toggleActive(source: any) {
-    const freshToken = await getFreshToken();
-    await fetch(`/api/sources/${source.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
-      body: JSON.stringify({ active: source.active ? 0 : 1 }),
-    });
-    loadSources();
+      setPromptVersion(Number(payload.version) || promptVersion);
+      showToast(`Extraction instructions saved as version ${payload.version}.`);
+    } catch (error) {
+      setPromptError(error instanceof Error ? error.message : 'Extraction instructions could not be saved.');
+    } finally {
+      setPromptSaving(false);
+    }
   }
 
   if (!ready || !user) return null;
 
-  const latestRunBySource: Record<number, any> = {};
-  for (const r of runs) { if (!latestRunBySource[r.source_id]) latestRunBySource[r.source_id] = r; }
-  const activeRuns = runs.filter(r => r.status === 'running');
+  const activeRuns = runs.filter(run => run.status === 'running');
+  const failedSources = sources.filter(source => sourceHealth(
+    source,
+    runsError ? undefined : latestRunFor(source.id),
+  ) === 'failed');
+  const invalidScheduleSources = sources.filter(source =>
+    source.schedule_valid === false || source.health_status === 'invalid_schedule'
+  );
+  const enabledSources = sources.filter(source => Boolean(source.active));
+  const completedRuns = runs.filter(run => run.status !== 'running');
 
   return (
-    <div style={{ display: 'flex', minHeight: '100vh', background: '#f8f9fa' }}>
-      <Sidebar role="admin" name={user.name} email={user.email} token={token}/>
+    <AppShell role="admin" name={user.name} email={user.email} token={token} workspaceLabel="Source operations">
+      <div aria-live="polite" aria-atomic="true">
+        {toast && <div className={`toast ${toast.error ? 'toast--error' : ''}`} role={toast.error ? 'alert' : 'status'}>{toast.message}</div>}
+      </div>
+      <datalist id="schedule-presets">
+        {SCHEDULE_PRESETS.map(option => <option key={option.value} value={option.value} label={option.label} />)}
+      </datalist>
 
-      {toast && (
-        <div style={{ position: 'fixed', top: 20, right: 20, background: '#3a8c3f', color: 'white', padding: '0.75rem 1.25rem', borderRadius: 8, fontSize: 13, fontWeight: 500, zIndex: 999, boxShadow: '0 4px 16px rgba(0,0,0,0.15)' }}>
-          {toast}
-        </div>
-      )}
-
-      <main style={{ flex: 1, padding: '2rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
+      <main className="page-main">
+        <header className="page-header">
           <div>
-            <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 2 }}>Event Sources</h1>
-            <p style={{ fontSize: 13, color: '#888' }}>Each source gets a unique ingest endpoint — paste it into your agent&apos;s system prompt</p>
+            <div className="page-header__eyebrow">Ingestion operations</div>
+            <h1>Sources & runs</h1>
+            <p>Monitor source health, inspect run failures, start an immediate extraction, and manage the exact ingest endpoint for each source.</p>
           </div>
-          <button onClick={() => setShowAdd(true)} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
-            <Plus size={15}/> Add source
-          </button>
+          <div className="page-header__actions">
+            <button type="button" className="btn-secondary" onClick={() => { loadSources(); loadRuns(); }}><RefreshCcw size={15} /> Refresh</button>
+            <button type="button" className="btn-primary" onClick={() => setAddOpen(true)}><Plus size={15} /> Add source</button>
+          </div>
+        </header>
+
+        <section className="ops-health" aria-label="Source health summary">
+          <HealthCard label="Enabled sources" value={enabledSources.length} icon={<Database size={18} color="var(--green-700)" />} />
+          <HealthCard label="Running now" value={runsError ? '—' : activeRuns.length} icon={<Activity size={18} color="var(--green-600)" />} />
+          <HealthCard label="Failed latest run" value={failedSources.length} icon={<XCircle size={18} color="var(--red-600)" />} />
+          <HealthCard label="Invalid schedules" value={invalidScheduleSources.length} icon={<Clock3 size={18} color="var(--amber-600)" />} />
+        </section>
+
+        <div className="ops-banner" id="scheduler-contract">
+          <AlertTriangle size={17} aria-hidden="true" />
+          <span><strong>Five-field cron · America/New_York.</strong> The hourly dispatcher scans the previous 60 minutes. A non-zero minute can therefore be dispatched up to 59 minutes later, and multiple matches in one window coalesce to the latest matching slot. “Run now” requests an immediate run.</span>
         </div>
 
-        {/* Live run banner — one pill per active run */}
-        {activeRuns.length > 0 && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: '1.25rem' }}>
-            {activeRuns.map(r => (
-              <div key={r.id} style={{ background: '#e8f5e9', border: '1px solid #c8e6c9', borderRadius: 20, padding: '0.4rem 0.875rem', display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
-                <Loader size={13} color="#3a8c3f" style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }}/>
-                <strong style={{ color: '#2a6b2e' }}>{r.source_name}</strong>
-                <span style={{ color: '#3a8c3f' }}>{r.events_extracted} extracted · {r.elapsed_sec}s</span>
-                <button onClick={() => stopRun(r.id)}
-                  style={{ background: '#c0392b', border: 'none', borderRadius: 10, padding: '2px 8px', cursor: 'pointer', color: 'white', fontSize: 11, display: 'flex', alignItems: 'center', gap: 3, marginLeft: 2 }}>
-                  <Square size={9} fill="white"/> Stop
-                </button>
-              </div>
-            ))}
+        {!runsError && activeRuns.length > 0 && (
+          <div className="alert alert--success" style={{ marginBottom: 16 }}>
+            <LoaderCircle size={17} style={{ animation: 'spin .8s linear infinite' }} />
+            <span><strong>{activeRuns.length} active {activeRuns.length === 1 ? 'run' : 'runs'}:</strong> {activeRuns.map(run => `${run.source_name} (${run.events_extracted || 0} extracted, ${run.elapsed_sec || 0}s)`).join(' · ')}</span>
           </div>
         )}
+
+        {loadError && <div className="alert alert--error" role="alert" style={{ marginBottom: 16 }}><XCircle size={17} /> {loadError}</div>}
+        {runsError && <div className="alert alert--warning" role="alert" style={{ marginBottom: 16 }}><AlertTriangle size={17} /> Live run polling is unavailable: {runsError} Source cards use the latest operations snapshot, but live progress and stop controls may be unavailable.</div>}
 
         {loading ? (
-          <div style={{ color: '#888', fontSize: 14, padding: '3rem', textAlign: 'center' }}>Loading…</div>
+          <div className="loading-state" role="status"><span className="spinner" /> Loading sources and run history…</div>
+        ) : sources.length === 0 ? (
+          <div className="empty-state">
+            <span className="empty-state__icon"><Database size={23} /></span>
+            <h2>No sources configured</h2>
+            <p>Add a source to create its ingest endpoint and managed extraction configuration.</p>
+            <button type="button" className="btn-primary" style={{ marginTop: 16 }} onClick={() => setAddOpen(true)}><Plus size={14} /> Add first source</button>
+          </div>
         ) : (
-          <>
-            <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                <thead>
-                  <tr style={{ background: '#f8f9fa', borderBottom: '1px solid #eee' }}>
-                    {['Source', 'Ingest endpoint', 'Schedule', 'Last run', 'Events', 'Active', '', ''].map((h, i) => (
-                      <th key={i} style={{ padding: '0.75rem 1rem', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#888', textTransform: 'uppercase', letterSpacing: 0.5 }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {sources.map(s => {
-                    const run = latestRunBySource[s.id];
-                    const isRunning = run?.status === 'running';
-                    const isFixAgent = s.slug === 'fixed-events';
-                    const isEmail = s.source_type === 'email';
-
-                    return (
-                      <tr key={s.id} style={{ borderBottom: '1px solid #f0f0f0', background: isFixAgent ? '#fffdf7' : isEmail ? '#f0f4ff' : undefined }}>
-                        <td style={{ padding: '0.875rem 1rem', fontWeight: 600 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            {isFixAgent && <Wrench size={13} color="#c05e00"/>}
-                            {isEmail && <Mail size={13} color="#4a6cf7"/>}
-                            {s.name}
-                            {isFixAgent && (
-                              <span style={{ fontSize: 9, fontWeight: 700, padding: '1px 6px', borderRadius: 10, background: '#fff3e0', color: '#c05e00', letterSpacing: 0.5, textTransform: 'uppercase' }}>
-                                Correction Agent
-                              </span>
-                            )}
-                            {isEmail && (
-                              <span style={{ fontSize: 9, fontWeight: 700, padding: '1px 6px', borderRadius: 10, background: '#e8eeff', color: '#4a6cf7', letterSpacing: 0.5, textTransform: 'uppercase' }}>
-                                Email
-                              </span>
-                            )}
-                          </div>
-                        </td>
-
-                        {/* Ingest endpoint or inbox address */}
-                        <td style={{ padding: '0.875rem 1rem' }}>
-                          {isEmail ? (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                              <Mail size={11} color="#4a6cf7"/>
-                              <span style={{ fontSize: 12, color: '#4a6cf7', fontFamily: 'monospace' }}>
-                                {process.env.NEXT_PUBLIC_SMTP_USER || 'eve@communityhub.cloud'}
-                              </span>
-                            </div>
-                          ) : (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                              <code style={{ fontSize: 11, color: '#666', background: '#f5f5f5', padding: '2px 6px', borderRadius: 4, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>
-                                /api/ingest/{s.slug}
-                              </code>
-                              <button onClick={() => copyEndpoint(s.slug)}
-                                title="Copy full URL"
-                                style={{ background: 'none', border: 'none', cursor: 'pointer', color: copiedSlug === s.slug ? '#3a8c3f' : '#aaa', padding: 0, flexShrink: 0 }}>
-                                {copiedSlug === s.slug ? <Check size={14}/> : <Copy size={14}/>}
-                              </button>
-                            </div>
-                          )}
-                        </td>
-
-                        {/* Schedule — inline editable */}
-                        <td style={{ padding: '0.875rem 1rem' }}>
-                          {editingSchedule === s.id ? (
-                            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                              <select
-                                defaultValue={s.schedule_cron}
-                                onChange={e => saveSchedule(s.id, e.target.value)}
-                                style={{ fontSize: 12, padding: '2px 6px', border: '1.5px solid #3a8c3f', borderRadius: 4, outline: 'none' }}
-                                autoFocus
-                                onBlur={() => setEditingSchedule(null)}>
-                                {SCHEDULE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                              </select>
-                            </div>
-                          ) : (
-                            <button onClick={() => setEditingSchedule(s.id)}
-                              style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5, color: '#555', fontSize: 12, padding: 0 }}>
-                              {SCHEDULE_OPTIONS.find(o => o.value === s.schedule_cron)?.label || s.schedule_cron}
-                              <Pencil size={10} color="#bbb"/>
-                            </button>
-                          )}
-                        </td>
-
-                        <td style={{ padding: '0.875rem 1rem', fontSize: 12 }}>
-                          {isRunning ? (
-                            <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: '#3a8c3f', fontWeight: 600 }}>
-                              <Loader size={11} style={{ animation: 'spin 1s linear infinite' }}/> Running…
-                            </span>
-                          ) : run ? (
-                            <span style={{ color: '#888' }}>{new Date(run.started_at).toLocaleDateString()}</span>
-                          ) : <span style={{ color: '#ddd' }}>Never</span>}
-                        </td>
-
-                        <td style={{ padding: '0.875rem 1rem', fontSize: 12 }}>
-                          {isFixAgent ? (
-                            s.fix_stats ? (
-                              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                                <span title="Currently awaiting correction" style={{ display: 'flex', alignItems: 'center', gap: 3, color: '#c05e00', fontWeight: 600 }}>
-                                  <Wrench size={11}/> {s.fix_stats.pending_fix} pending
-                                </span>
-                                <span title="Total ever sent for correction" style={{ color: '#888' }}>
-                                  {s.fix_stats.total_sent_for_fix} sent
-                                </span>
-                                <span title="Fixed events approved" style={{ display: 'flex', alignItems: 'center', gap: 3, color: '#3a8c3f' }}>
-                                  <CheckCircle size={11}/> {s.fix_stats.fixed_approved} approved
-                                </span>
-                              </div>
-                            ) : <span style={{ color: '#ddd' }}>—</span>
-                          ) : run?.status === 'completed' ? (
-                            <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                              <CheckCircle size={12} color="#3a8c3f"/>
-                              <span style={{ color: '#3a8c3f' }}>{run.events_extracted} new</span>
-                            </span>
-                          ) : run?.status === 'failed' ? (
-                            <span style={{ color: '#c0392b', display: 'flex', alignItems: 'center', gap: 4 }}>
-                              <XCircle size={12}/> Failed
-                            </span>
-                          ) : isRunning ? (
-                            <span style={{ color: '#3a8c3f' }}>{run?.events_extracted || 0} so far</span>
-                          ) : <span style={{ color: '#ddd' }}>—</span>}
-                        </td>
-
-                        <td style={{ padding: '0.875rem 1rem' }}>
-                          <button onClick={() => toggleActive(s)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: s.active ? '#3a8c3f' : '#ccc', padding: 0 }}>
-                            {s.active ? <ToggleRight size={22}/> : <ToggleLeft size={22}/>}
-                          </button>
-                        </td>
-
-                        <td style={{ padding: '0.875rem 1rem' }}>
-                          {isFixAgent ? (
-                            <span style={{ fontSize: 11, color: '#ccc', fontStyle: 'italic' }}>auto-triggered</span>
-                          ) : (
-                            <button onClick={() => triggerRun(s.id)}
-                              disabled={isRunning || triggering === s.id || !s.active}
-                              style={{ background: 'none', border: `1.5px solid ${isRunning ? '#ddd' : '#3a8c3f'}`, borderRadius: 6, padding: '0.3rem 0.65rem', cursor: isRunning ? 'default' : 'pointer', color: isRunning ? '#ccc' : '#3a8c3f', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
-                              {isRunning || triggering === s.id ? <Loader size={11} style={{ animation: 'spin 1s linear infinite' }}/> : <Play size={11}/>}
-                              {isRunning ? 'Running' : 'Run now'}
-                            </button>
-                          )}
-                        </td>
-                        <td style={{ padding: '0.875rem 0.5rem', whiteSpace: 'nowrap' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            {!isEmail && (
-                              <button onClick={() => openPromptDrawer(s)}
-                                title="View / edit system prompt"
-                                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#bbb', padding: 0 }}
-                                onMouseEnter={e => (e.currentTarget.style.color = '#3a8c3f')}
-                                onMouseLeave={e => (e.currentTarget.style.color = '#bbb')}>
-                                <FileText size={15}/>
-                              </button>
-                            )}
-                            <button onClick={() => deleteSource(s)}
-                              title="Delete source"
-                              style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ddd', padding: 0 }}
-                              onMouseEnter={e => (e.currentTarget.style.color = '#c0392b')}
-                              onMouseLeave={e => (e.currentTarget.style.color = '#ddd')}>
-                              <Trash2 size={15}/>
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {sources.length === 0 && (
-                    <tr><td colSpan={7} style={{ padding: '3rem', textAlign: 'center', color: '#aaa', fontSize: 13 }}>
-                      No sources yet — add your first one above
-                    </td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-
-            {/* How to use */}
-            <div style={{ marginTop: '1.25rem', background: '#e8f5e9', border: '1px solid #c8e6c9', borderRadius: 8, padding: '1rem 1.25rem' }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: '#2a6b2e', marginBottom: 6 }}>How to connect your agent</div>
-              <div style={{ fontSize: 12, color: '#3a8c3f', lineHeight: 1.6 }}>
-                Copy the ingest endpoint and paste it into your Claude agent&apos;s system prompt:<br/>
-                <code style={{ background: 'rgba(0,0,0,0.06)', padding: '2px 6px', borderRadius: 3 }}>
-                  &quot;When done, POST your JSON events array to: {APP_URL}/api/ingest/your-source-slug&quot;
-                </code>
-              </div>
-            </div>
-
-            {/* Recent run history */}
-            {runs.filter(r => r.status !== 'running').length > 0 && (
-              <div style={{ marginTop: '1.5rem' }}>
-                <h3 style={{ fontSize: 12, fontWeight: 700, color: '#aaa', marginBottom: '0.75rem', textTransform: 'uppercase', letterSpacing: 0.5 }}>Recent runs</h3>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {runs.filter(r => r.status !== 'running').slice(0, 5).map(r => (
-                    <div key={r.id} style={{ background: 'white', border: '1px solid #eee', borderRadius: 8, padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', gap: 12, fontSize: 12 }}>
-                      {r.status === 'completed' ? <CheckCircle size={14} color="#3a8c3f"/> : <XCircle size={14} color="#c0392b"/>}
-                      <span style={{ fontWeight: 600, width: 160 }}>{r.source_name}</span>
-                      <span style={{ color: '#888' }}>{new Date(r.started_at).toLocaleString()}</span>
-                      <span style={{ color: '#3a8c3f', marginLeft: 'auto' }}>{r.events_extracted} extracted</span>
-                      <span style={{ color: '#aaa' }}>{r.elapsed_sec}s</span>
+          <section className="source-grid" aria-label="Configured sources">
+            {sources.map(source => {
+              const run = runsError ? undefined : latestRunFor(source.id);
+              const health = sourceHealth(source, run);
+              const isEmail = source.source_type === 'email';
+              const isCorrection = source.slug === 'fixed-events';
+              const schedulePreset = SCHEDULE_PRESETS.find(option => option.value === source.schedule_cron);
+              const lastActivity = run?.started_at || source.last_run_started_at || source.last_run_at;
+              const failureDetails = run?.error_log
+                ?? source.last_error
+                ?? source.recent_runs?.[0]?.error_summary;
+              return (
+                <article className="source-card" data-health={health} key={source.id}>
+                  <div className="source-card__header">
+                    <div className="source-card__identity">
+                      <span className="source-card__icon">
+                        {isEmail ? <Mail size={18} /> : isCorrection ? <RefreshCcw size={18} /> : <Database size={18} />}
+                      </span>
+                      <div style={{ minWidth: 0 }}>
+                        <div className="source-card__name">{source.name}</div>
+                        <div className="source-card__slug">{isEmail ? (process.env.NEXT_PUBLIC_SMTP_USER || 'Server-configured inbox') : `/api/ingest/${source.slug}`}</div>
+                      </div>
                     </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </>
+                    <HealthBadge
+                      health={health}
+                      reason={run ? `Live run status: ${run.status}` : source.health_reason}
+                    />
+                  </div>
+
+                  <div className="source-card__metrics">
+                    <div className="source-card__metric">
+                      <div className="source-card__metric-label">All records</div>
+                      <div className="source-card__metric-value tnum">{Number(source.total_events) || 0}</div>
+                    </div>
+                    <div className="source-card__metric">
+                      <div className="source-card__metric-label">Published</div>
+                      <div className="source-card__metric-value tnum">{Number(source.total_approved) || 0}</div>
+                    </div>
+                    <div className="source-card__metric">
+                      <div className="source-card__metric-label">Pending review</div>
+                      <div className="source-card__metric-value tnum">{Number(source.pending_review) || 0}</div>
+                    </div>
+                  </div>
+
+                  {!isEmail && (
+                    <div className="source-card__row">
+                      <span className="source-card__row-label">Ingest endpoint</span>
+                      <button type="button" className="btn-ghost" style={{ minHeight: 32, paddingInline: 10 }} onClick={() => copyEndpoint(source.slug)}>
+                        {copiedSlug === source.slug ? <Check size={13} /> : <Copy size={13} />}
+                        {copiedSlug === source.slug ? 'Copied' : 'Copy URL'}
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="source-card__row">
+                    <span className="source-card__row-label">Cron schedule</span>
+                    {editingSchedule === source.id ? (
+                      <form
+                        onSubmit={event => {
+                          event.preventDefault();
+                          void saveSchedule(source.id, scheduleDraft);
+                        }}
+                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 6 }}
+                      >
+                        <input
+                          className="input tnum"
+                          aria-label={`Five-field cron schedule for ${source.name}`}
+                          aria-describedby="scheduler-contract"
+                          aria-invalid={source.schedule_valid === false}
+                          list="schedule-presets"
+                          value={scheduleDraft}
+                          style={{ width: 160, minHeight: 34, paddingBlock: 5 }}
+                          onChange={event => setScheduleDraft(event.target.value)}
+                          autoComplete="off"
+                          autoFocus
+                        />
+                        <button type="submit" className="btn-primary" style={{ minHeight: 32, paddingInline: 10 }} disabled={scheduleSaving || !scheduleDraft.trim()}>
+                          {scheduleSaving ? <span className="spinner" /> : <Check size={13} />} Save
+                        </button>
+                        <button type="button" className="btn-ghost" style={{ minHeight: 32, paddingInline: 8 }} onClick={() => setEditingSchedule(null)} disabled={scheduleSaving}>Cancel</button>
+                      </form>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn-ghost tnum"
+                        style={{ minHeight: 32, paddingInline: 10 }}
+                        title={schedulePreset?.label || 'Custom five-field cron expression'}
+                        onClick={() => beginScheduleEdit(source)}
+                      >
+                        <Pencil size={12} /> {source.schedule_cron}
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="source-card__row">
+                    <span className="source-card__row-label">Next matching slot</span>
+                    <span title="This is the cron match; the hourly dispatcher may start it later.">
+                      {!source.active
+                        ? 'Paused'
+                        : source.schedule_valid === false
+                          ? 'Unavailable'
+                          : source.next_run_at
+                            ? formatScheduledSlot(source.next_run_at, source.schedule_timezone)
+                            : 'No upcoming slot found'}
+                    </span>
+                  </div>
+
+                  <div className="source-card__row">
+                    <span className="source-card__row-label">Last activity</span>
+                    <span>{run?.status === 'running' ? `Running · ${run.elapsed_sec || 0}s` : lastActivity ? new Date(lastActivity).toLocaleString() : 'Never run'}</span>
+                  </div>
+
+                  {source.schedule_valid === false && (
+                    <div className="alert alert--warning" role="alert" style={{ marginTop: 10 }}>
+                      <AlertTriangle size={15} />
+                      <span><strong>Invalid cron:</strong> {source.schedule_error || 'Enter exactly five supported fields.'}</span>
+                    </div>
+                  )}
+
+                  {Number(source.validation_issues) > 0 && (
+                    <div className="alert alert--warning" style={{ marginTop: 10 }}>
+                      <ShieldCheck size={15} />
+                      <span>{Number(source.validation_issues)} {Number(source.validation_issues) === 1 ? 'record has' : 'records have'} CommunityHub payload issues.</span>
+                    </div>
+                  )}
+
+                  {isCorrection && source.fix_stats && (
+                    <div className="alert alert--info" style={{ marginTop: 10 }}>
+                      <RefreshCcw size={15} />
+                      <span>{source.fix_stats.pending_fix || 0} waiting · {source.fix_stats.fixed_approved || 0} returned records published</span>
+                    </div>
+                  )}
+
+                  {health === 'failed' && Boolean(failureDetails) && (
+                    <details className="payload-preview" style={{ marginTop: 10 }}>
+                      <summary style={{ color: 'var(--red-700)' }}>Latest failure details</summary>
+                      <pre>{formatErrorLog(failureDetails)}</pre>
+                    </details>
+                  )}
+
+                  <div className="source-card__actions">
+                    {run?.status === 'running' ? (
+                      <button type="button" className="btn-danger" onClick={() => stopRun(run)}><Square size={13} /> Stop run</button>
+                    ) : !isCorrection ? (
+                      <button type="button" className="btn-primary" onClick={() => triggerRun(source)} disabled={!source.active || triggering === source.id}>
+                        {triggering === source.id ? <><span className="spinner" /> Requesting…</> : <><Play size={13} /> Run now</>}
+                      </button>
+                    ) : null}
+                    <button type="button" className="btn-secondary" onClick={() => toggleActive(source)} aria-pressed={Boolean(source.active)}>
+                      {source.active ? <PauseCircle size={14} /> : <CheckCircle2 size={14} />}
+                      {source.active ? 'Pause' : 'Enable'}
+                    </button>
+                    {!isEmail && <button type="button" className="icon-btn" aria-label={`Edit extraction instructions for ${source.name}`} title="Extraction instructions" onClick={() => openPrompt(source)}><FileText size={15} /></button>}
+                    <button type="button" className="icon-btn" aria-label={`Delete ${source.name}`} title="Delete source" onClick={() => deleteSource(source)}><Trash2 size={15} /></button>
+                  </div>
+                </article>
+              );
+            })}
+          </section>
         )}
+
+        <section style={{ marginTop: 28 }}>
+          <div className="card__header">
+            <div>
+              <h2 className="card__title">Recent run history</h2>
+              <p className="card__subtitle">Completed, stopped, and failed work with counts and diagnostic output.</p>
+            </div>
+          </div>
+          {completedRuns.length === 0 ? (
+            <div className="empty-state" style={{ padding: 32 }}><p>No completed runs have been reported.</p></div>
+          ) : (
+            <div className="run-list">
+              {completedRuns.slice(0, 12).map(run => (
+                <article className="run-row" key={run.id}>
+                  <div className="run-row__summary">
+                    {run.status === 'completed'
+                      ? <CheckCircle2 size={17} color="var(--green-600)" aria-label="Completed" />
+                      : run.status === 'failed'
+                        ? <XCircle size={17} color="var(--red-600)" aria-label="Failed" />
+                        : <PauseCircle size={17} color="var(--amber-600)" aria-label={run.status} />}
+                    <span className="run-row__name">{run.source_name}</span>
+                    <span className="run-row__time">{new Date(run.started_at).toLocaleString()}</span>
+                    <span className="badge badge-gray tnum">{Number(run.events_extracted) || 0} extracted</span>
+                    <span className="run-row__meta tnum">{Number(run.elapsed_sec) || 0}s</span>
+                  </div>
+                  {Boolean(run.error_log) && (
+                    <details>
+                      <summary>View diagnostic details</summary>
+                      <pre>{formatErrorLog(run.error_log)}</pre>
+                    </details>
+                  )}
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
       </main>
 
-      {/* System prompt drawer */}
-      {promptSource && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'stretch', justifyContent: 'flex-end', zIndex: 200 }}
-          onClick={e => { if (e.target === e.currentTarget) setPromptSource(null); }}>
-          <div style={{ width: '100%', maxWidth: 700, background: 'white', display: 'flex', flexDirection: 'column', boxShadow: '-4px 0 32px rgba(0,0,0,0.18)', overflow: 'hidden' }}>
-
-            {/* Header */}
-            <div style={{ padding: '1.25rem 1.5rem', borderBottom: '1px solid #eee', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+      {addOpen && (
+        <div className="dialog-backdrop" role="presentation" onMouseDown={event => {
+          if (event.target === event.currentTarget) setAddOpen(false);
+        }}>
+          <section className="dialog" role="dialog" aria-modal="true" aria-labelledby="add-source-title">
+            <div className="dialog__header">
               <div>
-                <div style={{ fontSize: 16, fontWeight: 700 }}>{promptSource.name}</div>
-                <div style={{ fontSize: 11, color: '#aaa', fontFamily: 'monospace', marginTop: 2 }}>{promptSource.agent_id}</div>
+                <h2 id="add-source-title">Add an extraction source</h2>
+                <p>The current backend requires a managed agent ID and creates a unique ingest endpoint from the source name.</p>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                {promptVersion > 0 && (
-                  <span style={{ fontSize: 11, color: '#aaa', background: '#f5f5f5', padding: '2px 8px', borderRadius: 10 }}>v{promptVersion}</span>
-                )}
-                <button onClick={() => setPromptSource(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#aaa', padding: 4 }}>
-                  <X size={18}/>
-                </button>
+              <button type="button" className="icon-btn" aria-label="Close add source dialog" onClick={() => setAddOpen(false)}><X size={16} /></button>
+            </div>
+            <div className="dialog__body">
+              {addError && <div className="alert alert--error" role="alert"><XCircle size={16} /> {addError}</div>}
+              <div className="field">
+                <label className="field__label" htmlFor="source-name">Organization or source name</label>
+                <input id="source-name" className="input" value={form.name} onChange={event => setForm(current => ({ ...current, name: event.target.value }))} placeholder="Apollo Theatre" autoFocus />
+                {form.name && <span className="field__hint">Endpoint preview: /api/ingest/{form.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')}</span>}
+              </div>
+              <div className="field">
+                <label className="field__label" htmlFor="source-agent-id">Managed agent ID</label>
+                <input id="source-agent-id" className="input" value={form.agent_id} onChange={event => setForm(current => ({ ...current, agent_id: event.target.value }))} placeholder="agt_…" />
+                <span className="field__hint">Required by the currently configured extraction provider.</span>
+              </div>
+              <div className="field">
+                <label className="field__label" htmlFor="source-schedule">Five-field cron schedule</label>
+                <input
+                  id="source-schedule"
+                  className="input tnum"
+                  list="schedule-presets"
+                  aria-describedby="source-schedule-hint scheduler-contract"
+                  value={form.schedule_cron}
+                  onChange={event => setForm(current => ({ ...current, schedule_cron: event.target.value }))}
+                  placeholder="minute hour day-of-month month day-of-week"
+                  autoComplete="off"
+                />
+                <span className="field__hint" id="source-schedule-hint">Standard five-field cron in America/New_York. Presets are suggestions; custom expressions are accepted and validated by the server.</span>
               </div>
             </div>
-
-            {/* Body */}
-            <div style={{ flex: 1, padding: '1.25rem 1.5rem', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-              {promptError && (
-                <div style={{ background: '#fdecea', color: '#c0392b', padding: '0.6rem 0.875rem', borderRadius: 6, fontSize: 13, marginBottom: '1rem', flexShrink: 0 }}>
-                  {promptError}
-                </div>
-              )}
-
-              {promptLoading ? (
-                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#aaa', gap: 8, fontSize: 13 }}>
-                  <Loader size={16} style={{ animation: 'spin 1s linear infinite' }}/> Loading system prompt…
-                </div>
-              ) : (
-                <>
-                  <label style={{ ...labelStyle, marginBottom: 8 }}>System prompt</label>
-                  <textarea
-                    value={promptText}
-                    onChange={e => setPromptText(e.target.value)}
-                    spellCheck={false}
-                    style={{
-                      flex: 1,
-                      resize: 'none',
-                      border: '1.5px solid #ddd',
-                      borderRadius: 8,
-                      padding: '0.75rem',
-                      fontSize: 12,
-                      fontFamily: 'monospace',
-                      lineHeight: 1.6,
-                      outline: 'none',
-                      color: '#333',
-                      overflowY: 'auto',
-                    }}
-                  />
-                  <div style={{ fontSize: 11, color: '#bbb', marginTop: 6, textAlign: 'right', flexShrink: 0 }}>
-                    {promptText.length.toLocaleString()} chars
-                  </div>
-                </>
-              )}
-            </div>
-
-            {/* Footer */}
-            {!promptLoading && (
-              <div style={{ padding: '1rem 1.5rem', borderTop: '1px solid #eee', display: 'flex', justifyContent: 'flex-end', gap: 10, flexShrink: 0 }}>
-                <button onClick={() => setPromptSource(null)} className="btn-ghost" style={{ fontSize: 14 }}>Close</button>
-                <button onClick={savePrompt} disabled={promptSaving} className="btn-primary" style={{ fontSize: 14, minWidth: 110 }}>
-                  {promptSaving ? <><Loader size={13} style={{ animation: 'spin 1s linear infinite', marginRight: 6 }}/>Saving…</> : 'Save changes'}
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Add source modal */}
-      {showAdd && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-          <div style={{ background: 'white', borderRadius: 14, padding: '2rem', width: '100%', maxWidth: 460, boxShadow: '0 8px 40px rgba(0,0,0,0.2)' }}>
-            <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 4 }}>Add source</h2>
-            <p style={{ fontSize: 13, color: '#888', marginBottom: '1.5rem' }}>
-              An ingest endpoint will be generated automatically from the name.
-            </p>
-
-            {addError && (
-              <div style={{ background: '#fdecea', color: '#c0392b', padding: '0.6rem 0.875rem', borderRadius: 6, fontSize: 13, marginBottom: '1rem' }}>
-                {addError}
-              </div>
-            )}
-
-            <label style={labelStyle}>Organization name</label>
-            <input
-              value={form.name}
-              onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-              placeholder="e.g. Apollo Theatre"
-              style={{ ...inputStyle, marginBottom: '0.5rem' }}
-              autoFocus
-            />
-            {/* Preview the slug */}
-            {form.name && (
-              <div style={{ fontSize: 11, color: '#888', marginBottom: '1rem', fontFamily: 'monospace' }}>
-                Endpoint: /api/ingest/{form.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')}
-              </div>
-            )}
-
-            <label style={labelStyle}>Agent ID</label>
-            <input
-              value={form.agent_id}
-              onChange={e => setForm(f => ({ ...f, agent_id: e.target.value }))}
-              placeholder="agt_… from Anthropic console"
-              style={{ ...inputStyle, fontFamily: 'monospace', fontSize: 12, marginBottom: '1rem' }}
-            />
-
-            <label style={labelStyle}>Fetch frequency</label>
-            <select
-              value={form.schedule_cron}
-              onChange={e => setForm(f => ({ ...f, schedule_cron: e.target.value }))}
-              style={{ ...inputStyle, marginBottom: '1.5rem', appearance: 'auto' }}>
-              {SCHEDULE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-
-            <div style={{ background: '#e8f5e9', borderRadius: 8, padding: '0.75rem 0.875rem', fontSize: 13, color: '#2a6b2e', marginBottom: '1.5rem' }}>
-              ✓ Ingest endpoint generated instantly — paste it into your agent&apos;s system prompt
-            </div>
-
-            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-              <button onClick={() => { setShowAdd(false); setAddError(''); }} className="btn-ghost" style={{ fontSize: 14 }}>Cancel</button>
-              <button onClick={addSource} disabled={!form.name.trim() || !form.agent_id.trim() || adding} className="btn-primary" style={{ fontSize: 14, minWidth: 100 }}>
-                {adding ? 'Adding…' : 'Add source'}
+            <div className="dialog__actions">
+              <button type="button" className="btn-secondary" onClick={() => { setAddOpen(false); setAddError(''); }}>Cancel</button>
+              <button type="button" className="btn-primary" onClick={addSource} disabled={!form.name.trim() || !form.agent_id.trim() || !form.schedule_cron.trim() || adding}>
+                {adding ? <><span className="spinner" /> Adding…</> : <><Plus size={14} /> Add source</>}
               </button>
             </div>
-          </div>
+          </section>
         </div>
       )}
 
-      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+      {promptSource && (
+        <div className="drawer-backdrop" role="presentation" onMouseDown={event => {
+          if (event.target === event.currentTarget) setPromptSource(null);
+        }}>
+          <section className="drawer" role="dialog" aria-modal="true" aria-labelledby="prompt-drawer-title">
+            <div className="drawer__header">
+              <div>
+                <h2 id="prompt-drawer-title" style={{ margin: 0, fontSize: 18 }}>{promptSource.name}</h2>
+                <div className="field__hint">Extraction instructions · version {promptVersion || 'unversioned'}</div>
+              </div>
+              <button type="button" className="icon-btn" aria-label="Close extraction instructions" onClick={() => setPromptSource(null)}><X size={17} /></button>
+            </div>
+            <div className="drawer__body">
+              <div className="alert alert--info" style={{ marginBottom: 14 }}>
+                <ShieldCheck size={16} />
+                <span>Reviewer corrections can be appended as source-specific context by the backend. Editing these instructions changes a prompt version; it does not retrain or make the model self-modifying.</span>
+              </div>
+              {promptError && <div className="alert alert--error" role="alert" style={{ marginBottom: 14 }}><XCircle size={16} /> {promptError}</div>}
+              {promptLoading ? (
+                <div className="loading-state" role="status"><span className="spinner" /> Loading extraction instructions…</div>
+              ) : (
+                <div className="field" style={{ flex: 1 }}>
+                  <label className="field__label" htmlFor="prompt-editor">System instructions</label>
+                  <textarea id="prompt-editor" className="input drawer__editor" spellCheck={false} value={promptText} onChange={event => setPromptText(event.target.value)} />
+                  <span className="field__hint tnum">{promptText.length.toLocaleString()} characters</span>
+                </div>
+              )}
+            </div>
+            {!promptLoading && (
+              <div className="drawer__footer">
+                <button type="button" className="btn-secondary" onClick={() => setPromptSource(null)}>Close</button>
+                <button type="button" className="btn-primary" onClick={savePrompt} disabled={promptSaving}>{promptSaving ? <><span className="spinner" /> Saving…</> : 'Save version'}</button>
+              </div>
+            )}
+          </section>
+        </div>
+      )}
+    </AppShell>
+  );
+}
+
+function HealthCard({ label, value, icon }: { label: string; value: number | string; icon: React.ReactNode }) {
+  return (
+    <div className="ops-health__card">
+      <div className="ops-health__label">{label}</div>
+      <div className="ops-health__value tnum">{icon}{value}</div>
     </div>
   );
 }
 
-const labelStyle: React.CSSProperties = { fontSize: 11, fontWeight: 700, color: '#666', textTransform: 'uppercase', letterSpacing: 0.5, display: 'block', marginBottom: 4 };
-const inputStyle: React.CSSProperties = { width: '100%', padding: '0.65rem 0.875rem', border: '1.5px solid #ddd', borderRadius: 8, fontSize: 13, outline: 'none', boxSizing: 'border-box', fontFamily: 'inherit' };
+function HealthBadge({ health, reason }: { health: Health; reason?: string }) {
+  const labels: Record<Health, string> = {
+    running: 'Running',
+    failed: 'Last run failed',
+    completed: 'Last run completed',
+    stopped: 'Last run stopped',
+    invalid: 'Invalid schedule',
+    paused: 'Paused',
+    never: 'Never run',
+    monitoring: 'Status unknown',
+  };
+  const tones: Record<Health, string> = {
+    running: 'badge-green',
+    failed: 'badge-red',
+    completed: 'badge-green',
+    stopped: 'badge-amber',
+    invalid: 'badge-red',
+    paused: 'badge-gray',
+    never: 'badge-blue',
+    monitoring: 'badge-amber',
+  };
+  return <span className={`badge ${tones[health]}`} title={reason}>{labels[health]}</span>;
+}
+
+function formatErrorLog(value: unknown) {
+  if (typeof value === 'string') {
+    try { return JSON.stringify(JSON.parse(value), null, 2); } catch { return value; }
+  }
+  return JSON.stringify(value, null, 2);
+}
+
+function formatScheduledSlot(value: string, timeZone = 'America/New_York') {
+  try {
+    return `${new Intl.DateTimeFormat('en-US', {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+      timeZone,
+    }).format(new Date(value))} · ${timeZone}`;
+  } catch {
+    return `${new Date(value).toLocaleString()} · ${timeZone}`;
+  }
+}
