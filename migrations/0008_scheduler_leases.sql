@@ -57,7 +57,10 @@ SET @ddl = IF(
     WHERE table_schema = DATABASE() AND table_name = 'agent_runs' AND column_name = 'running_source_id'
   ),
   'SELECT 1',
-  'ALTER TABLE agent_runs ADD COLUMN running_source_id INT UNSIGNED GENERATED ALWAYS AS (CASE WHEN status = ''running'' THEN source_id ELSE NULL END) STORED'
+  -- source_id has an ON DELETE CASCADE foreign key. MySQL forbids that
+  -- referential action when the column feeds a STORED generated column, while
+  -- an indexed VIRTUAL generated column provides the same nullable lease key.
+  'ALTER TABLE agent_runs ADD COLUMN running_source_id INT UNSIGNED GENERATED ALWAYS AS (CASE WHEN status = ''running'' THEN source_id ELSE NULL END) VIRTUAL'
 );
 PREPARE scheduler_ddl FROM @ddl;
 EXECUTE scheduler_ddl;
