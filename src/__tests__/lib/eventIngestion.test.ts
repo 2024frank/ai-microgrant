@@ -68,7 +68,6 @@ describe('persistExtractedEvents', () => {
   it('keeps fixable malformed output reviewable with field-level errors', async () => {
     const result = await persistExtractedEvents([{
       ...VALID_EVENT,
-      sponsors: [],
       postTypeId: [999],
       sessions: [{ startTime: 'tomorrow', endTime: 1_800_003_600 }],
     }], SOURCE, 12);
@@ -77,7 +76,6 @@ describe('persistExtractedEvents', () => {
     expect(result.invalid).toBe(1);
     expect(result.errors[0]).toEqual(expect.objectContaining({ inserted: true }));
     expect(result.errors[0].issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({ path: 'sponsors' }),
       expect.objectContaining({ path: 'postTypeId[0]' }),
       expect.objectContaining({ path: 'sessions[0].startTime' }),
     ]));
@@ -88,7 +86,22 @@ describe('persistExtractedEvents', () => {
     expect(insert).toBeDefined();
     const storedIssues = JSON.parse(insert![1].at(-1));
     expect(storedIssues).toEqual(expect.arrayContaining([
-      expect.objectContaining({ path: 'sponsors' }),
+      expect.objectContaining({ path: 'postTypeId[0]' }),
+    ]));
+  });
+
+  it('defaults omitted sponsors to the source organizer instead of failing validation', async () => {
+    const { sponsors: _omitted, ...eventWithoutSponsors } = VALID_EVENT;
+    const result = await persistExtractedEvents([eventWithoutSponsors], SOURCE, 12);
+
+    expect(result.inserted).toHaveLength(1);
+    expect(result.invalid).toBe(0);
+
+    const insert = db.mockConn.query.mock.calls.find(
+      ([sql]: [string]) => sql.includes('INSERT INTO raw_events'),
+    );
+    expect(insert?.[1]).toEqual(expect.arrayContaining([
+      JSON.stringify(['Oberlin Community Arts']),
     ]));
   });
 

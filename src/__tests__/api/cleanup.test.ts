@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { POST } from '@/app/api/cleanup/route';
+import { GET, POST } from '@/app/api/cleanup/route';
 
 const db = require('@/lib/db');
 
@@ -65,5 +65,31 @@ describe('POST /api/cleanup', () => {
       ([sql]: [string]) => sql.includes('DELETE ar FROM agent_runs'),
     );
     expect(deleteRuns?.[0]).toContain('NOT EXISTS');
+  });
+
+  it('deletes pending drafts whose approval deadline (last session end) has passed', async () => {
+    db.default.query.mockResolvedValue([{ affectedRows: 0 }]);
+
+    await POST(request('test-cron-secret'));
+
+    const deleteEvents = db.default.query.mock.calls.find(
+      ([sql]: [string]) => sql.includes('DELETE re FROM raw_events'),
+    );
+    // Expired drafts go at the deadline; only sessionless drafts keep the
+    // 90-day grace period.
+    expect(deleteEvents?.[0]).toMatch(/MAX\(CAST\(jt\.endTime AS UNSIGNED\)\)/);
+    expect(deleteEvents?.[0]).toMatch(/JSON_LENGTH\(re\.sessions\) = 0\)\s*\n?\s*AND re\.created_at < DATE_SUB\(NOW\(\), INTERVAL 90 DAY\)/);
+  });
+
+  it('accepts Vercel Cron GET requests with a bearer secret and rejects others', async () => {
+    db.default.query.mockResolvedValue([{ affectedRows: 0 }]);
+
+    const denied = await GET(new NextRequest('http://localhost/api/cleanup'));
+    expect(denied.status).toBe(401);
+
+    const allowed = await GET(new NextRequest('http://localhost/api/cleanup', {
+      headers: { authorization: 'Bearer test-cron-secret' },
+    }));
+    expect(allowed.status).toBe(200);
   });
 });

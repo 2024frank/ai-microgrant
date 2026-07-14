@@ -1,11 +1,18 @@
 import type { Metadata, Viewport } from 'next';
-import { Inter } from 'next/font/google';
+import { Comfortaa, Lato } from 'next/font/google';
 import './globals.css';
 
-const inter = Inter({
+const lato = Lato({
+  subsets: ['latin'],
+  weight: ['400', '700', '900'],
+  display: 'swap',
+  variable: '--font-lato',
+});
+
+const comfortaa = Comfortaa({
   subsets: ['latin'],
   display: 'swap',
-  variable: '--font-inter',
+  variable: '--font-comfortaa',
 });
 
 export const metadata: Metadata = {
@@ -22,14 +29,14 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: '#174c35',
+  themeColor: '#212934',
   width: 'device-width',
   initialScale: 1,
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={inter.variable}>
+    <html lang="en" className={`${lato.variable} ${comfortaa.variable}`}>
       <body>{children}</body>
     </html>
   );

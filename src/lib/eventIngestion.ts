@@ -119,7 +119,7 @@ function buildCandidate(
   submitterEmail: string,
 ): { payload: CommunityHubPayload; issues: CommunityHubPayloadIssue[] } {
   const rawImage = readString(raw.image_cdn_url);
-  const result = validateCommunityHubPayload({
+  const candidate = {
     ...raw,
     email: submitterEmail,
     calendarSourceName:
@@ -128,7 +128,19 @@ function buildCandidate(
       || source.name,
     // A data URI is retained as image_data below; it is not an outbound URL.
     image_cdn_url: rawImage.startsWith('data:') ? undefined : rawImage || undefined,
-  });
+  };
+  let result = validateCommunityHubPayload(candidate);
+  // Venue calendars rarely name an organizer, so extractors legitimately omit
+  // sponsors; the source itself is the organizer of record.
+  if (
+    !result.success
+    && result.errors.some(current => current.path === 'sponsors' && current.code === 'required')
+  ) {
+    result = validateCommunityHubPayload({
+      ...candidate,
+      sponsors: [source.calendar_source_name || source.name],
+    });
+  }
 
   return result.success
     ? { payload: result.data, issues: [] }

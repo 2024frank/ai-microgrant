@@ -74,7 +74,7 @@ export async function GET(req: NextRequest) {
     description: a.description,
     sessions: [{ startTime: a.startTime, endTime: a.endTime }],
     extendedDescription,
-    sponsors: ['Cleveland Cinemas'],
+    sponsors: ['Apollo Theatre'],
     postTypeId: [5],
     locationType: 'ne',
     buttons: [{ title: 'Buy Tickets', link: ticketsUrl }],

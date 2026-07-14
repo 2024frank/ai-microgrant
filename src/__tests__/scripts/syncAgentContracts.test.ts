@@ -47,6 +47,7 @@ Return only current public events.`);
     process.env.INGEST_SECRET = 'configured-secret-value';
     expect(() => assertSafePrompt(`
 eventType: only "ot"
+never use em dashes
 sponsors: non-empty string array
 postTypeId: non-empty number array
 8 Music Performance

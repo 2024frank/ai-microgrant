@@ -4,8 +4,9 @@ import pool from '@/lib/db';
 /**
  * POST /api/cleanup
  * Called by the deployment scheduler. Reviewer feedback is durable training
- * evidence, so reviewed events are never deleted here. Cleanup only removes
- * abandoned pending drafts and large poster blobs that are no longer needed.
+ * evidence, so reviewed events are never deleted here. Cleanup removes drafts
+ * that missed their approval deadline (every session already ended), drafts
+ * abandoned with no sessions, and large poster blobs that are no longer needed.
  */
 export async function POST(req: NextRequest) {
   const secret = req.headers.get('x-cron-secret');
@@ -13,7 +14,19 @@ export async function POST(req: NextRequest) {
   if (!expectedSecret || secret !== expectedSecret) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
+  return runCleanup();
+}
 
+// Vercel Cron invokes GET with Authorization: Bearer <CRON_SECRET>.
+export async function GET(req: NextRequest) {
+  const expectedSecret = process.env.CRON_SECRET?.trim();
+  if (!expectedSecret || req.headers.get('authorization') !== `Bearer ${expectedSecret}`) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  return runCleanup();
+}
+
+async function runCleanup() {
   const nowUnix = Math.floor(Date.now() / 1000);
 
   // Snapshot only abandoned, unreviewed drafts before deleting them. Approved,
@@ -32,7 +45,6 @@ export async function POST(req: NextRequest) {
      JOIN sources s ON s.id = re.source_id
      LEFT JOIN field_edit_log fel ON fel.raw_event_id = re.id
      WHERE re.status = 'pending'
-       AND re.created_at < DATE_SUB(NOW(), INTERVAL 90 DAY)
        AND NOT EXISTS (SELECT 1 FROM field_edit_log x WHERE x.raw_event_id = re.id)
        AND NOT EXISTS (SELECT 1 FROM rejection_log x WHERE x.raw_event_id = re.id)
        AND NOT EXISTS (SELECT 1 FROM review_sessions x WHERE x.raw_event_id = re.id)
@@ -43,18 +55,20 @@ export async function POST(req: NextRequest) {
          SELECT MAX(CAST(jt.endTime AS UNSIGNED))
          FROM JSON_TABLE(re.sessions, '$[*]' COLUMNS (endTime VARCHAR(20) PATH '$.endTime')) jt
        ) < ?)
-        OR re.sessions IS NULL
-        OR JSON_LENGTH(re.sessions) = 0
+        OR ((re.sessions IS NULL OR JSON_LENGTH(re.sessions) = 0)
+            AND re.created_at < DATE_SUB(NOW(), INTERVAL 90 DAY))
        )
      GROUP BY re.source_id, s.name
      HAVING COUNT(re.id) > 0`,
     [nowUnix]
   );
 
+  // A pending draft whose final session has ended missed its approval
+  // deadline and can never publish; delete it as soon as it expires. Drafts
+  // with no sessions have no deadline, so those keep the 90-day grace period.
   const [eventsResult] = await pool.query(
     `DELETE re FROM raw_events re
      WHERE re.status = 'pending'
-       AND re.created_at < DATE_SUB(NOW(), INTERVAL 90 DAY)
        AND NOT EXISTS (SELECT 1 FROM field_edit_log x WHERE x.raw_event_id = re.id)
        AND NOT EXISTS (SELECT 1 FROM rejection_log x WHERE x.raw_event_id = re.id)
        AND NOT EXISTS (SELECT 1 FROM review_sessions x WHERE x.raw_event_id = re.id)
@@ -65,8 +79,8 @@ export async function POST(req: NextRequest) {
            SELECT MAX(CAST(jt.endTime AS UNSIGNED))
            FROM JSON_TABLE(re.sessions, '$[*]' COLUMNS (endTime VARCHAR(20) PATH '$.endTime')) jt
          ) < ?)
-         OR re.sessions IS NULL
-         OR JSON_LENGTH(re.sessions) = 0
+         OR ((re.sessions IS NULL OR JSON_LENGTH(re.sessions) = 0)
+             AND re.created_at < DATE_SUB(NOW(), INTERVAL 90 DAY))
        )`,
     [nowUnix]
   ) as any;

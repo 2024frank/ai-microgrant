@@ -221,6 +221,20 @@ describe('CommunityHub payload contract', () => {
     expect(errorPaths({ ...BASE, description: 'Too short' })).toContain('description');
   });
 
+  it('replaces em and en dashes with plain hyphens in every text field', () => {
+    const payload = buildCommunityHubPayload({
+      ...BASE,
+      title: 'Apollo — Coming Soon',
+      description: 'Tight harmonies — roots music at the barn, Jun 26–Jul 8.',
+      extendedDescription: 'Doors at 7 PM ― music at 7:30.',
+      sponsors: ['Riverdog Music — Henrietta'],
+    });
+    expect(payload.title).toBe('Apollo - Coming Soon');
+    expect(payload.description).toBe('Tight harmonies - roots music at the barn, Jun 26-Jul 8.');
+    expect(payload.extendedDescription).toBe('Doors at 7 PM - music at 7:30.');
+    expect(payload.sponsors).toEqual(['Riverdog Music - Henrietta']);
+  });
+
   it('maps legacy screen targeting conservatively', () => {
     const withScreens = validateCommunityHubPayload({
       ...BASE,

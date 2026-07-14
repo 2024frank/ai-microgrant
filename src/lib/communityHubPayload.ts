@@ -153,7 +153,8 @@ function addIssue(
 }
 
 function normalizeWhitespace(value: string): string {
-  return value.trim().replace(/\s+/g, ' ');
+  // House style: plain hyphens only — em/en dashes read as machine-generated.
+  return value.replace(/[–—―]/g, '-').trim().replace(/\s+/g, ' ');
 }
 
 function trimAtBoundary(value: string, maxLength: number, preferSentence = false): string {
