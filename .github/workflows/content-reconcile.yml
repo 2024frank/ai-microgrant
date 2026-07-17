@@ -1,0 +1,47 @@
+name: CommunityHub Content Reconcile
+
+# Verifies every submitted ("Awaiting CommunityHub") event against the
+# complete approved-and-pending CommunityHub inventory by content. Dry run
+# reports; apply deletes ONLY rows provably absent from the verified
+# inventory, archiving full recoverable evidence first (the application's
+# long-standing content reconciler).
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'Delete proven-absent submitted rows (false = dry run)'
+        required: false
+        default: 'false'
+
+jobs:
+  reconcile:
+    name: Content reconcile
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Invoke content reconcile
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          set -Eeuo pipefail
+          : "${APP_URL:?APP_URL secret is not configured}"
+          : "${CRON_SECRET:?CRON_SECRET secret is not configured}"
+          APP_URL="${APP_URL%/}"
+          if [ "$APPLY" = "true" ]; then
+            BODY='{"apply":true,"confirmation":"DELETE_PROVEN_ABSENT"}'
+          else
+            BODY='{"apply":false}'
+          fi
+          RESPONSE="$RUNNER_TEMP/reconcile-content.json"
+          curl --silent --show-error --fail-with-body --retry 2 --retry-delay 2 \
+            --connect-timeout 10 --max-time 280 -X POST \
+            "$APP_URL/api/communityhub/content-reconcile" \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            -H "Content-Type: application/json" \
+            --data "$BODY" \
+            | tee "$RESPONSE"
+          jq -e 'type == "object" and .ok == true and ((.candidate_rows | type) == "number")' "$RESPONSE" >/dev/null
+          echo "Content reconcile validated."

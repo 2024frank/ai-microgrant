@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { forbidden, getAuthUser, unauthorized } from '@/lib/auth';
+import { isCronAuthorized } from '@/lib/cronAuth';
 import { reconcileCommunityHubContent } from '@/lib/communityHubContentReconciliation';
 
 export const maxDuration = 300;
@@ -8,9 +9,14 @@ const APPLY_CONFIRMATION = 'DELETE_PROVEN_ABSENT';
 const NO_STORE = { 'Cache-Control': 'private, no-store' };
 
 export async function POST(req: NextRequest) {
-  const user = await getAuthUser(req);
-  if (!user) return unauthorized();
-  if (user.role !== 'admin') return forbidden();
+  // Operators run this either as an admin or through the deployment's cron
+  // secret (the operational workflows); apply mode always needs the explicit
+  // confirmation below regardless of the credential used.
+  if (!isCronAuthorized(req)) {
+    const user = await getAuthUser(req);
+    if (!user) return unauthorized();
+    if (user.role !== 'admin') return forbidden();
+  }
 
   let body: unknown;
   try {
