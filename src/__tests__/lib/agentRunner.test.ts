@@ -5,6 +5,7 @@
 
 // ── Mock Anthropic SDK ──────────────────────────────────────────────────────
 const mockSessionsCreate     = jest.fn();
+const mockSessionsDelete     = jest.fn();
 const mockSessionsEventsSend = jest.fn();
 const mockSessionsEventsList = jest.fn();
 
@@ -14,6 +15,7 @@ jest.mock('@anthropic-ai/sdk', () => ({
     beta: {
       sessions: {
         create: mockSessionsCreate,
+        delete: mockSessionsDelete,
         events: {
           send: mockSessionsEventsSend,
           list: mockSessionsEventsList,
@@ -27,7 +29,7 @@ jest.mock('@/lib/rejectionHistory', () => ({
   getRejectionHistory: jest.fn(),
 }));
 
-import { triggerAgentRun }   from '@/lib/agentRunner';
+import { continueAgentRun, monitorAgentRun, triggerAgentRun } from '@/lib/agentRunner';
 import { getRejectionHistory } from '@/lib/rejectionHistory';
 
 const db             = require('@/lib/db');
@@ -55,12 +57,12 @@ function makeSessionEvents(events: object[] = [AGENT_EVENT]) {
     data: [
       {
         type: 'agent.message',
-        created_at: '2026-01-01T00:00:01Z',
+        processed_at: '2026-01-01T00:00:01Z',
         content: [{ type: 'text', text: JSON.stringify(events) }],
       },
       {
         type: 'session.status_idle',
-        created_at: '2026-01-01T00:00:02Z',
+        processed_at: '2026-01-01T00:00:02Z',
         stop_reason: { type: 'end_turn' },
       },
     ],
@@ -72,12 +74,12 @@ function makeSessionText(text: string, sequence = 1) {
     data: [
       {
         type: 'agent.message',
-        created_at: `2026-01-01T00:00:${String(sequence).padStart(2, '0')}Z`,
+        processed_at: `2026-01-01T00:00:${String(sequence).padStart(2, '0')}Z`,
         content: [{ type: 'text', text }],
       },
       {
         type: 'session.status_idle',
-        created_at: `2026-01-01T00:00:${String(sequence + 1).padStart(2, '0')}Z`,
+        processed_at: `2026-01-01T00:00:${String(sequence + 1).padStart(2, '0')}Z`,
         stop_reason: { type: 'end_turn' },
       },
     ],
@@ -89,10 +91,13 @@ beforeEach(() => {
   jest.clearAllMocks();
   process.env.NEXT_PUBLIC_APP_URL = 'http://localhost:3000';
   delete process.env.AGENT_JSON_REPAIR_ATTEMPTS;
+  delete process.env.AGENT_RUN_TIMEOUT_MS;
+  delete process.env.AGENT_SESSION_MAX_MINUTES;
 
   mockGetHistory.mockResolvedValue({ count: 0, prompt_block: '' });
 
   mockSessionsCreate.mockResolvedValue({ id: 'sess_xyz' });
+  mockSessionsDelete.mockResolvedValue({});
   mockSessionsEventsSend.mockResolvedValue({});
   mockSessionsEventsList.mockResolvedValue(makeSessionEvents());
 
@@ -156,6 +161,25 @@ describe('triggerAgentRun — happy path', () => {
       'sess_xyz',
       expect.objectContaining({ events: expect.any(Array) })
     );
+  });
+
+  it('uses processed_at to drain session events beyond the first 100 items', async () => {
+    const buffered = Array.from({ length: 100 }, (_, index) => ({
+      id: `event-${index}`,
+      type: 'agent.tool_result',
+      processed_at: new Date(Date.UTC(2026, 0, 1, 0, 0, 0, index)).toISOString(),
+    }));
+    mockSessionsEventsList
+      .mockResolvedValueOnce({ data: buffered })
+      .mockResolvedValueOnce(makeSessionEvents());
+
+    const result = await triggerAgentRun(1, 99, 'test-key', 'test-env');
+
+    expect(result).toMatchObject({ status: 'completed', inserted: 1 });
+    expect(mockSessionsEventsList.mock.calls[1][1]).toEqual(expect.objectContaining({
+      'created_at[gt]': buffered.at(-1)?.processed_at,
+      order: 'asc',
+    }));
   });
 
   it('sends the exact constrained payload choices and anti-invention rules', async () => {
@@ -255,7 +279,7 @@ describe('triggerAgentRun — multiple events', () => {
     expect(db.mockConn.commit).toHaveBeenCalledTimes(3);
   });
 
-  it('does not report a rejected multi-item correction as duplicate skips', async () => {
+  it('fails a rejected multi-item correction instead of reporting completion', async () => {
     mockSessionsEventsList.mockResolvedValue(makeSessionEvents([
       { ...AGENT_EVENT, title: 'Correction A' },
       { ...AGENT_EVENT, title: 'Correction B' },
@@ -264,21 +288,15 @@ describe('triggerAgentRun — multiple events', () => {
       .mockResolvedValueOnce([[SOURCE]])
       .mockResolvedValueOnce([{ affectedRows: 1 }]);
 
-    const result = await triggerAgentRun(
+    await expect(triggerAgentRun(
       1,
       99,
       'test-key',
       'test-env',
       'Correct event 7',
       { expectedCorrectionEventId: 7 },
-    );
+    )).rejects.toThrow('one contract-valid reviewable event');
 
-    expect(result).toMatchObject({ inserted: 0, skipped: 2, invalid: 2 });
-    const completedUpdate = db.default.query.mock.calls.find(
-      (c: any[]) => typeof c[0] === 'string' && c[0].includes("status='completed'")
-    );
-    expect(completedUpdate?.[1]?.[2]).toBe(0);
-    expect(completedUpdate?.[1]?.[3]).toBe(2);
   });
 });
 
@@ -294,6 +312,20 @@ describe('triggerAgentRun — source validation', () => {
 // ── Agent failures ────────────────────────────────────────────────────────────
 describe('triggerAgentRun — agent failures', () => {
   beforeEach(setupPoolHappyPath);
+
+  it('leaves the run resumable when one serverless monitoring slice ends', async () => {
+    process.env.AGENT_RUN_TIMEOUT_MS = '1';
+    mockSessionsEventsList.mockResolvedValue({
+      data: [{ type: 'agent.thinking', processed_at: '2026-01-01T00:00:01Z' }],
+    });
+
+    const result = await triggerAgentRun(1, 99, 'test-key', 'test-env');
+
+    expect(result).toMatchObject({ status: 'running', pending: true });
+    expect(db.default.query.mock.calls.some(
+      (call: any[]) => typeof call[0] === 'string' && call[0].includes("status='failed'"),
+    )).toBe(false);
+  });
 
   it('fails a no-JSON response when this run has no direct-post evidence', async () => {
     mockSessionsEventsList.mockResolvedValue({
@@ -535,5 +567,156 @@ describe('triggerAgentRun — DB write failure', () => {
     expect(completedUpdate?.[1]?.[3]).toBe(1);
     expect(db.mockConn.rollback).toHaveBeenCalledTimes(1);
     expect(db.mockConn.release).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('continueAgentRun — cross-invocation finalization', () => {
+  const RUN = {
+    ...SOURCE,
+    run_id: 99,
+    run_status: 'running',
+    started_at: new Date(),
+    session_id: 'sess_xyz',
+    correction_event_id: null,
+  };
+
+  function lockConnection(acquired = 1) {
+    return {
+      query: jest.fn()
+        .mockResolvedValueOnce([[{ acquired }]])
+        .mockResolvedValueOnce([[{ released: 1 }]]),
+      release: jest.fn(),
+      destroy: jest.fn(),
+    };
+  }
+
+  beforeEach(() => {
+    db.default.query.mockReset().mockImplementation((sql: unknown) =>
+      typeof sql === 'string' && /SELECT ar\.id AS run_id/i.test(sql)
+        ? Promise.resolve([[RUN]])
+        : typeof sql === 'string' && /SELECT status FROM agent_runs/i.test(sql)
+          ? Promise.resolve([[{ status: 'running' }]])
+          : Promise.resolve([{ affectedRows: 1 }]),
+    );
+    db.default.getConnection.mockReset();
+    db.mockConn.query
+      .mockReset()
+      .mockResolvedValueOnce([[]])
+      .mockResolvedValueOnce([{ insertId: 42 }])
+      .mockResolvedValueOnce([{ affectedRows: 1 }]);
+  });
+
+  it('paginates beyond 100 session events and persists the terminal output', async () => {
+    const lock = lockConnection();
+    db.default.getConnection
+      .mockResolvedValueOnce(lock)
+      .mockResolvedValueOnce(db.mockConn);
+
+    const firstPage = [
+      { type: 'user.message', processed_at: '2026-01-01T00:00:00Z' },
+      ...Array.from({ length: 99 }, (_, index) => ({
+        type: 'agent.tool_result',
+        processed_at: `2026-01-01T00:00:${String(index + 1).padStart(2, '0')}Z`,
+      })),
+    ];
+    mockSessionsEventsList
+      .mockResolvedValueOnce({
+        data: [{
+          type: 'session.status_idle',
+          processed_at: '2026-01-01T00:03:00Z',
+          stop_reason: { type: 'end_turn' },
+        }],
+      })
+      .mockResolvedValueOnce({ data: firstPage, next_page: 'page-2' })
+      .mockResolvedValueOnce({
+        data: [
+          {
+            type: 'agent.message',
+            processed_at: '2026-01-01T00:02:59Z',
+            content: [{ type: 'text', text: JSON.stringify([AGENT_EVENT]) }],
+          },
+          {
+            type: 'session.status_idle',
+            processed_at: '2026-01-01T00:03:00Z',
+            stop_reason: { type: 'end_turn' },
+          },
+        ],
+        next_page: null,
+      });
+
+    const result = await continueAgentRun(99, 'test-key');
+
+    expect(result).toMatchObject({ status: 'completed', pending: false, inserted: 1 });
+    expect(mockSessionsEventsList).toHaveBeenCalledWith(
+      'sess_xyz',
+      expect.objectContaining({ page: 'page-2', order: 'asc' }),
+    );
+    expect(lock.release).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns pending while the Anthropic session is still running', async () => {
+    const lock = lockConnection();
+    db.default.getConnection.mockResolvedValueOnce(lock);
+    mockSessionsEventsList.mockResolvedValueOnce({
+      data: [{ type: 'agent.tool_use', processed_at: new Date().toISOString() }],
+    });
+
+    await expect(continueAgentRun(99, 'test-key')).resolves.toMatchObject({
+      status: 'running',
+      pending: true,
+    });
+    expect(db.mockConn.beginTransaction).not.toHaveBeenCalled();
+  });
+
+  it('does not race another continuation worker when the DB lock is busy', async () => {
+    const lock = lockConnection(0);
+    db.default.getConnection.mockResolvedValueOnce(lock);
+
+    await expect(continueAgentRun(99, 'test-key')).resolves.toMatchObject({
+      status: 'running',
+      pending: true,
+      busy: true,
+    });
+    expect(mockSessionsEventsList).not.toHaveBeenCalled();
+  });
+
+  it('terminates a session that exceeds the absolute runtime bound', async () => {
+    const lock = lockConnection();
+    db.default.getConnection.mockResolvedValueOnce(lock);
+    db.default.query.mockImplementation((sql: unknown) => {
+      if (typeof sql === 'string' && /SELECT ar\.id AS run_id/i.test(sql)) {
+        return Promise.resolve([[{
+          ...RUN,
+          started_at: new Date(Date.now() - 31 * 60_000),
+        }]]);
+      }
+      return Promise.resolve([{ affectedRows: 1 }]);
+    });
+
+    const result = await continueAgentRun(99, 'test-key');
+
+    expect(result).toMatchObject({ status: 'failed', pending: false });
+    expect(mockSessionsDelete).toHaveBeenCalledWith('sess_xyz');
+    expect(mockSessionsEventsList).not.toHaveBeenCalled();
+  });
+});
+
+describe('monitorAgentRun — continuation lease', () => {
+  it('does not start a duplicate monitor while another lease is active', async () => {
+    db.default.query
+      .mockReset()
+      .mockResolvedValueOnce([{ affectedRows: 0 }])
+      .mockResolvedValueOnce([[
+        { run_id: 99, run_status: 'running' },
+      ]]);
+
+    await expect(monitorAgentRun(99, 'test-key', 1)).resolves.toMatchObject({
+      run_id: 99,
+      status: 'running',
+      pending: true,
+      busy: true,
+    });
+    expect(db.default.getConnection).not.toHaveBeenCalled();
+    expect(mockSessionsEventsList).not.toHaveBeenCalled();
   });
 });

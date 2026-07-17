@@ -5,12 +5,31 @@
  * has_active is true.
  */
 
-import { NextRequest } from 'next/server';
-import { GET } from '@/app/api/agent/runs/route';
+jest.mock('next/server', () => ({
+  ...jest.requireActual('next/server'),
+  after: jest.fn(),
+}));
+
+jest.mock('@/lib/agentRunner', () => ({
+  monitorAgentRun: jest.fn(),
+}));
+
+jest.mock('@/lib/agentContinuation', () => ({
+  enqueueAgentContinuation: jest.fn(),
+}));
+
+import { after, NextRequest } from 'next/server';
+import { GET, POST } from '@/app/api/agent/runs/route';
 import { adminAuth } from '@/lib/firebase-admin';
+import { monitorAgentRun } from '@/lib/agentRunner';
+import { enqueueAgentContinuation } from '@/lib/agentContinuation';
 
 const db         = require('@/lib/db');
 const mockVerify = adminAuth.verifyIdToken as jest.Mock;
+const mockAfter = after as jest.Mock;
+const mockMonitor = monitorAgentRun as jest.Mock;
+const mockEnqueue = enqueueAgentContinuation as jest.Mock;
+const callbacks: Array<() => Promise<void> | void> = [];
 
 const ADMIN    = { id: 1, email: 'admin@oberlin.edu', role: 'admin',    full_name: 'Admin', active: 1, firebase_uid: 'uid-admin' };
 const REVIEWER = { id: 2, email: 'rev@oberlin.edu',   role: 'reviewer', full_name: 'Rev',   active: 1, firebase_uid: 'uid-rev' };
@@ -35,6 +54,20 @@ beforeEach(() => {
   db.default.query.mockReset();
   mockVerify.mockReset();
   mockVerify.mockResolvedValue({ uid: 'uid-admin', email: 'admin@oberlin.edu' });
+  mockMonitor.mockReset().mockImplementation((id: number) => Promise.resolve({
+    run_id: id,
+    status: 'running',
+    pending: true,
+    inserted: 0,
+    skipped: 0,
+    invalid: 0,
+    events: [],
+  }));
+  mockEnqueue.mockReset().mockResolvedValue(undefined);
+  callbacks.length = 0;
+  mockAfter.mockReset().mockImplementation((callback: () => Promise<void> | void) => {
+    callbacks.push(callback);
+  });
 });
 
 describe('GET /api/agent/runs', () => {
@@ -132,5 +165,56 @@ describe('GET /api/agent/runs', () => {
   it('returns 401 without token', async () => {
     mockVerify.mockRejectedValueOnce(new Error('invalid'));
     expect((await GET(new NextRequest('http://localhost/api/agent/runs', {}))).status).toBe(401);
+  });
+});
+
+describe('POST /api/agent/runs', () => {
+  function makeContinueReq(ids: unknown, authorization = 'Bearer valid') {
+    return new NextRequest('http://localhost/api/agent/runs', {
+      method: 'POST',
+      headers: {
+        Authorization: authorization,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ ids }),
+    });
+  }
+
+  it('lets an admin fan out a bounded set of long-running sessions', async () => {
+    db.default.query.mockResolvedValueOnce([[ADMIN]]);
+    const response = await POST(makeContinueReq([7, 8, 8]));
+    const payload = await response.json();
+
+    expect(response.status).toBe(202);
+    expect(payload).toEqual({ queued: 2, ids: [7, 8] });
+    expect(mockMonitor).not.toHaveBeenCalled();
+    await callbacks[0]();
+    expect(mockEnqueue).toHaveBeenCalledTimes(2);
+    expect(mockEnqueue).toHaveBeenNthCalledWith(1, 'http://localhost:3000', [7]);
+    expect(mockEnqueue).toHaveBeenNthCalledWith(2, 'http://localhost:3000', [8]);
+  });
+
+  it('lets the scheduler secret queue and chain one monitor without Firebase auth', async () => {
+    const response = await POST(makeContinueReq([7], 'Bearer test-cron-secret'));
+    expect(response.status).toBe(202);
+    expect(mockVerify).not.toHaveBeenCalled();
+    expect(db.default.query).not.toHaveBeenCalled();
+    await callbacks[0]();
+    expect(mockMonitor).toHaveBeenCalledWith(7, 'test-key');
+    expect(mockEnqueue).toHaveBeenCalledWith('http://localhost:3000', [7]);
+  });
+
+  it('rejects malformed or unbounded continuation ids', async () => {
+    db.default.query.mockResolvedValueOnce([[ADMIN]]);
+    const response = await POST(makeContinueReq([1, '2']));
+    expect(response.status).toBe(400);
+    expect(mockMonitor).not.toHaveBeenCalled();
+  });
+
+  it('forbids reviewers from advancing agent sessions', async () => {
+    mockVerify.mockResolvedValue({ uid: 'uid-rev', email: 'rev@oberlin.edu' });
+    db.default.query.mockResolvedValueOnce([[REVIEWER]]);
+    expect((await POST(makeContinueReq([7]))).status).toBe(403);
+    expect(mockMonitor).not.toHaveBeenCalled();
   });
 });

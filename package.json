@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build && tsx scripts/verify-sharp-trace.ts",
     "vercel-build": "tsx scripts/vercel-build.ts",
     "start": "next start",
     "lint": "eslint",
@@ -19,6 +19,7 @@
     "db:schema": "tsx scripts/migrate.ts",
     "db:seed": "npx tsx scripts/seed-admins.ts",
     "events:revalidate": "tsx scripts/revalidate-pending-events.ts",
+    "events:reconcile-communityhub": "tsx scripts/reconcile-communityhub-content.ts",
     "ci": "npm run lint && npm run test:ci"
   },
   "dependencies": {
@@ -35,7 +36,8 @@
     "nodemailer": "^9.0.3",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "resend": "^6.12.3"
+    "resend": "^6.12.3",
+    "sharp": "^0.34.5"
   },
   "devDependencies": {
     "@jest/globals": "^30.4.1",
@@ -50,7 +52,6 @@
     "eslint-config-next": "16.2.6",
     "jest": "^30.4.2",
     "jest-environment-node": "^30.4.1",
-    "sharp": "^0.34.5",
     "tailwindcss": "^4",
     "ts-jest": "^29.4.9",
     "tsx": "^4.22.3",

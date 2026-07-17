@@ -2,6 +2,8 @@ import { after, NextRequest } from 'next/server';
 import type { PoolConnection } from 'mysql2/promise';
 import { getAuthUser, unauthorized, forbidden } from '@/lib/auth';
 import pool from '@/lib/db';
+import { agentSessionMaxMinutes, sessionlessRunStaleMinutes } from '@/lib/agentRunPolicy';
+import { enqueueAgentContinuation } from '@/lib/agentContinuation';
 
 export const maxDuration = 300;
 
@@ -30,12 +32,6 @@ function parseScheduleSlot(value: string | null): Date | null {
 
 function toMysqlUtc(date: Date): string {
   return date.toISOString().slice(0, 19).replace('T', ' ');
-}
-
-function staleRunMinutes(): number {
-  const configured = Number.parseInt(process.env.AGENT_RUN_STALE_MINUTES || '', 10);
-  if (!Number.isFinite(configured)) return 10;
-  return Math.min(Math.max(configured, 6), 120);
 }
 
 function isDuplicateEntry(error: any): boolean {
@@ -98,18 +94,23 @@ async function getScheduleHistory(
   };
 }
 
-async function runAgent(source: SourceRow, runId: number) {
+async function runAgent(source: SourceRow, runId: number, origin: string) {
   try {
     const runner = await import('@/lib/agentRunner');
     if (source.source_type === 'email') {
       await runner.triggerEmailIngest(source.id, runId);
     } else {
-      await runner.triggerAgentRun(
+      const result = await runner.triggerAgentRun(
         source.id,
         runId,
         process.env.ANTHROPIC_API_KEY ?? '',
         process.env.SOURCE_BUILDER_ENVIRONMENT_ID ?? '',
       );
+      if (result.pending) {
+        await enqueueAgentContinuation(origin, [runId]).catch(error => {
+          console.error(`[agent trigger] could not enqueue continuation for run ${runId}:`, error);
+        });
+      }
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Agent run failed';
@@ -155,13 +156,25 @@ export async function POST(
   ) as any;
   if (!source) return Response.json({ error: 'Source not found' }, { status: 404 });
 
-  const staleMinutes = staleRunMinutes();
+  const sessionlessStaleMinutes = sessionlessRunStaleMinutes();
+  const sessionMaxMinutes = agentSessionMaxMinutes();
   await pool.query(
     `UPDATE agent_runs
      SET status='failed', finished_at=NOW(),
-         error_log=JSON_ARRAY('Recovered expired agent-run lease')
+         error_log=JSON_ARRAY(
+           CASE WHEN session_id IS NULL
+             THEN 'Recovered expired agent-run start lease'
+             ELSE 'Agent session exceeded its absolute runtime limit'
+           END
+         )
      WHERE source_id=? AND status='running'
-       AND started_at < DATE_SUB(NOW(), INTERVAL ${staleMinutes} MINUTE)`,
+       AND (
+         (session_id IS NULL
+           AND started_at < DATE_SUB(NOW(), INTERVAL ${sessionlessStaleMinutes} MINUTE))
+         OR
+         (session_id IS NOT NULL
+           AND started_at < DATE_SUB(NOW(), INTERVAL ${sessionMaxMinutes} MINUTE))
+       )`,
     [sourceId],
   );
 
@@ -305,7 +318,10 @@ export async function POST(
     return Response.json({ error: 'Unable to claim agent run' }, { status: 500 });
   }
 
-  after(() => runAgent(source, runId));
+  const continuationOrigin = new URL(
+    process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL || req.url,
+  ).origin;
+  after(() => runAgent(source, runId, continuationOrigin));
 
   return Response.json({
     ok: true,

@@ -17,7 +17,7 @@ jobs:
   fetch:
     name: Run agent fetchers
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 40
 
     steps:
       - name: Trigger fetch via app API
@@ -88,7 +88,11 @@ jobs:
           fi
 
           RESPONSE="$RUNNER_TEMP/run-status.json"
-          DEADLINE=$((SECONDS + 270))
+          # Managed-agent sessions can legitimately take 10-15 minutes. The
+          # app finalizes them through bounded continuation calls after the
+          # original serverless monitoring slice ends.
+          DEADLINE=$((SECONDS + 1800))
+          LAST_CONTINUE_AT=0
           while true; do
             curl --silent --show-error --fail-with-body --retry 2 --retry-delay 2 \
               --connect-timeout 10 --max-time 30 \
@@ -106,6 +110,25 @@ jobs:
               echo "One or more scheduled agent runs failed or completed with event errors." >&2
               exit 1
             fi
+
+            CONTINUE_IDS="$(jq -r '
+              [.runs[]
+               | select(.status == "running" and (.elapsed_sec // 0) >= 250)
+               | .id]
+              | unique | join(",")
+            ' "$RESPONSE")"
+            if [ -n "$CONTINUE_IDS" ] && { [ "$LAST_CONTINUE_AT" -eq 0 ] || [ $((SECONDS - LAST_CONTINUE_AT)) -ge 60 ]; }; then
+              CONTINUE_BODY="$(jq -nc --arg ids "$CONTINUE_IDS" '{ids: ($ids | split(",") | map(tonumber))}')"
+              curl --silent --show-error --fail-with-body --retry 2 --retry-delay 2 \
+                --connect-timeout 10 --max-time 240 -X POST \
+                "$APP_URL/api/agent/runs" \
+                -H "Authorization: Bearer $CRON_SECRET" \
+                -H "Content-Type: application/json" \
+                --data "$CONTINUE_BODY" \
+                | jq -e 'type == "object" and ((.queued | type) == "number") and .queued > 0' >/dev/null
+              LAST_CONTINUE_AT=$SECONDS
+            fi
+
             EXPECTED="$(awk -F, '{ print NF }' <<< "$RUN_IDS")"
             OBSERVED="$(jq '.runs | length' "$RESPONSE")"
             if [ "$OBSERVED" -eq "$EXPECTED" ] && jq -e '.terminal == true' "$RESPONSE" >/dev/null; then

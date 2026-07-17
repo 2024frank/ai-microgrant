@@ -3,6 +3,8 @@ import pool from '@/lib/db';
 import { forbidden, getAuthUser, unauthorized } from '@/lib/auth';
 import { canAccessSource } from '@/lib/reviewerAccess';
 import { normalizeRejectionReasonCodes } from '@/lib/rejectionReasons';
+import { agentSessionMaxMinutes, sessionlessRunStaleMinutes } from '@/lib/agentRunPolicy';
+import { enqueueAgentContinuation } from '@/lib/agentContinuation';
 
 export const maxDuration = 300;
 
@@ -212,11 +214,24 @@ export async function POST(
     [user.uid],
   ) as any;
 
+  const sessionlessStaleMinutes = sessionlessRunStaleMinutes();
+  const sessionMaxMinutes = agentSessionMaxMinutes();
   await pool.query(
     `UPDATE agent_runs SET status='failed', finished_at=NOW(),
-       error_log=JSON_ARRAY('Recovered expired correction-run lease')
+       error_log=JSON_ARRAY(
+         CASE WHEN session_id IS NULL
+           THEN 'Recovered expired correction-run start lease'
+           ELSE 'Correction agent session exceeded its absolute runtime limit'
+         END
+       )
      WHERE source_id=? AND status='running'
-       AND started_at < DATE_SUB(NOW(), INTERVAL 10 MINUTE)`,
+       AND (
+         (session_id IS NULL
+           AND started_at < DATE_SUB(NOW(), INTERVAL ${sessionlessStaleMinutes} MINUTE))
+         OR
+         (session_id IS NOT NULL
+           AND started_at < DATE_SUB(NOW(), INTERVAL ${sessionMaxMinutes} MINUTE))
+       )`,
     [event.source_id],
   );
 
@@ -338,10 +353,13 @@ export async function POST(
   }
 
   const prompt = correctionPrompt(event, correctionNotes);
+  const origin = new URL(
+    process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL || req.url,
+  ).origin;
   after(async () => {
     try {
       const { triggerAgentRun } = await import('@/lib/agentRunner');
-      await triggerAgentRun(
+      const result = await triggerAgentRun(
         Number(event.source_id),
         runId,
         process.env.ANTHROPIC_API_KEY ?? '',
@@ -349,6 +367,12 @@ export async function POST(
         prompt,
         { expectedCorrectionEventId: Number(event.id) },
       );
+      if (result.pending) {
+        await enqueueAgentContinuation(origin, [runId]).catch(error => {
+          console.error(`[correction] could not enqueue continuation for run=${runId}:`, error);
+        });
+        return;
+      }
       if (!(await correctionWasApplied(
         Number(event.id),
         Number(event.source_id),

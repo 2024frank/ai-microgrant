@@ -2,8 +2,15 @@
 
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
-import { GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  getRedirectResult,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signInWithRedirect,
+  signOut,
+  type User,
+} from 'firebase/auth';
 import { Check, ClipboardCheck, LockKeyhole, ShieldCheck } from 'lucide-react';
 import { auth } from '@/lib/firebase';
 import styles from './login.module.css';
@@ -21,31 +28,54 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const router = useRouter();
 
+  const completeWorkspaceSignIn = useCallback(async (firebaseUser: User) => {
+    const token = await firebaseUser.getIdToken();
+    const response = await fetch('/api/auth/me', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!response.ok) {
+      await signOut(auth);
+      setError(
+        response.status === 403
+          ? 'This Google account is not approved for the event intake workspace. Contact your administrator.'
+          : 'We could not verify your sign-in. Contact your administrator if the problem continues.',
+      );
+      setLoading(false);
+      return;
+    }
+
+    const user = await response.json();
+    localStorage.setItem('token', token);
+    localStorage.setItem('user', JSON.stringify(user));
+    router.push(user.role === 'admin' ? '/admin/stats' : '/reviewer/dashboard');
+  }, [router]);
+
+  useEffect(() => {
+    let active = true;
+    void getRedirectResult(auth)
+      .then(credential => {
+        if (!credential || !active) return;
+        setLoading(true);
+        setError('');
+        return completeWorkspaceSignIn(credential.user);
+      })
+      .catch(() => {
+        if (!active) return;
+        setError('Google redirect sign-in did not complete. Try again or contact your administrator.');
+        setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [completeWorkspaceSignIn]);
+
   async function handleGoogleLogin() {
     setLoading(true);
     setError('');
     try {
       const credential = await signInWithPopup(auth, provider);
-      const token = await credential.user.getIdToken();
-      const response = await fetch('/api/auth/me', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
-      if (!response.ok) {
-        await signOut(auth);
-        setError(
-          response.status === 403
-            ? 'This Google account is not approved for the event intake workspace. Contact your administrator.'
-            : 'We could not verify your sign-in. Contact your administrator if the problem continues.',
-        );
-        setLoading(false);
-        return;
-      }
-
-      const user = await response.json();
-      localStorage.setItem('token', token);
-      localStorage.setItem('user', JSON.stringify(user));
-      router.push(user.role === 'admin' ? '/admin/stats' : '/reviewer/dashboard');
+      await completeWorkspaceSignIn(credential.user);
     } catch (caught: unknown) {
       const code = caught && typeof caught === 'object' && 'code' in caught
         ? String((caught as { code?: unknown }).code || '')
@@ -54,10 +84,18 @@ export default function LoginPage() {
         setLoading(false);
         return;
       }
+      if (code === 'auth/popup-blocked') {
+        try {
+          await signInWithRedirect(auth, provider);
+          return;
+        } catch {
+          setError('Google redirect sign-in could not start. Allow popups for this site or contact your administrator.');
+          setLoading(false);
+          return;
+        }
+      }
       setError(
-        code === 'auth/popup-blocked'
-          ? 'Your browser blocked the Google sign-in window. Allow popups for this site and try again.'
-          : 'Sign-in did not complete. Try again or contact your administrator.',
+        'Sign-in did not complete. Try again or contact your administrator.',
       );
       setLoading(false);
     }

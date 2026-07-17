@@ -1,14 +1,11 @@
-import { createRequire } from 'node:module';
+import sharp from 'sharp';
 
-type SharpModule = typeof import('sharp');
-
-const runtimeRequire = createRequire(import.meta.url);
-let sharpModule: SharpModule | null = null;
-
-/** Load Sharp at runtime so native optional binaries are never web-bundled. */
-export function getSharp(): SharpModule {
-  if (!sharpModule) {
-    sharpModule = runtimeRequire(['sh', 'arp'].join('')) as SharpModule;
-  }
-  return sharpModule;
+/**
+ * Keep the import statically traceable. `serverExternalPackages` leaves Sharp
+ * as a Node dependency, while Next's output tracer copies its native runtime
+ * into the serverless function. A computed createRequire() call is compiled
+ * into a permanent MODULE_NOT_FOUND throw by Turbopack.
+ */
+export function getSharp(): typeof sharp {
+  return sharp;
 }

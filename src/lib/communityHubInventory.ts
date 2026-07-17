@@ -1,0 +1,309 @@
+const INVENTORY_ENDPOINT = 'https://oberlin.communityhub.cloud/api/legacy/calendar/posts';
+const INVENTORY_LIMIT = 10_000;
+const MAX_INVENTORY_PAGES = 20;
+
+export const COMMUNITY_HUB_INVENTORY_URL = `${INVENTORY_ENDPOINT}?limit=10000&page=0&filter=future&tab=main-feed&isJobs=false&order=ASC&postType=All&allPosts=`;
+
+export const COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS = `Before extracting source events, fetch the complete CommunityHub approved-and-pending inventory from ${COMMUNITY_HUB_INVENTORY_URL}
+Read every returned post and continue pagination until lastPage is true. Treat approved=true as approved and approved=null as pending. If the request fails, the payload is incomplete, or lastPage is not reached, do not pretend the inventory is empty.
+Compare actual content, never IDs or tokens: normalize the title; compare every session start/end timestamp; then use calendarSourceUrl, description, and eventType as supporting evidence. CommunityHub IDs and Event Intake IDs are different namespaces and must never be compared. Skip a source event only when its content is an exact or strong match to an approved or pending CommunityHub post. Keep extracting when the only similarity is a shared source URL or generic wording.`;
+
+export type ContentSession = {
+  start: number;
+  end: number;
+};
+
+export type ComparableEventContent = {
+  title?: unknown;
+  name?: unknown;
+  eventType?: unknown;
+  event_type?: unknown;
+  description?: unknown;
+  extendedDescription?: unknown;
+  extended_description?: unknown;
+  calendarSourceUrl?: unknown;
+  calendar_source_url?: unknown;
+  sessions?: unknown;
+};
+
+export type CommunityHubInventoryPost = {
+  title: string;
+  eventType: string;
+  description: string;
+  extendedDescription: string;
+  calendarSourceUrl: string;
+  sessions: ContentSession[];
+  moderation: 'approved' | 'pending';
+};
+
+export type CommunityHubInventory = {
+  posts: CommunityHubInventoryPost[];
+  approved: number;
+  pending: number;
+  pages: number;
+  reportedCount: number;
+  reportedUnapprovedCount: number | null;
+};
+
+export type ContentMatch = {
+  kind: 'exact' | 'probable' | 'none';
+  reasons: string[];
+  remote?: CommunityHubInventoryPost;
+};
+
+function text(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+export function normalizeComparableText(value: unknown): string {
+  return text(value)
+    .normalize('NFKC')
+    .toLocaleLowerCase('en-US')
+    .replace(/[\u2010-\u2015]/g, '-')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function normalizeUrl(value: unknown): string {
+  const candidate = text(value).trim();
+  if (!candidate) return '';
+  try {
+    const url = new URL(candidate);
+    url.hash = '';
+    for (const key of [...url.searchParams.keys()]) {
+      if (/^(?:utm_|fbclid|gclid)/i.test(key)) url.searchParams.delete(key);
+    }
+    const pathname = url.pathname.replace(/\/+$/, '') || '/';
+    return `${url.protocol.toLowerCase()}//${url.host.toLowerCase()}${pathname}${url.search}`;
+  } catch {
+    return normalizeComparableText(candidate);
+  }
+}
+
+function integer(value: unknown): number | null {
+  const result = typeof value === 'number' ? value : Number(value);
+  return Number.isSafeInteger(result) && result > 0 ? result : null;
+}
+
+export function normalizeContentSessions(value: unknown): ContentSession[] {
+  if (!Array.isArray(value)) return [];
+  const sessions = value.flatMap(item => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+    const record = item as Record<string, unknown>;
+    const start = integer(record.startTime ?? record.start);
+    const end = integer(record.endTime ?? record.end ?? record.startTime ?? record.start);
+    if (start === null || end === null) return [];
+    return [{ start, end }];
+  });
+  return [...new Map(
+    sessions
+      .sort((left, right) => left.start - right.start || left.end - right.end)
+      .map(session => [`${session.start}:${session.end}`, session]),
+  ).values()];
+}
+
+function normalizedContent(input: ComparableEventContent) {
+  return {
+    title: normalizeComparableText(input.title ?? input.name),
+    eventType: normalizeComparableText(input.eventType ?? input.event_type),
+    description: normalizeComparableText(input.description),
+    extendedDescription: normalizeComparableText(
+      input.extendedDescription ?? input.extended_description,
+    ),
+    calendarSourceUrl: normalizeUrl(
+      input.calendarSourceUrl ?? input.calendar_source_url,
+    ),
+    sessions: normalizeContentSessions(input.sessions),
+  };
+}
+
+function sessionKey(session: ContentSession): string {
+  return `${session.start}:${session.end}`;
+}
+
+function setsEqual(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function tokenSimilarity(left: string, right: string): number {
+  if (!left || !right) return 0;
+  if (left === right) return 1;
+  const leftTokens = new Set(left.split(' ').filter(token => token.length > 1));
+  const rightTokens = new Set(right.split(' ').filter(token => token.length > 1));
+  if (leftTokens.size === 0 || rightTokens.size === 0) return 0;
+  const intersection = [...leftTokens].filter(token => rightTokens.has(token)).length;
+  const union = new Set([...leftTokens, ...rightTokens]).size;
+  return union > 0 ? intersection / union : 0;
+}
+
+export function compareEventContent(
+  localInput: ComparableEventContent,
+  remote: CommunityHubInventoryPost,
+): ContentMatch {
+  const local = normalizedContent(localInput);
+  const remoteContent = normalizedContent(remote);
+  const localWindows = local.sessions.map(sessionKey);
+  const remoteWindows = remoteContent.sessions.map(sessionKey);
+  const localStarts = new Set(local.sessions.map(session => session.start));
+  const sharedStarts = remoteContent.sessions.filter(session => localStarts.has(session.start)).length;
+  const exactWindows = localWindows.length > 0
+    && remoteWindows.length > 0
+    && setsEqual(localWindows, remoteWindows);
+  const exactTitle = Boolean(local.title && local.title === remoteContent.title);
+  const titleSimilarity = tokenSimilarity(local.title, remoteContent.title);
+  const sameSourceUrl = Boolean(
+    local.calendarSourceUrl
+    && local.calendarSourceUrl === remoteContent.calendarSourceUrl,
+  );
+  const sameEventType = Boolean(local.eventType && local.eventType === remoteContent.eventType);
+  const descriptionSimilarity = Math.max(
+    tokenSimilarity(local.description, remoteContent.description),
+    tokenSimilarity(local.extendedDescription, remoteContent.extendedDescription),
+  );
+
+  if (exactTitle && exactWindows) {
+    return {
+      kind: 'exact',
+      reasons: ['normalized title', 'complete session windows'],
+      remote,
+    };
+  }
+
+  const strongTitleAndTime = sharedStarts > 0
+    && (
+      exactTitle
+      || titleSimilarity >= 0.72
+      || (titleSimilarity >= 0.55 && sameSourceUrl && sameEventType)
+    )
+    && (sameEventType || sameSourceUrl || descriptionSimilarity >= 0.45);
+  const editedSessionsButSameListing = exactTitle
+    && sameSourceUrl
+    && (sameEventType || descriptionSimilarity >= 0.55);
+  const strongDescriptionAndTime = sharedStarts > 0
+    && sameEventType
+    && descriptionSimilarity >= 0.8;
+
+  if (strongTitleAndTime || editedSessionsButSameListing || strongDescriptionAndTime) {
+    const reasons = [
+      exactTitle ? 'normalized title' : titleSimilarity >= 0.72 ? 'similar title' : '',
+      sharedStarts > 0 ? 'shared session start' : '',
+      sameSourceUrl ? 'source URL' : '',
+      sameEventType ? 'event type' : '',
+      descriptionSimilarity >= 0.45 ? 'description content' : '',
+    ].filter(Boolean);
+    return { kind: 'probable', reasons, remote };
+  }
+
+  return { kind: 'none', reasons: [] };
+}
+
+export function findBestContentMatch(
+  local: ComparableEventContent,
+  posts: CommunityHubInventoryPost[],
+): ContentMatch {
+  let probable: ContentMatch | null = null;
+  for (const remote of posts) {
+    const result = compareEventContent(local, remote);
+    if (result.kind === 'exact') return result;
+    if (result.kind === 'probable' && probable === null) probable = result;
+  }
+  return probable ?? { kind: 'none', reasons: [] };
+}
+
+function moderation(value: unknown): 'approved' | 'pending' | 'rejected' | null {
+  if (value === true || value === 1 || value === '1') return 'approved';
+  if (value === null) return 'pending';
+  if (value === false || value === 0 || value === '0') return 'rejected';
+  return null;
+}
+
+function inventoryUrl(page: number): URL {
+  const url = new URL(INVENTORY_ENDPOINT);
+  const query: Record<string, string> = {
+    limit: String(INVENTORY_LIMIT),
+    page: String(page),
+    filter: 'future',
+    tab: 'main-feed',
+    isJobs: 'false',
+    order: 'ASC',
+    postType: 'All',
+  };
+  for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value);
+  url.searchParams.append('allPosts', '');
+  return url;
+}
+
+export async function fetchCommunityHubInventory(
+  fetcher: typeof fetch = fetch,
+): Promise<CommunityHubInventory> {
+  const rawPosts: Record<string, unknown>[] = [];
+  let page = 0;
+  let reportedCount: number | null = null;
+  let reportedUnapprovedCount: number | null = null;
+
+  while (page < MAX_INVENTORY_PAGES) {
+    const response = await fetcher(inventoryUrl(page), {
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!response.ok) {
+      throw new Error(`CommunityHub inventory returned HTTP ${response.status}`);
+    }
+    const body = await response.json() as Record<string, unknown>;
+    if (!Array.isArray(body.posts) || typeof body.lastPage !== 'boolean') {
+      throw new Error('CommunityHub inventory response is incomplete');
+    }
+    if (page === 0) {
+      reportedCount = integer(body.count);
+      const unapproved = Number(body.unapprovedRecordsCount);
+      reportedUnapprovedCount = Number.isSafeInteger(unapproved) && unapproved >= 0
+        ? unapproved
+        : null;
+      if (reportedCount === null) {
+        throw new Error('CommunityHub inventory did not report a valid total count');
+      }
+    }
+    for (const item of body.posts) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        throw new Error('CommunityHub inventory contains a malformed post');
+      }
+      rawPosts.push(item as Record<string, unknown>);
+    }
+    if (body.lastPage) break;
+    page++;
+  }
+
+  if (page >= MAX_INVENTORY_PAGES) {
+    throw new Error('CommunityHub inventory pagination did not terminate');
+  }
+  if (reportedCount === null || rawPosts.length !== reportedCount) {
+    throw new Error(
+      `CommunityHub inventory was truncated: expected ${reportedCount ?? 'unknown'}, received ${rawPosts.length}`,
+    );
+  }
+
+  const posts: CommunityHubInventoryPost[] = [];
+  for (const raw of rawPosts) {
+    const state = moderation(raw.approved);
+    if (state === null) {
+      throw new Error('CommunityHub inventory contains an unknown approval state');
+    }
+    if (state === 'rejected') continue;
+    const content = normalizedContent(raw);
+    if (!content.title || content.sessions.length === 0) {
+      throw new Error('CommunityHub inventory contains a post without comparable content');
+    }
+    posts.push({ ...content, moderation: state });
+  }
+
+  return {
+    posts,
+    approved: posts.filter(post => post.moderation === 'approved').length,
+    pending: posts.filter(post => post.moderation === 'pending').length,
+    pages: page + 1,
+    reportedCount,
+    reportedUnapprovedCount,
+  };
+}

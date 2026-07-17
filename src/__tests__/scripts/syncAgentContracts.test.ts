@@ -56,6 +56,10 @@ locationType: "ph2" physical
 display: "all" all public screens
 integer Unix seconds
 Return only one raw JSON array
+https://oberlin.communityhub.cloud/api/legacy/calendar/posts?limit=10000&page=0&filter=future&tab=main-feed&isJobs=false&order=ASC&postType=All&allPosts=
+Compare actual content, never IDs or tokens
+CommunityHub IDs and Event Intake IDs are different namespaces
+continue pagination until lastPage is true
 ${process.env.INGEST_SECRET}
     `)).toThrow('configured ingest secret');
   });

@@ -1,0 +1,117 @@
+import {
+  compareEventContent,
+  fetchCommunityHubInventory,
+  findBestContentMatch,
+  normalizeContentSessions,
+  type CommunityHubInventoryPost,
+} from '@/lib/communityHubInventory';
+
+const REMOTE: CommunityHubInventoryPost = {
+  title: 'Summer Jazz Night',
+  eventType: 'ot',
+  description: 'A public jazz performance in the Riverdog barn.',
+  extendedDescription: '',
+  calendarSourceUrl: 'https://example.org/events?utm_source=mail',
+  sessions: [{ start: 1_800_000_000, end: 1_800_003_600 }],
+  moderation: 'pending',
+};
+
+describe('CommunityHub content inventory', () => {
+  it('normalizes both local and CommunityHub session field names', () => {
+    expect(normalizeContentSessions([
+      { startTime: 20, endTime: 30 },
+      { start: 10, end: 15 },
+      { start: 10, end: 15 },
+    ])).toEqual([
+      { start: 10, end: 15 },
+      { start: 20, end: 30 },
+    ]);
+  });
+
+  it('matches exact content even when the systems use unrelated IDs', () => {
+    const match = compareEventContent({
+      id: 172,
+      title: 'Summer Jazz Night',
+      event_type: 'ot',
+      description: 'A public jazz performance in the Riverdog barn.',
+      calendar_source_url: 'https://example.org/events',
+      sessions: [{ startTime: 1_800_000_000, endTime: 1_800_003_600 }],
+    } as any, { ...REMOTE, id: 9_999_999 } as any);
+
+    expect(match.kind).toBe('exact');
+    expect(match.reasons).toContain('complete session windows');
+  });
+
+  it('retains a strongly matching edited listing but not a shared source URL alone', () => {
+    expect(findBestContentMatch({
+      title: 'Summer Jazz Night at Riverdog',
+      event_type: 'ot',
+      description: 'Riverdog hosts a public jazz performance in its barn.',
+      calendar_source_url: 'https://example.org/events',
+      sessions: [{ startTime: 1_800_000_000, endTime: 1_800_004_000 }],
+    }, [REMOTE]).kind).toBe('probable');
+
+    expect(findBestContentMatch({
+      title: 'Completely Different Concert',
+      event_type: 'ot',
+      description: 'A different artist and date.',
+      calendar_source_url: 'https://example.org/events',
+      sessions: [{ startTime: 1_900_000_000, endTime: 1_900_003_600 }],
+    }, [REMOTE]).kind).toBe('none');
+  });
+
+  it('reads every page and keeps only approved and pending records', async () => {
+    const requested: URL[] = [];
+    const fetcher = jest.fn(async (input: URL | RequestInfo) => {
+      const url = new URL(String(input));
+      requested.push(url);
+      const page = Number(url.searchParams.get('page'));
+      return new Response(JSON.stringify({
+        count: 3,
+        unapprovedRecordsCount: 1,
+        lastPage: page === 1,
+        posts: page === 0
+          ? [
+            {
+              name: 'Approved Event', approved: true, eventType: 'ot',
+              description: 'Approved event description.',
+              sessions: [{ start: 1_800_000_000, end: 1_800_000_100 }],
+            },
+            {
+              name: 'Rejected Event', approved: false, eventType: 'ot',
+              description: 'Rejected event description.',
+              sessions: [{ start: 1_800_000_200, end: 1_800_000_300 }],
+            },
+          ]
+          : [{
+            name: 'Pending Event', approved: null, eventType: 'ot',
+            description: 'Pending event description.',
+            sessions: [{ start: 1_800_000_400, end: 1_800_000_500 }],
+          }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as unknown as typeof fetch;
+
+    const inventory = await fetchCommunityHubInventory(fetcher);
+
+    expect(inventory).toMatchObject({ approved: 1, pending: 1, pages: 2, reportedCount: 3 });
+    expect(inventory.posts.map(post => post.title)).toEqual(['approved event', 'pending event']);
+    expect(requested).toHaveLength(2);
+    expect(requested.every(url => url.searchParams.has('allPosts'))).toBe(true);
+    expect(requested.map(url => url.searchParams.get('page'))).toEqual(['0', '1']);
+  });
+
+  it('refuses to treat a truncated response as deletion evidence', async () => {
+    const fetcher = jest.fn(async () => new Response(JSON.stringify({
+      count: 2,
+      unapprovedRecordsCount: 0,
+      lastPage: true,
+      posts: [{
+        name: 'Only one post', approved: true, eventType: 'ot',
+        description: 'Only one returned post.',
+        sessions: [{ start: 1_800_000_000, end: 1_800_000_100 }],
+      }],
+    }), { status: 200 })) as unknown as typeof fetch;
+
+    await expect(fetchCommunityHubInventory(fetcher)).rejects.toThrow('truncated');
+  });
+});

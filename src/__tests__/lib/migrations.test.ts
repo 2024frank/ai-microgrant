@@ -57,4 +57,28 @@ describe('production migration compatibility', () => {
     expect(migration).toContain("'raw_event_id ', @raw_event_id_type, ' NOT NULL,'");
     expect(migration).not.toContain('raw_event_id          INT UNSIGNED NOT NULL');
   });
+
+  it('adds renewable continuation leases idempotently', () => {
+    const migration = readFileSync(
+      join(process.cwd(), 'migrations/0016_agent_continuation_leases.sql'),
+      'utf8',
+    );
+
+    expect(migration).toContain("column_name = 'continuation_token'");
+    expect(migration).toContain('ADD COLUMN continuation_token VARCHAR(64) NULL');
+    expect(migration).toContain("column_name = 'continuation_lease_until'");
+    expect(migration).toContain('ADD COLUMN continuation_lease_until DATETIME(3) NULL');
+  });
+
+  it('archives content-reconciliation evidence without a parent foreign key', () => {
+    const migration = readFileSync(
+      join(process.cwd(), 'migrations/0017_communityhub_content_reconciliation.sql'),
+      'utf8',
+    );
+
+    expect(migration).toContain('communityhub_reconciliation_deletions');
+    expect(migration).toContain('event_snapshot             JSON NOT NULL');
+    expect(migration).toContain('remote_inventory_sha256');
+    expect(migration).not.toContain('REFERENCES raw_events');
+  });
 });

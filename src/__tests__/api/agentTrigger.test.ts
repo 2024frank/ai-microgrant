@@ -8,10 +8,15 @@ jest.mock('@/lib/agentRunner', () => ({
   triggerEmailIngest: jest.fn().mockResolvedValue({ run_id: 5, inserted: 3, skipped: 0 }),
 }));
 
+jest.mock('@/lib/agentContinuation', () => ({
+  enqueueAgentContinuation: jest.fn(),
+}));
+
 import { after, NextRequest } from 'next/server';
 import { POST } from '@/app/api/agent/trigger/[source_id]/route';
 import { adminAuth } from '@/lib/firebase-admin';
 import { triggerAgentRun, triggerEmailIngest } from '@/lib/agentRunner';
+import { enqueueAgentContinuation } from '@/lib/agentContinuation';
 
 const db = require('@/lib/db');
 const mockConn = db.mockConn;
@@ -19,6 +24,7 @@ const mockVerify = adminAuth.verifyIdToken as jest.Mock;
 const mockAfter = after as jest.Mock;
 const mockAgentRun = triggerAgentRun as jest.Mock;
 const mockEmailRun = triggerEmailIngest as jest.Mock;
+const mockEnqueue = enqueueAgentContinuation as jest.Mock;
 
 const ADMIN = {
   id: 1, email: 'admin@oberlin.edu', role: 'admin', full_name: 'Admin', active: 1, firebase_uid: 'uid-admin',
@@ -83,6 +89,7 @@ describe('POST /api/agent/trigger/:source_id', () => {
     mockVerify.mockReset().mockResolvedValue({ uid: 'uid-admin', email: 'admin@oberlin.edu' });
     mockAgentRun.mockReset().mockResolvedValue({ run_id: 7, inserted: 3 });
     mockEmailRun.mockReset().mockResolvedValue({ run_id: 7, inserted: 3, skipped: 0 });
+    mockEnqueue.mockReset().mockResolvedValue(undefined);
     callbacks.length = 0;
     mockAfter.mockReset().mockImplementation((callback: () => Promise<void> | void) => {
       callbacks.push(callback);
@@ -289,6 +296,24 @@ describe('POST /api/agent/trigger/:source_id', () => {
     await callbacks[0]();
     expect(mockEmailRun).toHaveBeenCalledWith(3, 7);
     expect(mockAgentRun).not.toHaveBeenCalled();
+  });
+
+  it('hands a web session to the backend continuation worker when its slice ends', async () => {
+    mockSuccessfulClaim();
+    mockAgentRun.mockResolvedValueOnce({
+      run_id: 7,
+      status: 'running',
+      pending: true,
+      inserted: 0,
+      skipped: 0,
+      invalid: 0,
+      events: [],
+    });
+
+    await POST(manualReq(), ctx('3'));
+    await callbacks[0]();
+
+    expect(mockEnqueue).toHaveBeenCalledWith('http://localhost:3000', [7]);
   });
 
   it('restores orphaned correction state before starting a manual run', async () => {

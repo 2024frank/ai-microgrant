@@ -7,7 +7,7 @@ function run(command: string, args: string[]) {
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
 
-run('npx', ['next', 'build']);
+run('npm', ['run', 'build']);
 
 if (process.env.VERCEL_ENV === 'production') {
   const required = [

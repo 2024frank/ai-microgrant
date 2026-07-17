@@ -2,12 +2,12 @@ import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
 import { getDueScheduleSlot, validateCronExpression } from '@/lib/schedule';
 import { cronUnavailable, isCronAuthorized } from '@/lib/cronAuth';
+import { agentSessionMaxMinutes, sessionlessRunStaleMinutes } from '@/lib/agentRunPolicy';
 
 export const maxDuration = 60;
 // GitHub scheduled workflows can be delayed or dropped for more than a day.
 // The database's source+slot claim still makes repeated checks idempotent.
 const DISPATCH_LOOKBACK_MINUTES = 30 * 60;
-const STALE_RUN_MINUTES = 10;
 
 type SourceRow = {
   id: number;
@@ -137,12 +137,25 @@ export async function GET(req: NextRequest) {
   const maintenanceErrors: string[] = [];
   let recoveredStaleRuns = 0;
   try {
+    const sessionlessStaleMinutes = sessionlessRunStaleMinutes();
+    const sessionMaxMinutes = agentSessionMaxMinutes();
     const recovery = await pool.query(
       `UPDATE agent_runs
        SET status='failed', finished_at=NOW(),
-           error_log=JSON_ARRAY('Recovered expired agent-run lease')
+           error_log=JSON_ARRAY(
+             CASE WHEN session_id IS NULL
+               THEN 'Recovered expired agent-run start lease'
+               ELSE 'Agent session exceeded its absolute runtime limit'
+             END
+           )
        WHERE status='running'
-         AND started_at < DATE_SUB(NOW(), INTERVAL ${STALE_RUN_MINUTES} MINUTE)`,
+         AND (
+           (session_id IS NULL
+             AND started_at < DATE_SUB(NOW(), INTERVAL ${sessionlessStaleMinutes} MINUTE))
+           OR
+           (session_id IS NOT NULL
+             AND started_at < DATE_SUB(NOW(), INTERVAL ${sessionMaxMinutes} MINUTE))
+         )`,
     ) as any;
     recoveredStaleRuns = Number(recovery?.[0]?.affectedRows || 0);
   } catch (error) {

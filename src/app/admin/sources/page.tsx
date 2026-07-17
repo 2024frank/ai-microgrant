@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import AppShell from '@/components/layout/AppShell';
 import { useAuth } from '@/hooks/useAuth';
+import { AGENT_CONTINUATION_AFTER_SECONDS } from '@/lib/agentRunPolicy';
 import { describeCronExpression } from '@/lib/schedule';
 
 const SCHEDULE_PRESETS = [
@@ -145,6 +146,8 @@ export default function SourcesPage() {
   const [promptSaving, setPromptSaving] = useState(false);
   const [promptError, setPromptError] = useState('');
   const pollRef = useRef<number | null>(null);
+  const runsLoadingRef = useRef(false);
+  const continuationRequestedAtRef = useRef(0);
 
   const authHeaders = useCallback(() => ({ Authorization: `Bearer ${token}` }), [token]);
 
@@ -164,17 +167,43 @@ export default function SourcesPage() {
   }, [token, authHeaders]);
 
   const loadRuns = useCallback(async () => {
-    if (!token) return;
+    if (!token || runsLoadingRef.current) return;
+    runsLoadingRef.current = true;
     try {
       const response = await fetch('/api/agent/runs?limit=30', { headers: authHeaders() });
       if (!response.ok) throw new Error('Run telemetry could not be loaded.');
       const payload = await response.json();
-      setRuns(Array.isArray(payload.runs) ? payload.runs : []);
+      const nextRuns = Array.isArray(payload.runs) ? payload.runs : [];
+      setRuns(nextRuns);
       setRunsError('');
+      const continuationIds = nextRuns
+        .filter((run: RunRecord) => (
+          run.status === 'running'
+          && Number(run.elapsed_sec || 0) >= AGENT_CONTINUATION_AFTER_SECONDS
+        ))
+        .map((run: RunRecord) => Number(run.id));
+      if (
+        continuationIds.length > 0
+        && Date.now() - continuationRequestedAtRef.current >= 60_000
+      ) {
+        continuationRequestedAtRef.current = Date.now();
+        const continuation = await fetch('/api/agent/runs', {
+          method: 'POST',
+          headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids: continuationIds }),
+        });
+        if (!continuation.ok) {
+          continuationRequestedAtRef.current = 0;
+          const issue = await continuation.json().catch(() => ({}));
+          setRunsError(issue.error || 'Long-running agent continuation is temporarily unavailable.');
+        }
+      }
       if (!payload.has_active) loadSources();
     } catch (error) {
       setRunsError(error instanceof Error ? error.message : 'Run telemetry could not be loaded.');
       void loadSources();
+    } finally {
+      runsLoadingRef.current = false;
     }
   }, [token, authHeaders, loadSources]);
 

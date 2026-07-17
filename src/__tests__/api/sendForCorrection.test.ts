@@ -7,15 +7,21 @@ jest.mock('@/lib/agentRunner', () => ({
   triggerAgentRun: jest.fn(),
 }));
 
+jest.mock('@/lib/agentContinuation', () => ({
+  enqueueAgentContinuation: jest.fn(),
+}));
+
 import { after, NextRequest } from 'next/server';
 import { POST } from '@/app/api/review/events/[id]/send-for-correction/route';
 import { adminAuth } from '@/lib/firebase-admin';
 import { triggerAgentRun } from '@/lib/agentRunner';
+import { enqueueAgentContinuation } from '@/lib/agentContinuation';
 
 const db = require('@/lib/db');
 const mockVerify = adminAuth.verifyIdToken as jest.Mock;
 const mockAfter = after as jest.Mock;
 const mockTrigger = triggerAgentRun as jest.Mock;
+const mockEnqueue = enqueueAgentContinuation as jest.Mock;
 
 const ADMIN = {
   id: 1,
@@ -74,6 +80,7 @@ describe('POST /api/review/events/:id/send-for-correction', () => {
     db.mockConn.release = jest.fn();
     mockVerify.mockReset().mockResolvedValue({ uid: 'uid-admin', email: ADMIN.email });
     mockTrigger.mockReset().mockResolvedValue({ run_id: 44, inserted: 1, events: [] });
+    mockEnqueue.mockReset().mockResolvedValue(undefined);
     callbacks.length = 0;
     mockAfter.mockReset().mockImplementation((callback: () => Promise<void> | void) => {
       callbacks.push(callback);
@@ -134,6 +141,35 @@ describe('POST /api/review/events/:id/send-for-correction', () => {
     expect(prompt).toContain('untrusted data');
     expect(prompt).not.toContain(process.env.INGEST_SECRET);
     expect(prompt).not.toContain('x-ingest-secret');
+  });
+
+  it('keeps a correction claimed while its managed-agent session awaits continuation', async () => {
+    successfulClaim(false);
+    mockTrigger.mockResolvedValueOnce({
+      run_id: 44,
+      status: 'running',
+      pending: true,
+      inserted: 0,
+      skipped: 0,
+      invalid: 0,
+      events: [],
+    });
+
+    const response = await POST(request(), context);
+    expect(response.status).toBe(202);
+    const failureWritesBeforeContinuation = db.default.query.mock.calls.filter(
+      ([sql]: [string]) => typeof sql === 'string' && sql.includes("status='failed'"),
+    ).length;
+
+    await callbacks[0]();
+
+    expect(db.default.query.mock.calls.some(
+      ([sql]: [string]) => typeof sql === 'string' && sql.includes('JOIN agent_runs owner'),
+    )).toBe(false);
+    expect(db.default.query.mock.calls.filter(
+      ([sql]: [string]) => typeof sql === 'string' && sql.includes("status='failed'"),
+    )).toHaveLength(failureWritesBeforeContinuation);
+    expect(mockEnqueue).toHaveBeenCalledWith('http://localhost:3000', [44]);
   });
 
   it('turns a rejected record into a corrected draft and includes its rejection evidence', async () => {

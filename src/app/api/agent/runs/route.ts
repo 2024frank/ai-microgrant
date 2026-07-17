@@ -1,7 +1,10 @@
-import { NextRequest } from 'next/server';
+import { after, NextRequest } from 'next/server';
 import pool from '@/lib/db';
 import { getAuthUser, unauthorized, forbidden } from '@/lib/auth';
 import { isCronAuthorized } from '@/lib/cronAuth';
+import { enqueueAgentContinuation } from '@/lib/agentContinuation';
+
+export const maxDuration = 300;
 
 // GET /api/agent/runs?source_id=1&limit=5
 // Returns recent runs with live status — poll this every 2s during an active run
@@ -69,4 +72,69 @@ export async function GET(req: NextRequest) {
     terminal: runs.length > 0 && !hasActive,
     failed,
   });
+}
+
+// POST /api/agent/runs { ids: [1, 2] }
+// Queues managed-agent sessions that outlived their original serverless
+// monitoring slice. The continuation worker is idempotent and DB-leased.
+export async function POST(req: NextRequest) {
+  const internalRequest = isCronAuthorized(req);
+  if (!internalRequest) {
+    const user = await getAuthUser(req);
+    if (!user) return unauthorized();
+    if (user.role !== 'admin') return forbidden();
+  }
+
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
+
+  const rawIds = (body as { ids?: unknown } | null)?.ids;
+  if (
+    !Array.isArray(rawIds)
+    || rawIds.length === 0
+    || rawIds.length > 50
+    || rawIds.some(id => !Number.isSafeInteger(id) || Number(id) <= 0)
+  ) {
+    return Response.json({ error: 'ids must contain 1-50 positive integers' }, { status: 400 });
+  }
+
+  const ids = [...new Set(rawIds.map(Number))];
+  const anthropicKey = process.env.ANTHROPIC_API_KEY?.trim() || '';
+  if (!anthropicKey) {
+    return Response.json({ error: 'ANTHROPIC_API_KEY is not configured' }, { status: 503 });
+  }
+  if (!process.env.CRON_SECRET?.trim()) {
+    return Response.json({ error: 'CRON_SECRET is not configured' }, { status: 503 });
+  }
+
+  const origin = new URL(
+    process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL || req.url,
+  ).origin;
+  if (ids.length > 1) {
+    // Fan out so one slow source gets its own serverless duration budget.
+    after(async () => {
+      await Promise.all(ids.map(id => enqueueAgentContinuation(origin, [id]).catch(error => {
+        console.error(`[agent runs] continuation fan-out failed for run=${id}:`, error);
+      })));
+    });
+  } else {
+    const [runId] = ids;
+    after(async () => {
+      const { monitorAgentRun } = await import('@/lib/agentRunner');
+      try {
+        const result = await monitorAgentRun(runId, anthropicKey);
+        if (result.pending && !result.busy) {
+          await enqueueAgentContinuation(origin, [runId]);
+        }
+      } catch (error) {
+        console.error(`[agent runs] continuation worker failed for run=${runId}:`, error);
+      }
+    });
+  }
+
+  return Response.json({ queued: ids.length, ids }, { status: 202 });
 }

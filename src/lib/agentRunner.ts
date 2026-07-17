@@ -1,4 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { randomUUID } from 'node:crypto';
+import type { PoolConnection } from 'mysql2/promise';
 import pool from './db';
 import { getRejectionHistory } from './rejectionHistory';
 import { fetchUnreadEmails, extractEventsFromEmail, markEmailsRead } from './emailFetch';
@@ -9,6 +11,13 @@ import {
   OBERLIN_POST_TYPE_IDS,
   OBERLIN_POST_TYPE_LABELS,
 } from './communityHubPayload';
+import { COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS } from './communityHubInventory';
+import {
+  AGENT_CONTINUATION_LEASE_SECONDS,
+  AGENT_CONTINUATION_POLL_MS,
+  AGENT_CONTINUATION_SLICE_MS,
+  agentSessionMaxMinutes,
+} from './agentRunPolicy';
 
 const DEFAULT_EMAILS_PER_RUN = 5;
 const MAX_EMAILS_PER_RUN = 25;
@@ -25,7 +34,20 @@ type AgentOutputParseResult =
 type SessionTurnResult = {
   outputText: string;
   afterCreatedAt?: string;
+  pending: boolean;
   stopped: boolean;
+};
+
+type AgentRunProgress = {
+  run_id: number;
+  status: 'running' | 'completed' | 'failed' | 'stopped';
+  pending: boolean;
+  busy?: boolean;
+  inserted: number;
+  skipped: number;
+  invalid: number;
+  errors?: any[];
+  events: any[];
 };
 
 type RunEvidence = {
@@ -235,10 +257,19 @@ async function pollSessionTurn(
 ): Promise<SessionTurnResult> {
   const outputChunks: string[] = [];
   let afterCreatedAt = initialCursor;
+  let pageCursor: string | undefined;
 
   while (true) {
     if (Date.now() >= deadline) {
-      throw new Error(`Agent run timed out after ${Math.round(timeoutMs / 1000)} seconds (session ${sessionId})`);
+      console.log(
+        `[agentRunner] run=${runId} monitoring slice ended after ${Math.round(timeoutMs / 1000)} seconds; session remains resumable`,
+      );
+      return {
+        outputText: outputChunks.join(''),
+        afterCreatedAt,
+        pending: true,
+        stopped: false,
+      };
     }
 
     const statusResult = await pool.query(
@@ -248,21 +279,33 @@ async function pollSessionTurn(
     if (currentRun?.status !== 'running') {
       if (currentRun?.status === 'stopped') {
         console.log(`[agentRunner] run=${runId} stopped externally — aborting`);
-        return { outputText: '', afterCreatedAt, stopped: true };
+        return { outputText: '', afterCreatedAt, pending: false, stopped: true };
       }
       throw new Error('Agent run lease is no longer active');
     }
 
     const page = await client.beta.sessions.events.list(sessionId, {
-      ...(afterCreatedAt ? { 'created_at[gt]': afterCreatedAt } : {}),
+      ...(pageCursor
+        ? { page: pageCursor }
+        : afterCreatedAt
+          ? { 'created_at[gt]': afterCreatedAt }
+          : {}),
       limit: 100,
       order: 'asc',
     } as any) as any;
 
     const events: any[] = page.data ?? [];
+    pageCursor = typeof page.next_page === 'string' && page.next_page
+      ? page.next_page
+      : undefined;
+    const hasBufferedPage = Boolean(pageCursor) || events.length >= 100;
     let turnComplete = false;
     for (const event of events) {
-      if (event.created_at) afterCreatedAt = event.created_at;
+      // Managed-agent events expose processed_at even though the list filter
+      // is still named created_at[gt]. Using the nonexistent created_at field
+      // pins every poll to page one and hides terminal events after item 100.
+      const eventCursor = event.processed_at ?? event.created_at;
+      if (eventCursor) afterCreatedAt = eventCursor;
 
       if (event.type === 'agent.message') {
         for (const block of (event.content ?? []) as any[]) {
@@ -285,12 +328,13 @@ async function pollSessionTurn(
       return {
         outputText: outputChunks.join(''),
         afterCreatedAt,
+        pending: false,
         stopped: false,
       };
     }
 
     const remainingMs = deadline - Date.now();
-    if (remainingMs > 0) {
+    if (remainingMs > 0 && !hasBufferedPage) {
       await new Promise(resolve => setTimeout(resolve, Math.min(3000, remainingMs)));
     }
   }
@@ -304,10 +348,105 @@ async function completeFromDirectPost(runId: number, evidence: RunEvidence) {
   );
   return {
     run_id: runId,
+    status: 'completed' as const,
+    pending: false,
     inserted: nonNegativeCount(evidence.events_extracted),
     skipped: nonNegativeCount(evidence.events_skipped_dup),
     invalid: nonNegativeCount(evidence.events_errored),
     events: [],
+  };
+}
+
+function pendingRun(runId: number, busy = false): AgentRunProgress {
+  return {
+    run_id: runId,
+    status: 'running',
+    pending: true,
+    ...(busy ? { busy: true } : {}),
+    inserted: 0,
+    skipped: 0,
+    invalid: 0,
+    events: [],
+  };
+}
+
+function stoppedRun(runId: number): AgentRunProgress {
+  return {
+    run_id: runId,
+    status: 'stopped',
+    pending: false,
+    inserted: 0,
+    skipped: 0,
+    invalid: 0,
+    events: [],
+  };
+}
+
+async function failRun(runId: number, message: string): Promise<AgentRunProgress> {
+  await pool.query(
+    `UPDATE agent_runs SET status='failed', finished_at=NOW(), error_log=?
+     WHERE id=? AND status='running'`,
+    [JSON.stringify([message]), runId],
+  );
+  return {
+    run_id: runId,
+    status: 'failed',
+    pending: false,
+    inserted: 0,
+    skipped: 0,
+    invalid: 0,
+    errors: [message],
+    events: [],
+  };
+}
+
+async function persistAgentOutput(
+  events: any[],
+  source: any,
+  runId: number,
+  options: { expectedCorrectionEventId?: number } = {},
+): Promise<AgentRunProgress> {
+  const preWriteStatusResult = await pool.query(
+    'SELECT status FROM agent_runs WHERE id=?',
+    [runId],
+  ) as any;
+  const preWriteRun = Array.isArray(preWriteStatusResult?.[0])
+    ? preWriteStatusResult[0][0]
+    : null;
+  if (preWriteRun?.status === 'stopped') return stoppedRun(runId);
+  if (preWriteRun?.status !== 'running') {
+    throw new Error('Agent run lease is no longer active');
+  }
+
+  const result = await persistExtractedEvents(events, source, runId, options);
+  if (options.expectedCorrectionEventId !== undefined && result.inserted.length !== 1) {
+    throw new Error('Correction agent did not return one contract-valid reviewable event');
+  }
+  await pool.query(
+    `UPDATE agent_runs SET
+       status='completed', finished_at=NOW(),
+       events_found=?, events_extracted=?, events_skipped_dup=?,
+       events_errored=?, error_log=?
+     WHERE id=? AND status='running'`,
+    [
+      events.length,
+      result.inserted.length,
+      result.duplicates,
+      result.invalid,
+      result.errors.length ? JSON.stringify(result.errors) : null,
+      runId,
+    ],
+  );
+
+  return {
+    run_id: runId,
+    status: 'completed',
+    pending: false,
+    inserted: result.inserted.length,
+    skipped: result.skipped,
+    invalid: result.invalid,
+    errors: result.errors,
+    events: result.inserted,
   };
 }
 
@@ -324,7 +463,9 @@ const EXTRACTION_CONTRACT = `Use the CommunityHub payload contract exactly:
 - Include only future or currently ongoing records; at least one session must not have ended.
 - locationType is ph2/on/bo/ne. ph2 and bo require location; on and bo require urlLink.
 - display is all (all public screens), ps (school screens), sps (school + public screens), or ss (specific screens). ss requires one or more positive integer screensIds.
-- Never invent facts. Do not infer missing details or reuse stale facts. Re-read the current source each run and return only the JSON array of events.`;
+- Never invent facts. Do not infer missing details or reuse stale facts. Re-read the current source each run and return only the JSON array of events.
+
+${COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS}`;
 
 function getClient(apiKey: string) {
   // In test env the SDK is mocked — don't throw on missing key
@@ -389,9 +530,8 @@ export async function triggerAgentRun(
       events: [{ type: 'user.message', content: [{ type: 'text', text: userMessage }] }],
     } as any);
 
-    // 3. Long-poll events.list() with created_at[gt] cursor until session.status_idle.
-    // Keep the deadline below the route's five-minute serverless limit so the
-    // catch block can persist a useful failure instead of leaving a stale run.
+    // 3. Poll events.list() until session.status_idle or this serverless slice
+    // ends. A pending result is handed to the continuation worker by the route.
     console.log(`[agentRunner] run=${runId} session=${session.id} polling start`);
     const configuredTimeout = Number(process.env.AGENT_RUN_TIMEOUT_MS);
     const TIMEOUT_MS = Number.isFinite(configuredTimeout) && configuredTimeout > 0
@@ -405,9 +545,8 @@ export async function triggerAgentRun(
       deadline,
       TIMEOUT_MS,
     );
-    if (turn.stopped) {
-      return { run_id: runId, inserted: 0, skipped: 0, invalid: 0, events: [] };
-    }
+    if (turn.stopped) return stoppedRun(runId);
+    if (turn.pending) return pendingRun(runId);
     console.log(`[agentRunner] run=${runId} session idle — extraction turn complete`);
 
     let repairAttempts = 0;
@@ -423,7 +562,7 @@ export async function triggerAgentRun(
         if (repairAttempts > 0) {
           const repairEvidence = await readRunEvidence(runId);
           if (repairEvidence?.status === 'stopped') {
-            return { run_id: runId, inserted: 0, skipped: 0, invalid: 0, events: [] };
+            return stoppedRun(runId);
           }
           if (hasDirectPostEvidence(repairEvidence)) {
             return completeFromDirectPost(runId, repairEvidence);
@@ -437,7 +576,7 @@ export async function triggerAgentRun(
       // successful only when this exact run has durable counters or rows.
       const evidence = await readRunEvidence(runId);
       if (evidence?.status === 'stopped') {
-        return { run_id: runId, inserted: 0, skipped: 0, invalid: 0, events: [] };
+        return stoppedRun(runId);
       }
       if (hasDirectPostEvidence(evidence)) {
         return completeFromDirectPost(runId, evidence);
@@ -466,53 +605,11 @@ export async function triggerAgentRun(
         TIMEOUT_MS,
         turn.afterCreatedAt,
       );
-      if (turn.stopped) {
-        return { run_id: runId, inserted: 0, skipped: 0, invalid: 0, events: [] };
-      }
+      if (turn.stopped) return stoppedRun(runId);
+      if (turn.pending) return pendingRun(runId);
       console.log(`[agentRunner] run=${runId} repair turn ${repairAttempts} complete`);
     }
-
-    const preWriteStatusResult = await pool.query(
-      'SELECT status FROM agent_runs WHERE id=?',
-      [runId],
-    ) as any;
-    const preWriteRun = Array.isArray(preWriteStatusResult?.[0])
-      ? preWriteStatusResult[0][0]
-      : null;
-    if (preWriteRun?.status === 'stopped') {
-      return { run_id: runId, inserted: 0, skipped: 0, invalid: 0, events: [] };
-    }
-    if (preWriteRun?.status !== 'running') {
-      throw new Error('Agent run lease is no longer active');
-    }
-
-    // Write events to MySQL
-    const result = await persistExtractedEvents(events, source, runId, options);
-    // Close run with stats
-    await pool.query(
-      `UPDATE agent_runs SET
-         status='completed', finished_at=NOW(),
-         events_found=?, events_extracted=?, events_skipped_dup=?,
-         events_errored=?, error_log=?
-       WHERE id=? AND status='running'`,
-      [
-        events.length,
-        result.inserted.length,
-        result.duplicates,
-        result.invalid,
-        result.errors.length ? JSON.stringify(result.errors) : null,
-        runId,
-      ]
-    );
-
-    return {
-      run_id: runId,
-      inserted: result.inserted.length,
-      skipped: result.skipped,
-      invalid: result.invalid,
-      errors: result.errors,
-      events: result.inserted,
-    };
+    return persistAgentOutput(events, source, runId, options);
 
   } catch (err: any) {
     await pool.query(
@@ -521,6 +618,284 @@ export async function triggerAgentRun(
       [JSON.stringify([errorMessage(err)]), runId]
     );
     throw err;
+  }
+}
+
+type ContinuationRunRow = {
+  run_id: number;
+  run_status: 'running' | 'completed' | 'failed' | 'stopped';
+  started_at: Date | string;
+  session_id: string | null;
+  correction_event_id: number | null;
+  id: number;
+  name: string;
+  agent_id: string;
+  active: number | boolean | string;
+  [key: string]: unknown;
+};
+
+async function listAllSessionEvents(client: any, sessionId: string): Promise<any[]> {
+  const events: any[] = [];
+  const seenCursors = new Set<string>();
+  let page = await client.beta.sessions.events.list(sessionId, {
+    limit: 100,
+    order: 'asc',
+  } as any) as any;
+
+  for (let pageCount = 0; pageCount < 100; pageCount++) {
+    events.push(...(page.data ?? []));
+    const cursor = typeof page.next_page === 'string' ? page.next_page : '';
+    if (!cursor) return events;
+    if (seenCursors.has(cursor)) throw new Error('Agent session pagination cursor repeated');
+    seenCursors.add(cursor);
+    page = await client.beta.sessions.events.list(sessionId, {
+      page: cursor,
+      limit: 100,
+      order: 'asc',
+    } as any) as any;
+  }
+
+  throw new Error('Agent session exceeded the safe pagination limit');
+}
+
+function currentTurn(events: any[]): { outputText: string; repairAttempts: number } {
+  let lastUserMessage = -1;
+  let userMessages = 0;
+  for (let index = 0; index < events.length; index++) {
+    if (events[index]?.type === 'user.message') {
+      lastUserMessage = index;
+      userMessages++;
+    }
+  }
+
+  const turnEvents = events.slice(lastUserMessage + 1);
+  return {
+    outputText: turnEvents
+      .filter(event => event?.type === 'agent.message')
+      .flatMap(event => event.content ?? [])
+      .filter((block: any) => block?.type === 'text' && block.text)
+      .map((block: any) => block.text)
+      .join(''),
+    repairAttempts: Math.max(0, userMessages - 1),
+  };
+}
+
+function retryableContinuationError(error: unknown): boolean {
+  const candidate = error as { status?: unknown; code?: unknown } | null;
+  const status = Number(candidate?.status);
+  if (status === 408 || status === 409 || status === 429 || status >= 500) return true;
+  return new Set([
+    'ECONNRESET',
+    'ECONNREFUSED',
+    'ETIMEDOUT',
+    'EAI_AGAIN',
+    'UND_ERR_CONNECT_TIMEOUT',
+  ]).has(String(candidate?.code || ''));
+}
+
+function terminalRunProgress(row: ContinuationRunRow): AgentRunProgress {
+  return {
+    run_id: Number(row.run_id),
+    status: row.run_status,
+    pending: false,
+    inserted: 0,
+    skipped: 0,
+    invalid: 0,
+    events: [],
+  };
+}
+
+/**
+ * Advance a managed-agent run after its original serverless monitoring slice.
+ * This is intentionally one-shot: callers poll it periodically, and only the
+ * invocation that observes a terminal idle event paginates and persists output.
+ */
+export async function continueAgentRun(
+  runId: number,
+  anthropicKey: string,
+): Promise<AgentRunProgress> {
+  const lockName = `agent-finalize:${runId}`;
+  let lockConn: PoolConnection | null = null;
+  let lockAcquired = false;
+  try {
+    lockConn = await pool.getConnection();
+    const [[lock]] = await lockConn.query('SELECT GET_LOCK(?, 0) AS acquired', [lockName]) as any;
+    if (Number(lock?.acquired) !== 1) return pendingRun(runId, true);
+    lockAcquired = true;
+
+    const [[row]] = await pool.query(
+      `SELECT ar.id AS run_id, ar.status AS run_status, ar.started_at,
+              ar.session_id, ar.correction_event_id, s.*
+       FROM agent_runs ar
+       JOIN sources s ON s.id=ar.source_id
+       WHERE ar.id=? LIMIT 1`,
+      [runId],
+    ) as any as [[ContinuationRunRow | undefined]];
+    if (!row) throw new Error(`Agent run ${runId} not found`);
+    if (row.run_status !== 'running') return terminalRunProgress(row);
+    if (!row.session_id) return pendingRun(runId);
+
+    const startedAt = new Date(row.started_at).getTime();
+    const maxAgeMs = agentSessionMaxMinutes() * 60_000;
+    if (!Number.isFinite(startedAt) || Date.now() - startedAt >= maxAgeMs) {
+      const client = getClient(anthropicKey);
+      await (client.beta.sessions as any).delete(row.session_id).catch(() => undefined);
+      return failRun(
+        runId,
+        `Agent session exceeded the ${agentSessionMaxMinutes()} minute absolute runtime limit`,
+      );
+    }
+
+    const client = getClient(anthropicKey);
+    const latestPage = await client.beta.sessions.events.list(row.session_id, {
+      limit: 5,
+      order: 'desc',
+    } as any) as any;
+    const latest = (latestPage.data ?? [])[0];
+    if (!latest) return pendingRun(runId);
+
+    if (latest.type === 'session.status_terminated' || latest.type === 'session.error') {
+      return failRun(runId, 'Agent session terminated before producing final output');
+    }
+    if (latest.type !== 'session.status_idle') return pendingRun(runId);
+    if (latest.stop_reason?.type === 'requires_action') {
+      return failRun(runId, 'Agent session requires unsupported client-side action');
+    }
+
+    const sessionEvents = await listAllSessionEvents(client, row.session_id);
+    const { outputText, repairAttempts } = currentTurn(sessionEvents);
+    const parsed = parseAgentOutput(outputText);
+    if (!parsed.ok) {
+      const evidence = await readRunEvidence(runId);
+      if (evidence?.status === 'stopped') return stoppedRun(runId);
+      if (hasDirectPostEvidence(evidence)) return completeFromDirectPost(runId, evidence);
+
+      const maxRepairAttempts = jsonRepairAttempts();
+      if (repairAttempts >= maxRepairAttempts) {
+        return failRun(runId, outputIssueMessage(parsed.issue, repairAttempts));
+      }
+
+      console.warn(
+        `[agentRunner] run=${runId} continuation found invalid output (${parsed.issue}); requesting bounded repair ${repairAttempts + 1}/${maxRepairAttempts}`,
+      );
+      await client.beta.sessions.events.send(row.session_id, {
+        events: [{
+          type: 'user.message',
+          content: [{ type: 'text', text: repairPrompt(parsed.issue) }],
+        }],
+      } as any);
+      return pendingRun(runId);
+    }
+
+    if (repairAttempts > 0) {
+      const evidence = await readRunEvidence(runId);
+      if (evidence?.status === 'stopped') return stoppedRun(runId);
+      if (hasDirectPostEvidence(evidence)) return completeFromDirectPost(runId, evidence);
+    }
+
+    return persistAgentOutput(parsed.events, row, runId, {
+      expectedCorrectionEventId: row.correction_event_id == null
+        ? undefined
+        : Number(row.correction_event_id),
+    });
+  } catch (error) {
+    const message = errorMessage(error);
+    console.error(`[agentRunner] continuation run=${runId} failed:`, message);
+    if (retryableContinuationError(error)) {
+      return {
+        ...pendingRun(runId),
+        errors: [message],
+      };
+    }
+    return failRun(runId, message);
+  } finally {
+    if (lockConn) {
+      let releaseConnection = true;
+      if (lockAcquired) {
+        try {
+          const [[released]] = await lockConn.query(
+            'SELECT RELEASE_LOCK(?) AS released',
+            [lockName],
+          ) as any;
+          if (Number(released?.released) !== 1) {
+            throw new Error('Database did not confirm continuation lock release');
+          }
+        } catch (error) {
+          console.error(`[agentRunner] continuation lock release failed for run=${runId}:`, error);
+          lockConn.destroy();
+          releaseConnection = false;
+        }
+      }
+      if (releaseConnection) lockConn.release();
+    }
+  }
+}
+
+/**
+ * Monitor one resumable session for a bounded serverless slice. The renewable
+ * row lease prevents duplicate UI/workflow requests from creating competing
+ * poll loops without tying up a database connection for the whole slice.
+ */
+export async function monitorAgentRun(
+  runId: number,
+  anthropicKey: string,
+  sliceMs = AGENT_CONTINUATION_SLICE_MS,
+): Promise<AgentRunProgress> {
+  const leaseToken = randomUUID();
+  const [claim] = await pool.query(
+    `UPDATE agent_runs
+     SET continuation_token=?,
+         continuation_lease_until=DATE_ADD(NOW(3), INTERVAL ${AGENT_CONTINUATION_LEASE_SECONDS} SECOND)
+     WHERE id=? AND status='running' AND session_id IS NOT NULL
+       AND (continuation_lease_until IS NULL OR continuation_lease_until < NOW(3))`,
+    [leaseToken, runId],
+  ) as any;
+
+  if (Number(claim?.affectedRows || 0) !== 1) {
+    const [[row]] = await pool.query(
+      'SELECT id AS run_id, status AS run_status FROM agent_runs WHERE id=? LIMIT 1',
+      [runId],
+    ) as any;
+    if (row && row.run_status !== 'running') return terminalRunProgress(row);
+    return pendingRun(runId, true);
+  }
+
+  const deadline = Date.now() + Math.max(1, sliceMs);
+  try {
+    while (true) {
+      const [renewal] = await pool.query(
+        `UPDATE agent_runs
+         SET continuation_lease_until=DATE_ADD(NOW(3), INTERVAL ${AGENT_CONTINUATION_LEASE_SECONDS} SECOND)
+         WHERE id=? AND status='running' AND continuation_token=?`,
+        [runId, leaseToken],
+      ) as any;
+      if (Number(renewal?.affectedRows || 0) !== 1) {
+        const [[row]] = await pool.query(
+          'SELECT id AS run_id, status AS run_status FROM agent_runs WHERE id=? LIMIT 1',
+          [runId],
+        ) as any;
+        if (row && row.run_status !== 'running') return terminalRunProgress(row);
+        return pendingRun(runId, true);
+      }
+
+      const result = await continueAgentRun(runId, anthropicKey);
+      if (!result.pending) return result;
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) return pendingRun(runId);
+      await new Promise(resolve => setTimeout(
+        resolve,
+        Math.min(AGENT_CONTINUATION_POLL_MS, remainingMs),
+      ));
+    }
+  } finally {
+    await pool.query(
+      `UPDATE agent_runs
+       SET continuation_token=NULL, continuation_lease_until=NULL
+       WHERE id=? AND continuation_token=?`,
+      [runId, leaseToken],
+    ).catch(error => {
+      console.error(`[agentRunner] continuation lease release failed for run=${runId}:`, error);
+    });
   }
 }
 
