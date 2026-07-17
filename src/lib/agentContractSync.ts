@@ -50,6 +50,7 @@ Every object must follow this exact contract:
 - Punctuation: never use em dashes or en dashes in any text field; write a plain hyphen (-) or restructure the sentence.
 - extendedDescription: optional factual detail, at most 1000 characters. Never include URLs, the street address, or facts already carried by the dedicated location, date, time, registration, sponsor, or contact fields; never state the event's date or time in description or extendedDescription because the sessions field carries the schedule and the calendar displays it. Never pad it with filler or invented content. When the entire source description fits within 200 characters, put it in description and omit extendedDescription entirely. Refer to the venue by its actual name (for example "at Common Ground"), never ambiguously as "here" or "there"; if such a sentence is unnecessary, omit it.
 - image_cdn_url: REQUIRED. Before returning any event, find its image on the source page (the event photo, flyer, or the page's share image / og:image all count) and set image_cdn_url to that image's public HTTPS URL. An event without its source image is incomplete for review and will be held from publishing. Omit the field only when you actually checked the event's page, including its share metadata, and it displays no image at all.
+- fieldNotes: optional object. Whenever you leave out a field the platform expects because the source genuinely provides no value - most importantly image_cdn_url, but also a session end time or the website - add an entry to fieldNotes mapping that field name to one short factual sentence explaining why (for example {"image_cdn_url": "The event page and the organization's social channels publish no image for this event."}). State only what you actually checked. Never use fieldNotes to carry a value the field itself should hold, and never invent a reason.
 - registrationUrl: when the source says registration is required, set this to the exact registration link. The platform places it in the registration button and ends the short description with "Registration required." Never put a registration URL inside description or extendedDescription.
 - website: REQUIRED. Set it to the event's public web page URL, normally the page you extracted the event from; when the event has no page of its own, use the organization's website. Never leave it empty.
 - sponsors: non-empty string array containing only organizers or sponsors supported by the current source.
@@ -196,6 +197,7 @@ export function assertSafePrompt(prompt: string) {
     'Never compare IDs',
     're-checks every candidate against both inventories server-side',
     'website: REQUIRED',
+    'add an entry to fieldNotes',
     'Register for',
     'registrationUrl',
     'Registration required.',

@@ -193,7 +193,7 @@ async function dispatchOne(event: CandidateRow, origin: string): Promise<{
     ? [
         'This event is missing its REQUIRED image (image_cdn_url), and the platform already scanned the event page section without finding one.',
         `Find the event's real image from the source's official channels: the event page itself (${String(event.calendar_source_url || 'no page recorded')}), the organization's website or its official social media post for this exact event, or the venue's official page for this exact event. Set image_cdn_url to that image's public HTTPS URL.`,
-        'Never attach an unrelated or generic image and never fabricate one; if no official image for this event exists anywhere, return the event unchanged apart from fixSummary saying so.',
+        'Never attach an unrelated or generic image and never fabricate one; if no official image for this event exists anywhere, leave image_cdn_url unset and set fieldNotes.image_cdn_url to one factual sentence saying so and naming which channels you checked.',
         'Keep every other field exactly as the source supports it.',
       ].join(' ')
     : [

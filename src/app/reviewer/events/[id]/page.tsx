@@ -356,6 +356,26 @@ export default function ReviewEventPage() {
     && item.code !== 'image_missing'
     && item.code !== 'website_missing'
   ));
+  // The agent's explanations for fields the source left empty (why there is
+  // no image, no end time, etc.), shown on the matching readiness check.
+  const fieldNotes = parseJson<Record<string, string>>(event?.field_notes, {});
+  const fieldNote = (...keys: string[]): string => {
+    for (const key of keys) {
+      const value = fieldNotes?.[key];
+      if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+    return '';
+  };
+  const FIELD_NOTE_LABELS: Record<string, string> = {
+    image_cdn_url: 'Event image',
+    website: 'Website',
+    endTime: 'End time',
+    session_end: 'End time',
+    sessions: 'Sessions',
+    location: 'Location',
+    contactEmail: 'Contact email',
+    phone: 'Phone',
+  };
   const rejectionReasonCodes = normalizeStringArray(event?.rejection_reason_codes);
   const rejectionReviewerNote = String(event?.rejection_reviewer_note ?? '').trim();
   const isPreservedDuplicate = event?.status === 'duplicate';
@@ -461,7 +481,9 @@ export default function ReviewEventPage() {
         detail: postKind !== 'an' && sessions.some(session => (
           Number(session.startTime) > 0 && Number(session.endTime) === Number(session.startTime)
         ))
-          ? 'The source stated no end time. Set when each session ends; the calendar cannot publish an event that ends the moment it starts.'
+          ? `The source stated no end time. Set when each session ends; the calendar cannot publish an event that ends the moment it starts.${
+              fieldNote('endTime', 'session_end', 'sessions') ? ` Agent note: ${fieldNote('endTime', 'session_end', 'sessions')}` : ''
+            }`
           : 'Every session ends after it starts.',
         pass: postKind === 'an' || !sessions.some(session => (
           Number(session.startTime) > 0 && Number(session.endTime) === Number(session.startTime)
@@ -472,7 +494,9 @@ export default function ReviewEventPage() {
         label: 'Event image',
         detail: (imageUrl || event?.has_image_data)
           ? 'A poster is attached.'
-          : 'No image came from the source. Paste the image URL from the event page; events publish with their source image.',
+          : fieldNote('image_cdn_url')
+            ? `The agent found no image: ${fieldNote('image_cdn_url')} Paste an image URL to publish with one.`
+            : 'No image came from the source. Paste the image URL from the event page; events publish with their source image.',
         pass: Boolean(imageUrl || event?.has_image_data),
       },
       {
@@ -480,7 +504,9 @@ export default function ReviewEventPage() {
         label: 'Website',
         detail: website.trim()
           ? 'A public web page is attached.'
-          : 'No website came from the source. Paste the event page or the organization site URL; every published record carries one.',
+          : fieldNote('website')
+            ? `The agent found no website: ${fieldNote('website')} Paste the event page or the organization site URL.`
+            : 'No website came from the source. Paste the event page or the organization site URL; every published record carries one.',
         pass: website.trim().length > 0,
       },
       {
@@ -1155,6 +1181,19 @@ export default function ReviewEventPage() {
                       </div>
                     ))}
                   </div>
+                  {Object.keys(fieldNotes || {}).length > 0 && (
+                    <div className="alert alert--info" style={{ marginTop: 14, alignItems: 'flex-start' }}>
+                      <AlertTriangle size={16} aria-hidden="true" />
+                      <span>
+                        <strong>Why the source left fields empty (from the agent):</strong>
+                        <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                          {Object.entries(fieldNotes).map(([field, note]) => (
+                            <li key={field}><strong>{FIELD_NOTE_LABELS[field] ?? field}:</strong> {note}</li>
+                          ))}
+                        </ul>
+                      </span>
+                    </div>
+                  )}
                   {ingestionValidationIssues.length > 0 && (
                     <div className="alert alert--error" style={{ marginTop: 14 }}>
                       <AlertTriangle size={16} aria-hidden="true" />

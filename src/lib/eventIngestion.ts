@@ -160,6 +160,31 @@ function parseJsonArray(value: unknown): unknown[] {
   return Array.isArray(parsed) ? parsed : [];
 }
 
+const FIELD_NOTE_KEY_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]{0,40}$/;
+const MAX_FIELD_NOTES = 12;
+const MAX_FIELD_NOTE_LENGTH = 400;
+
+/**
+ * The agent's explanations for fields it could not fill (2026-07-17: reviewers
+ * asked to see WHY a required field is empty instead of a blank box). Accepts
+ * a `fieldNotes` object mapping a field name to one factual sentence; values
+ * are sanitized, capped, and never treated as instructions.
+ */
+function parseFieldNotes(value: unknown): Record<string, string> | null {
+  const record = asRecord(value);
+  if (!record) return null;
+  const notes: Record<string, string> = {};
+  let count = 0;
+  for (const [key, raw] of Object.entries(record)) {
+    if (!FIELD_NOTE_KEY_PATTERN.test(key)) continue;
+    const note = typeof raw === 'string' ? raw.replace(/\s+/g, ' ').trim() : '';
+    if (!note) continue;
+    notes[key] = note.slice(0, MAX_FIELD_NOTE_LENGTH);
+    if (++count >= MAX_FIELD_NOTES) break;
+  }
+  return count > 0 ? notes : null;
+}
+
 /**
  * Stamp stable organization facts from the integration configuration instead
  * of relying on the agent to rediscover them each run (2026-07-16 meeting,
@@ -654,6 +679,7 @@ export async function persistExtractedEvents(
         payload.description,
         payload.extendedDescription,
       );
+      const fieldNotes = parseFieldNotes(raw.fieldNotes ?? raw.field_notes);
 
       // Whole-content match against the retained intake queue. A correction
       // (either kind) is exempt: it would only match the original it fixes.
@@ -925,9 +951,9 @@ export async function persistExtractedEvents(
             url_link, display, screen_ids, buttons, contact_email, email,
             phone, website, image_cdn_url, image_data, calendar_source_name,
             calendar_source_url, geo_scope, geo_json, corrected_from_id,
-            sent_for_fix_by, dedup_key, validation_errors, duplicate_of_id,
-            communityhub_match, status
-          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            sent_for_fix_by, dedup_key, validation_errors, field_notes,
+            duplicate_of_id, communityhub_match, status
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
           [
             source.id,
             runId,
@@ -961,6 +987,7 @@ export async function persistExtractedEvents(
             cleanText(fixEntry?.sent_by_email, 150),
             dedupKey,
             validationErrors.length ? JSON.stringify(validationErrors) : null,
+            fieldNotes ? JSON.stringify(fieldNotes) : null,
             duplicateOfLocalId,
             isCommunityHubDuplicate
               ? JSON.stringify(comparisonEntry.communityhub_match)

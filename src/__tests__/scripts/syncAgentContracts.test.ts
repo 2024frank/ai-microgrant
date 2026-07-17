@@ -91,6 +91,7 @@ using the entire content
 Never compare IDs
 re-checks every candidate against both inventories server-side
 website: REQUIRED
+add an entry to fieldNotes
 Register for
 registrationUrl
 Registration required.
@@ -134,6 +135,7 @@ using the entire content
 Never compare IDs
 re-checks every candidate against both inventories server-side
 website: REQUIRED
+add an entry to fieldNotes
 Register for
 registrationUrl
 Registration required.

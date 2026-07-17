@@ -25,7 +25,7 @@ export async function GET(
             re.communityhub_checked_at, re.communityhub_moderation_error,
             re.corrected_from_id, re.superseded_by_id, re.sent_for_fix_by,
             re.sent_for_correction, re.dedup_key, re.validation_errors,
-            re.duplicate_of_id, re.communityhub_match,
+            re.field_notes, re.duplicate_of_id, re.communityhub_match,
             re.publish_started_at, re.created_at, re.updated_at,
             s.name AS source_name, s.slug AS source_slug,
             s.source_kind AS source_kind, s.source_type AS source_type,

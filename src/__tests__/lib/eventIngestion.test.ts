@@ -78,6 +78,26 @@ describe('persistExtractedEvents', () => {
     expect(db.mockConn.release).toHaveBeenCalledTimes(1);
   });
 
+  it('stores the agent field-note explaining why a required field is empty', async () => {
+    const noImage = { ...VALID_EVENT, image_cdn_url: undefined };
+    await persistExtractedEvents([{
+      ...noImage,
+      fieldNotes: {
+        image_cdn_url: '  The event page and the org social channels publish no image for this event.  ',
+        bogus$key: 'ignored because the key is not a plain field name',
+      },
+    }], SOURCE, 12);
+
+    const insert = db.mockConn.query.mock.calls.find(
+      ([sql]: [string]) => sql.includes('INSERT INTO raw_events'),
+    );
+    // field_notes sits between validation_errors and duplicate_of_id.
+    const stored = JSON.parse(insert![1].at(-4));
+    expect(stored).toEqual({
+      image_cdn_url: 'The event page and the org social channels publish no image for this event.',
+    });
+  });
+
   it('auto-rejects drafts missing required fields and preserves the reason (meeting item 12)', async () => {
     const result = await persistExtractedEvents([{
       ...VALID_EVENT,
@@ -110,11 +130,11 @@ describe('persistExtractedEvents', () => {
       ([sql]: [string]) => sql.includes('INSERT INTO raw_events'),
     );
     expect(insert).toBeDefined();
-    // Parameter layout: [..., validation_errors, duplicate_of_id,
+    // Parameter layout: [..., validation_errors, field_notes, duplicate_of_id,
     // communityhub_match, status]. The candidate is preserved with its
     // field-level evidence and a 'rejected' status.
     expect(insert![1].at(-1)).toBe('rejected');
-    const storedIssues = JSON.parse(insert![1].at(-4));
+    const storedIssues = JSON.parse(insert![1].at(-5));
     expect(storedIssues).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: 'postTypeId[0]' }),
     ]));
