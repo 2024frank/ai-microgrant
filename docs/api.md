@@ -476,6 +476,7 @@ One-time route to seed initial admin users. Protected by `SETUP_SECRET` env var.
 | `ANTHROPIC_API_KEY` | Yes | Anthropic API key for agents |
 | `SOURCE_BUILDER_ENVIRONMENT_ID` | Yes | Shared Claude environment ID |
 | `SOURCE_BUILDER_VAULT_ID` | Yes | Shared Claude vault ID |
+| `AGENT_JSON_REPAIR_ATTEMPTS` | Optional | Same-session JSON repair attempts; defaults to 1 and is hard-capped at 2 |
 | `RESEND_API_KEY` | Yes | Resend email API key |
 | `CRON_SECRET` | Yes | Secret for Vercel cron job |
 | `NEXT_PUBLIC_APP_URL` | Yes | Full app URL (e.g. https://ai-microgrant-research-oberlin.vercel.app) |
