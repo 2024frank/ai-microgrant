@@ -7,24 +7,43 @@
 -- finish either side after a timeout or process crash.
 -- ============================================================
 
-CREATE TABLE IF NOT EXISTS communityhub_updates (
-  id                    BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  operation_key         CHAR(36) NOT NULL,
-  raw_event_id          INT UNSIGNED NOT NULL,
-  communityhub_post_id  VARCHAR(80) NOT NULL,
-  original_status       VARCHAR(32) NOT NULL,
-  status                ENUM('sending','ambiguous','succeeded','failed') NOT NULL DEFAULT 'sending',
-  ch_edits              JSON NOT NULL,
-  local_edits           JSON NOT NULL,
-  audit_entries         JSON NOT NULL,
-  reviewer_id           INT UNSIGNED NULL,
-  response              JSON NULL,
-  error_message         TEXT NULL,
-  created_at            DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at            DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  UNIQUE KEY uq_ch_update_operation (operation_key),
-  KEY idx_ch_update_pending (status, updated_at),
-  KEY idx_ch_update_event (raw_event_id, created_at),
-  CONSTRAINT fk_ch_update_event
-    FOREIGN KEY (raw_event_id) REFERENCES raw_events(id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+-- The legacy production database predates the baseline migration and has a
+-- signed raw_events.id. Fresh databases use INT UNSIGNED. MySQL requires both
+-- sides of a foreign key to have the exact same integer signedness, so derive
+-- the outbox column from the live parent instead of assuming either shape.
+SET @raw_event_id_type := (
+  SELECT COLUMN_TYPE
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'raw_events'
+    AND COLUMN_NAME = 'id'
+  LIMIT 1
+);
+SET @raw_event_id_type := COALESCE(@raw_event_id_type, 'BIGINT UNSIGNED');
+
+SET @create_communityhub_updates := CONCAT(
+  'CREATE TABLE IF NOT EXISTS communityhub_updates (',
+  'id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,',
+  'operation_key CHAR(36) NOT NULL,',
+  'raw_event_id ', @raw_event_id_type, ' NOT NULL,',
+  'communityhub_post_id VARCHAR(80) NOT NULL,',
+  'original_status VARCHAR(32) NOT NULL,',
+  'status ENUM(''sending'',''ambiguous'',''succeeded'',''failed'') NOT NULL DEFAULT ''sending'',',
+  'ch_edits JSON NOT NULL,',
+  'local_edits JSON NOT NULL,',
+  'audit_entries JSON NOT NULL,',
+  'reviewer_id INT UNSIGNED NULL,',
+  'response JSON NULL,',
+  'error_message TEXT NULL,',
+  'created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,',
+  'updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,',
+  'UNIQUE KEY uq_ch_update_operation (operation_key),',
+  'KEY idx_ch_update_pending (status, updated_at),',
+  'KEY idx_ch_update_event (raw_event_id, created_at),',
+  'CONSTRAINT fk_ch_update_event ',
+  'FOREIGN KEY (raw_event_id) REFERENCES raw_events(id) ON DELETE CASCADE',
+  ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
+);
+PREPARE create_communityhub_updates_stmt FROM @create_communityhub_updates;
+EXECUTE create_communityhub_updates_stmt;
+DEALLOCATE PREPARE create_communityhub_updates_stmt;
