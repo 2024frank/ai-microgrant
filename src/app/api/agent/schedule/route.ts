@@ -232,9 +232,25 @@ export async function GET(req: NextRequest) {
     due.map(({ source, slot }) => dispatchSource(req, source, slot, cronSecret)),
   );
 
-  // Requeue system-rejected "Required fields are missing" drafts through the
-  // correction workflow (meeting item 12). Fire-and-report; a failure here
-  // never blocks source dispatching.
+  // Conform the review queue to the agreed format (deterministic corrections,
+  // poster repair, reject-or-leave), then requeue system-rejected drafts
+  // through the correction workflow (meeting item 12). Both are
+  // fire-and-report; a failure here never blocks source dispatching.
+  let queueConformance: unknown = null;
+  try {
+    const response = await fetch(new URL('/api/agent/queue-conformance', req.url), {
+      method: 'POST',
+      headers: { 'x-cron-secret': cronSecret },
+      cache: 'no-store',
+      signal: AbortSignal.timeout(25_000),
+    });
+    queueConformance = await readJson(response);
+  } catch (error) {
+    queueConformance = {
+      error: error instanceof Error ? error.message : 'queue-conformance sweep failed',
+    };
+  }
+
   let systemCorrections: unknown = null;
   try {
     const response = await fetch(new URL('/api/agent/system-corrections', req.url), {
@@ -264,6 +280,7 @@ export async function GET(req: NextRequest) {
     failed,
     invalid_schedules: invalid,
     results,
+    queue_conformance: queueConformance,
     system_corrections: systemCorrections,
   }, { status: responseStatus });
 }

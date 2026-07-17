@@ -311,6 +311,17 @@ Cron endpoint — triggered by Vercel Cron daily at 6am. Secured with `CRON_SECR
 Dispatches original-organization sources before aggregators and then invokes
 `/api/agent/system-corrections`.
 
+#### `POST /api/agent/queue-conformance`
+Cron/`CRON_SECRET` endpoint, also run on every scheduler tick. Brings pending
+review-queue events up to the agreed format: applies the deterministic
+corrections in place (marker sentences, URL/address stripping, registration
+button, exact Apollo titles; every change audited in `field_edit_log` with a
+NULL reviewer), repairs posters (remote images materialized to stored bytes,
+permanently dead images removed, transient failures flagged), and rejects
+events that still miss required fields or whose opportunity-announcement
+titles state no action (`format_nonconforming`) so the correction agent can
+fix them; everything else stays queued for human approval.
+
 #### `POST /api/agent/system-corrections`
 Cron/`CRON_SECRET` endpoint. Requeues events the platform auto-rejected as
 "Required fields are missing" (rejection origin `system`) through the existing

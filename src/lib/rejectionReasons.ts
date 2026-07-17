@@ -4,6 +4,7 @@ export const REJECTION_REASONS = [
   { code: 'duplicate_missed', label: 'Duplicate already in CommunityHub' },
   { code: 'description_hallucinated', label: 'Description contains invented details' },
   { code: 'missing_fields', label: 'Required fields are missing' },
+  { code: 'format_nonconforming', label: 'Does not follow the agreed format' },
   { code: 'wrong_geo_scope', label: 'Geographic scope is wrong' },
   { code: 'not_public_event', label: 'Private or invitation-only' },
   { code: 'wrong_post_type', label: 'Post kind or category is wrong' },

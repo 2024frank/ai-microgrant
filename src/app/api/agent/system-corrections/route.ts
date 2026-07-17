@@ -71,7 +71,10 @@ async function selectCandidates(): Promise<CandidateRow[]> {
        AND re.corrected_from_id IS NULL
        AND re.created_at > DATE_SUB(NOW(), INTERVAL ${MAX_EVENT_AGE_DAYS} DAY)
        AND latest_rejection.rejection_origin='system'
-       AND JSON_CONTAINS(latest_rejection.reason_codes, '"missing_fields"')
+       AND (
+         JSON_CONTAINS(latest_rejection.reason_codes, '"missing_fields"')
+         OR JSON_CONTAINS(latest_rejection.reason_codes, '"format_nonconforming"')
+       )
        AND NOT EXISTS (SELECT 1 FROM needs_fix nf WHERE nf.raw_event_id=re.id)
        -- One automatic attempt per event, ever.
        AND NOT EXISTS (
@@ -125,9 +128,10 @@ async function dispatchOne(event: CandidateRow, origin: string): Promise<{
   }
 
   const notes = [
-    'Required fields are missing on this extracted event.',
-    String(event.rejection_reviewer_note || '').slice(0, 1500),
-    'Re-read the original source and provide every missing required field. Do not invent values the source does not state; if the source truly lacks a required fact, return the event without inventing it.',
+    // The system rejection note leads with the exact problem class
+    // ("Required fields are missing." or the format violation).
+    String(event.rejection_reviewer_note || 'This extracted event does not satisfy the platform contract.').slice(0, 1500),
+    'Re-read the original source and correct only what the note describes. Do not invent values the source does not state; if the source truly lacks a required fact, return the event without inventing it.',
   ].filter(Boolean).join(' ');
 
   const conn = await pool.getConnection();

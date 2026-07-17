@@ -1,0 +1,40 @@
+name: Queue Conformance Sweep
+
+# Manual trigger for POST /api/agent/queue-conformance: brings pending
+# review-queue events up to the agreed 2026-07-16 format (deterministic
+# corrections, poster repair, reject-or-leave ahead of human approval).
+# The scheduler also runs this every dispatch tick; this workflow exists for
+# on-demand sweeps of the whole queue (repeat until checked < 40).
+on:
+  workflow_dispatch:
+
+jobs:
+  sweep:
+    name: Conform pending events
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Invoke conformance endpoint
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -Eeuo pipefail
+          : "${APP_URL:?APP_URL secret is not configured}"
+          : "${CRON_SECRET:?CRON_SECRET secret is not configured}"
+          APP_URL="${APP_URL%/}"
+          RESPONSE="$RUNNER_TEMP/sweep-response.json"
+          curl --silent --show-error --fail-with-body --retry 2 --retry-delay 2 \
+            --connect-timeout 10 --max-time 280 -X POST \
+            "$APP_URL/api/agent/queue-conformance" \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            | tee "$RESPONSE"
+          jq -e '
+            type == "object"
+            and .ok == true
+            and ((.checked | type) == "number")
+            and ((.errors | type) == "number")
+            and .errors == 0
+          ' "$RESPONSE" >/dev/null
+          echo "Queue conformance sweep validated."

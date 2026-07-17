@@ -111,8 +111,9 @@ describe('POST /api/agent/system-corrections', () => {
     expect(needsFixInsert).toBeDefined();
     expect(needsFixInsert[1][0]).toBe(10);
     expect(needsFixInsert[1][1]).toBe(4);
-    expect(needsFixInsert[1][2]).toContain('Required fields are missing');
+    // The system rejection note itself leads the correction instructions.
     expect(needsFixInsert[1][2]).toContain('Location and time are absent');
+    expect(needsFixInsert[1][2]).toContain('Do not invent values');
 
     // The event is flipped to sent_for_correction and the action is logged.
     const claimUpdate = db.mockConn.query.mock.calls.find(
