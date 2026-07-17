@@ -45,4 +45,16 @@ describe('production migration compatibility', () => {
     expect(migration).toContain('communityhub_moderation_status');
     expect(migration).not.toMatch(/UPDATE raw_events\s+SET status\s*=\s*'submitted'/i);
   });
+
+  it('matches the published-update foreign key to the live raw event id type', () => {
+    const migration = readFileSync(
+      join(process.cwd(), 'migrations/0013_communityhub_update_outbox.sql'),
+      'utf8',
+    );
+
+    expect(migration).toContain("TABLE_NAME = 'raw_events'");
+    expect(migration).toContain("COLUMN_NAME = 'id'");
+    expect(migration).toContain("'raw_event_id ', @raw_event_id_type, ' NOT NULL,'");
+    expect(migration).not.toContain('raw_event_id          INT UNSIGNED NOT NULL');
+  });
 });
