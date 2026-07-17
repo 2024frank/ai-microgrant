@@ -236,6 +236,28 @@ describe('CommunityHub payload contract', () => {
     expect(payload.extendedDescription).toBe('Doors open thirty minutes before the workshop begins.');
   });
 
+  it('rejects an event session whose end equals its start (live CommunityHub 500)', () => {
+    const result = validateCommunityHubPayload({
+      ...BASE,
+      sessions: [{ startTime: 2000000000, endTime: 2000000000 }],
+    });
+    expect(result.success).toBe(false);
+    expect((result as any).errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'sessions[0].endTime', code: 'end_equals_start' }),
+    ]));
+  });
+
+  it('keeps an announcement display window valid at a single instant', () => {
+    const result = validateCommunityHubPayload({
+      ...BASE,
+      eventType: 'an',
+      locationType: 'ne',
+      location: undefined,
+      sessions: [{ startTime: 2000000000, endTime: 2000000000 }],
+    });
+    expect(result.success).toBe(true);
+  });
+
   it('rejects descriptions below the documented minimum length', () => {
     expect(errorPaths({ ...BASE, description: 'Too short' })).toContain('description');
   });

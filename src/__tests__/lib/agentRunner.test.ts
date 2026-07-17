@@ -191,7 +191,7 @@ describe('triggerAgentRun — happy path', () => {
     expect(message).toContain('59 Ecolympics or Environmental');
     expect(message).toContain('locationType is ph2/on/bo/ne');
     expect(message).toContain('ps (school screens)');
-    expect(message).toContain('Do not estimate an unstated end time');
+    expect(message).toContain('never invent a duration');
     expect(message).toContain('future or currently ongoing');
     expect(message).toContain('Re-read the current source each run');
   });

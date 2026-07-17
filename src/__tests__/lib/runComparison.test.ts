@@ -47,6 +47,7 @@ function makePost(input: PostInput): CommunityHubInventoryPost {
     timezone: 'America/New_York',
     moderation: input.moderation ?? 'approved',
     raw: {
+      id: input.raw?.id ?? '',
       name: input.name,
       description: input.description ?? '',
       extendedDescription: input.extendedDescription ?? '',

@@ -89,6 +89,15 @@ downloads the image from), `placeId`, `placeName`, `subscribe`, `public`.
 Announcements use `locationType: "ne"` and equal `startTime`/`endTime` when
 there is no duration; the session window is the announcement's display window.
 
+Observed live 2026-07-16 (not in CommunityHub's docs): `POST /post/submit`
+answers `500 "Session Start Date & End Date can not be same"` for an EVENT
+whose session end equals its start (the "Summer Symphony" submission). The
+payload validator therefore rejects equal start/end for non-announcement
+types before submission; when a source states no end time, a reviewer must
+supply one. Whether the same rule applies to announcements contradicts their
+documented sample and has not been observed; the error classifier records
+the evidence if it ever happens.
+
 ### Long-description optionality evidence (requirement 7)
 
 - CommunityHub's payload documentation lists `extendedDescription` under

@@ -29,6 +29,8 @@ export type ComparableEventContent = {
  * run comparisons. The sibling normalized fields exist only for matching.
  */
 export type CommunityHubInventoryPostRaw = {
+  /** CommunityHub's post id, needed to link a verified remote post. */
+  id: string;
   name: string;
   description: string;
   extendedDescription: string;
@@ -378,6 +380,9 @@ function rawLocation(value: unknown): string {
 
 function rawPostEvidence(post: Record<string, unknown>): CommunityHubInventoryPostRaw {
   return {
+    id: typeof post.id === 'number' || typeof post.id === 'string'
+      ? String(post.id).trim()
+      : '',
     name: text(post.name).trim(),
     description: text(post.description).trim(),
     extendedDescription: text(post.extendedDescription).trim(),

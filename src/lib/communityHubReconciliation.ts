@@ -13,6 +13,8 @@ import {
 import {
   recoverSucceededCommunityHubSubmissions,
   releaseStalePreparedCommunityHubSubmissions,
+  resolveUnresolvedCommunityHubSubmissions,
+  type UnresolvedSubmissionResolution,
 } from './communityHubSubmissions';
 
 const CH_BASE = 'https://oberlin.communityhub.cloud/api/legacy/calendar';
@@ -73,6 +75,12 @@ export type ReconciliationSummary = {
   category_drift: number;
   submissions_recovered: number;
   prepared_released: number;
+  unresolved_checked: number;
+  unresolved_linked: number;
+  unresolved_released: number;
+  unresolved_left_manual: number;
+  unresolved_error: string | null;
+  unresolved_results: UnresolvedSubmissionResolution[];
   unchecked: number;
   updates_checked: number;
   updates_succeeded: number;
@@ -344,7 +352,10 @@ export async function reconcileCommunityHub(options: { limit?: number; force?: b
       return {
         checked: 0, approved: 0, pending: 0, rejected: 0, missing: 0,
         unknown: 0, repaired: 0, category_drift: 0, submissions_recovered: 0,
-        prepared_released: 0, unchecked: 0,
+        prepared_released: 0,
+        unresolved_checked: 0, unresolved_linked: 0, unresolved_released: 0,
+        unresolved_left_manual: 0, unresolved_error: null, unresolved_results: [],
+        unchecked: 0,
         updates_checked: 0, updates_succeeded: 0,
         updates_ambiguous: 0, updates_failed: 0, failed: 0,
         skipped_locked: true, results: [], update_results: [],
@@ -369,6 +380,17 @@ export async function reconcileCommunityHub(options: { limit?: number; force?: b
     // A POST can succeed remotely just before the process loses its local DB
     // connection. Finish those durable successes without issuing another POST.
     const submissionsRecovered = await recoverSucceededCommunityHubSubmissions(limit);
+
+    // Unknown-outcome submissions are resolved against the complete verified
+    // inventory: link the post when it provably exists, release the event
+    // when it provably does not. An unreachable inventory just waits.
+    let unresolvedResults: UnresolvedSubmissionResolution[] = [];
+    let unresolvedError: string | null = null;
+    try {
+      unresolvedResults = await resolveUnresolvedCommunityHubSubmissions(limit);
+    } catch (error) {
+      unresolvedError = safeError(error);
+    }
 
     // Replay a bounded number of idempotent PATCH operations before reading moderation. Candidate
     // polling below excludes any edit whose local finalization is unresolved.
@@ -452,6 +474,14 @@ export async function reconcileCommunityHub(options: { limit?: number; force?: b
       category_drift: results.filter(item => item.category_drift).length,
       submissions_recovered: submissionsRecovered,
       prepared_released: preparedReleased,
+      unresolved_checked: unresolvedResults.length,
+      unresolved_linked: unresolvedResults.filter(item => item.outcome === 'linked').length,
+      unresolved_released: unresolvedResults.filter(item => item.outcome === 'released').length,
+      unresolved_left_manual: unresolvedResults.filter(item => (
+        item.outcome === 'left_manual' || item.outcome === 'skipped_expired' || item.outcome === 'error'
+      )).length,
+      unresolved_error: unresolvedError,
+      unresolved_results: unresolvedResults,
       unchecked: Number(backlog?.unchecked || 0),
       updates_checked: updateResults.length,
       updates_succeeded: updateResults.filter(item => item.status === 'succeeded').length,

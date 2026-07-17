@@ -508,6 +508,21 @@ export function validateCommunityHubPayload(input: unknown): CommunityHubPayload
     if (expirationIssue) {
       addIssue(issues, expirationIssue.path, expirationIssue.code, expirationIssue.message);
     }
+    // Observed live 2026-07-16: CommunityHub answers 500 "Session Start Date
+    // & End Date can not be same" for events. Announcements legitimately use
+    // one instant as their display window per CommunityHub's own docs.
+    if (payload.eventType !== 'an') {
+      for (const [index, session] of payload.sessions.entries()) {
+        if (session.endTime === session.startTime) {
+          addIssue(
+            issues,
+            `sessions[${index}].endTime`,
+            'end_equals_start',
+            'CommunityHub rejects events whose end time equals the start time; set the real end time from the source (a reviewer must supply it when the source states none)',
+          );
+        }
+      }
+    }
   }
 
   const needsPhysicalLocation = payload.locationType === 'ph2' || payload.locationType === 'bo';
