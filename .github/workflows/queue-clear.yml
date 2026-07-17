@@ -1,0 +1,39 @@
+name: Clear Pending Queue
+
+# Deliberate operator action: wipes plain pending drafts so fresh agent runs
+# with corrected prompts re-extract everything cleanly. Corrections in
+# flight, rejected records, preserved duplicates, and submitted/published
+# events are untouched. Per-source counts are archived first.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "pending" to confirm wiping the pending review queue'
+        required: true
+
+jobs:
+  clear:
+    name: Wipe pending drafts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Invoke queue-clear endpoint
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          CONFIRM: ${{ github.event.inputs.confirm }}
+        run: |
+          set -Eeuo pipefail
+          : "${APP_URL:?APP_URL secret is not configured}"
+          : "${CRON_SECRET:?CRON_SECRET secret is not configured}"
+          [ "$CONFIRM" = "pending" ] || { echo "confirm input must be exactly 'pending'" >&2; exit 1; }
+          APP_URL="${APP_URL%/}"
+          RESPONSE="$RUNNER_TEMP/clear-response.json"
+          curl --silent --show-error --fail-with-body --retry 2 --retry-delay 2 \
+            --connect-timeout 10 --max-time 60 -X POST \
+            "$APP_URL/api/agent/queue-clear?confirm=pending" \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            | tee "$RESPONSE"
+          jq -e 'type == "object" and .ok == true and ((.deleted_pending | type) == "number")' "$RESPONSE" >/dev/null
+          echo "Pending queue cleared."

@@ -63,6 +63,8 @@ Register for
 registrationUrl
 Registration required.
 never ambiguously as "here" or "there"
+never state the event's date or time in description
+An event without its source image is incomplete for review.
 ${process.env.INGEST_SECRET}
     `)).toThrow('configured ingest secret');
   });

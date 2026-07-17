@@ -247,6 +247,47 @@ describe('applyContentPolicy', () => {
     });
   });
 
+  describe('schedule restatements in the long description', () => {
+    it('removes sentences that restate the event schedule and keeps the rest', () => {
+      const result = applyContentPolicy({
+        title: 'Workshop: Open Pottery Pop In (14+)',
+        description: 'Two-hour beginner pottery wheel workshop for ages 14+ at FAVA.',
+        extendedDescription:
+          'Meets August 19, 2026, from 5:30 to 7:30pm. Get a basic introduction to '
+          + 'throwing on the wheel in this two-hour beginner workshop. Keep your best '
+          + 'pot, choose a glaze, and pick it up from the shop when ready. Instructor: Erin McCarty.',
+      });
+      const extended = String(result.record.extendedDescription ?? '');
+      expect(extended).not.toContain('August 19');
+      expect(extended).not.toContain('5:30');
+      expect(extended).toContain('Get a basic introduction');
+      expect(extended).toContain('Instructor: Erin McCarty.');
+      expect(result.adjustments.join(' ')).toContain('schedule restatement');
+    });
+
+    it('removes labeled and bare date-time lines', () => {
+      const result = applyContentPolicy({
+        title: 'Concert on the Square',
+        description: 'An outdoor evening concert on the town square.',
+        extendedDescription:
+          'When: Friday, July 24 at 7:00pm. Saturday, July 25, 2026, 7:00 pm. Bring a lawn chair and a picnic.',
+      });
+      const extended = String(result.record.extendedDescription ?? '');
+      expect(extended).toBe('Bring a lawn chair and a picnic.');
+    });
+
+    it('keeps actionable dates that are not the event schedule', () => {
+      const result = applyContentPolicy({
+        title: 'Mural Contest',
+        description: 'A community mural design contest for local artists.',
+        extendedDescription:
+          'Deadline to submit designs is August 1, 2026. Winners are announced at the gallery reception.',
+      });
+      const extended = String(result.record.extendedDescription ?? '');
+      expect(extended).toContain('Deadline to submit designs is August 1, 2026.');
+    });
+  });
+
   describe('no invention', () => {
     it('leaves a plain event untouched with no markers, issues, or adjustments', () => {
       const result = applyContentPolicy({

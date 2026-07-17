@@ -48,6 +48,45 @@ const AMBIGUOUS_LOCATION_PATTERN =
   /\b(?:held|happening|hosted|located|takes?\s+place|taking\s+place|join\s+us|meet\s+us|see\s+you)\s+(?:right\s+)?(?:out\s+)?\b(here|there)\b/i;
 const URL_PATTERN = /(?:https?:\/\/|www\.)[^\s<>()"']+/gi;
 
+// Schedule restatements in the LONG description duplicate the dedicated
+// sessions field. Only sentences that are clearly about the event's own
+// schedule are removed: they lead with a schedule verb or label, or consist
+// of nothing but date/time material. "Deadline to register is August 1"
+// stays; "Meets August 19, 2026, from 5:30 to 7:30pm." goes.
+const MONTH_OR_DAY =
+  '(?:january|february|march|april|may|june|july|august|september|october|november|december|'
+  + 'jan|feb|mar|apr|jun|jul|aug|sept?|oct|nov|dec|'
+  + 'monday|tuesday|wednesday|thursday|friday|saturday|sunday)';
+const TIME_TOKEN = String.raw`(?:\d{1,2}(?::\d{2})?\s*(?:a|p)\.?m\.?|\d{1,2}:\d{2}|\d{4})`;
+const SCHEDULE_LEAD_PATTERN = new RegExp(
+  String.raw`^(?:meets?|held|happening|takes?\s+place|taking\s+place|runs?|occurs?|scheduled|open(?:s)?|begins?|starts?)\b`
+  + String.raw`(?=[^.!?]*\b${MONTH_OR_DAY}\b)(?=[^.!?]*${TIME_TOKEN})`,
+  'i',
+);
+const SCHEDULE_LABEL_PATTERN = /^(?:when|date|dates|time|times|schedule)\s*:/i;
+const SCHEDULE_ONLY_PATTERN = new RegExp(
+  String.raw`^(?:\b${MONTH_OR_DAY}\b|${TIME_TOKEN}|\d{1,2}(?:st|nd|rd|th)?|from|to|until|through|at|and|on|noon|midnight|[\s,;:.&-]|(?:a|p)\.?m\.?)+$`,
+  'i',
+);
+
+function isScheduleRestatement(sentence: string): boolean {
+  const trimmed = sentence.trim();
+  if (!trimmed) return false;
+  return SCHEDULE_LEAD_PATTERN.test(trimmed)
+    || SCHEDULE_LABEL_PATTERN.test(trimmed)
+    || SCHEDULE_ONLY_PATTERN.test(trimmed);
+}
+
+function stripScheduleRestatements(value: string): { value: string; removed: number } {
+  const sentences = value.split(/(?<=[.!?])\s+/);
+  const kept = sentences.filter(sentence => !isScheduleRestatement(sentence));
+  if (kept.length === sentences.length) return { value, removed: 0 };
+  return {
+    value: collapseWhitespace(kept.join(' ')),
+    removed: sentences.length - kept.length,
+  };
+}
+
 function text(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
@@ -248,6 +287,11 @@ export function applyContentPolicy(input: Record<string, unknown>): ContentPolic
     if (withoutAddress.removed) {
       extended = withoutAddress.value;
       adjustments.push('removed the event address from the long description');
+    }
+    const withoutSchedule = stripScheduleRestatements(extended);
+    if (withoutSchedule.removed > 0) {
+      extended = withoutSchedule.value;
+      adjustments.push(`removed ${withoutSchedule.removed} schedule restatement${withoutSchedule.removed === 1 ? '' : 's'} from the long description`);
     }
   }
 
