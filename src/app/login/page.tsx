@@ -29,6 +29,12 @@ function authErrorMessage(error: unknown): string {
   switch (authErrorCode(error)) {
     case 'auth/network-request-failed':
       return 'Google sign-in could not reach the authentication service. Check your connection and try again.';
+    case 'auth/web-storage-unsupported':
+      return 'This browser blocked the storage needed to finish Google sign-in. Allow site data for this workspace and try again.';
+    case 'auth/popup-closed-by-user':
+      return 'The Google sign-in window closed before authentication completed. Try again and keep it open until you return to the workspace.';
+    case 'auth/cancelled-popup-request':
+      return 'A second Google sign-in request interrupted the first one. Try again once.';
     case 'auth/operation-not-allowed':
       return 'Google sign-in is not enabled for this workspace. Contact your administrator.';
     case 'auth/unauthorized-domain':
@@ -132,6 +138,7 @@ export default function LoginPage() {
     } catch (caught: unknown) {
       const code = authErrorCode(caught);
       if (code === 'auth/popup-closed-by-user') {
+        setError(authErrorMessage(caught));
         setLoading(false);
         return;
       }
@@ -139,8 +146,8 @@ export default function LoginPage() {
         try {
           await signInWithRedirect(auth, provider);
           return;
-        } catch {
-          setError('Google redirect sign-in could not start. Allow popups for this site or contact your administrator.');
+        } catch (redirectError) {
+          setError(authErrorMessage(redirectError));
           setLoading(false);
           return;
         }
