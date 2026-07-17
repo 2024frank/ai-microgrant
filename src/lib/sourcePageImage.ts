@@ -29,6 +29,13 @@ const IMAGE_META_NAMES = new Set([
 /** Filename fragments that mark chrome, not content. */
 const JUNK_IMAGE_PATTERN = /(?:logo|icon|sprite|avatar|badge|pixel|spacer|blank|placeholder|button|banner-ad|favicon)/i;
 const MAX_CONTENT_CANDIDATES = 5;
+/**
+ * How far (in HTML characters) a content image may sit from the event's
+ * title before it is presumed to belong to a NEIGHBORING announcement.
+ * Measured on real multi-event pages: a section's own image sits within
+ * roughly 1,200 characters of its title, the next section's within 2,800.
+ */
+const MAX_ANCHOR_DISTANCE = 2_000;
 /** Ubiquitous words that cannot anchor a title inside a page. */
 const TITLE_STOPWORDS = new Set([
   'the', 'and', 'for', 'with', 'from', 'this', 'that', 'your', 'our',
@@ -122,7 +129,10 @@ export function extractContentImageCandidates(html: string): string[] {
  * ("crushers") appears once, exactly at the event's own section.
  */
 function titleAnchorIndex(html: string, titleHint: string): number | null {
-  const lower = html.toLocaleLowerCase('en-US');
+  // Search only the body: a token inside <title> or head metadata would
+  // anchor far from the images it is supposed to be near.
+  const bodyStart = /<body\b/i.exec(html)?.index ?? 0;
+  const lower = html.slice(bodyStart).toLocaleLowerCase('en-US');
   const tokens = [...new Set(
     titleHint
       .normalize('NFKC')
@@ -140,7 +150,7 @@ function titleAnchorIndex(html: string, titleHint: string): number | null {
       count++;
       at = lower.indexOf(token, at + token.length);
     }
-    if (!best || count < best.count) best = { count, index: first };
+    if (!best || count < best.count) best = { count, index: first + bodyStart };
   }
   return best?.index ?? null;
 }
@@ -191,12 +201,19 @@ export async function discoverSourcePageImageCandidates(
     return [];
   }
 
+  // When the event's own title is located on the page, only images near it
+  // qualify: an image beyond the window is a neighboring announcement's, and
+  // a wrong poster is worse than none (the reviewer adds one instead). A
+  // page where the title is not found keeps plain document order, the right
+  // behavior for single-event pages titled differently from the record.
   const anchor = options.titleHint ? titleAnchorIndex(html, options.titleHint) : null;
-  const contentCandidates = collectContentImageCandidates(html);
+  let contentCandidates = collectContentImageCandidates(html);
   if (anchor !== null) {
-    contentCandidates.sort((left, right) => (
-      Math.abs(left.index - anchor) - Math.abs(right.index - anchor)
-    ));
+    contentCandidates = contentCandidates
+      .filter(candidate => Math.abs(candidate.index - anchor) <= MAX_ANCHOR_DISTANCE)
+      .sort((left, right) => (
+        Math.abs(left.index - anchor) - Math.abs(right.index - anchor)
+      ));
   }
 
   const base = (typeof response.url === 'string' && response.url) || page.url.toString();

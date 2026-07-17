@@ -129,6 +129,27 @@ describe('discoverSourcePageImageCandidates', () => {
     ]);
   });
 
+  it('yields nothing when the event section has no image of its own', async () => {
+    // The Ball Game case: the title is found on the page, but the only
+    // images belong to neighboring announcements far from it. A wrong
+    // poster is worse than none.
+    const filler = '<p>' + 'unrelated announcement copy. '.repeat(120) + '</p>';
+    const fetcher = jest.fn().mockResolvedValue(htmlResponse(`
+      <body>
+      <img src="/uploads/storytime-reading.jpg" width="1200" height="800">
+      ${filler}
+      <h2>First Church is Going Out to the Ball Game!</h2>
+      <p>Join First Church at the Lake Erie Crushers game on July 19th.</p>
+      ${filler}
+      <img src="/uploads/supply-drive-flyer.jpg" width="1545" height="1931">
+      </body>
+    `)) as unknown as typeof fetch;
+    await expect(discoverSourcePageImageCandidates(
+      'https://firstchurch.example.org/events/',
+      { fetcher, titleHint: 'Join the First Church Crushers ball game outing' },
+    )).resolves.toEqual([]);
+  });
+
   it('keeps share metadata ahead of content images', async () => {
     const fetcher = jest.fn().mockResolvedValue(htmlResponse(`
       <meta property="og:image" content="https://cdn.example.org/share.jpg">
