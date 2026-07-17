@@ -1,0 +1,49 @@
+name: Sync Agent Contracts
+
+# Manual trigger for POST /api/agent/sync-contracts: rewrites every managed
+# agent's system prompt with the canonical extraction contract (fixes the
+# fabricated category taxonomy from the 2026-07-16 meeting, item 2). The
+# production database only accepts deployment-environment connections, so
+# the sync runs inside the app; this workflow just invokes it with the cron
+# secret. Dry run unless apply=true.
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'Write the updated prompts (false = dry run)'
+        required: false
+        default: 'false'
+
+jobs:
+  sync:
+    name: Sync managed-agent prompts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Invoke sync endpoint
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          set -Eeuo pipefail
+          : "${APP_URL:?APP_URL secret is not configured}"
+          : "${CRON_SECRET:?CRON_SECRET secret is not configured}"
+          APP_URL="${APP_URL%/}"
+          QUERY=""
+          if [ "$APPLY" = "true" ]; then QUERY="?apply=1"; fi
+          RESPONSE="$RUNNER_TEMP/sync-response.json"
+          curl --silent --show-error --fail-with-body --retry 2 --retry-delay 2 \
+            --connect-timeout 10 --max-time 280 -X POST \
+            "$APP_URL/api/agent/sync-contracts$QUERY" \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            | tee "$RESPONSE"
+          jq -e '
+            type == "object"
+            and .ok == true
+            and ((.checked | type) == "number")
+            and ((.errors | type) == "number")
+            and .errors == 0
+          ' "$RESPONSE" >/dev/null
+          echo "Contract sync response validated."
