@@ -68,7 +68,8 @@ async function handle(req: NextRequest) {
     || '';
 
   const [rows] = await pool.query(
-    `SELECT re.*, s.slug AS source_slug
+    `SELECT re.*, s.slug AS source_slug, s.org_website AS source_org_website,
+            s.source_kind AS source_kind
      FROM raw_events re
      JOIN sources s ON s.id = re.source_id
      WHERE re.status='pending' AND COALESCE(re.sent_for_correction, 0)=0

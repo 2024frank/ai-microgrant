@@ -352,7 +352,9 @@ export default function ReviewEventPage() {
     [],
   );
   const ingestionValidationIssues = allIngestionIssues.filter(item => (
-    item.code !== 'end_equals_start' && item.code !== 'image_missing'
+    item.code !== 'end_equals_start'
+    && item.code !== 'image_missing'
+    && item.code !== 'website_missing'
   ));
   const rejectionReasonCodes = normalizeStringArray(event?.rejection_reason_codes);
   const rejectionReviewerNote = String(event?.rejection_reviewer_note ?? '').trim();
@@ -472,6 +474,14 @@ export default function ReviewEventPage() {
           ? 'A poster is attached.'
           : 'No image came from the source. Paste the image URL from the event page; events publish with their source image.',
         pass: Boolean(imageUrl || event?.has_image_data),
+      },
+      {
+        id: 'website',
+        label: 'Website',
+        detail: website.trim()
+          ? 'A public web page is attached.'
+          : 'No website came from the source. Paste the event page or the organization site URL; every published record carries one.',
+        pass: website.trim().length > 0,
       },
       {
         id: 'location',
@@ -727,7 +737,9 @@ export default function ReviewEventPage() {
                   <p style={{ margin: '6px 0 0' }}>
                     {duplicateMatch
                       ? `This imported candidate matched a ${duplicateMatch.remote?.submission_origin === 'direct_submission' ? 'direct calendar submission' : 'calendar post from this application'} (“${duplicateMatch.remote?.name || 'unknown post'}”, ${duplicateMatch.remote?.moderation || 'unknown'} on CommunityHub; ${duplicateMatch.kind || 'match'} match${duplicateMatch.reasons?.length ? ` on ${duplicateMatch.reasons.join(', ')}` : ''}).`
-                      : 'This imported candidate duplicated an event already obtained from a more direct source.'}
+                      : event?.duplicate_of_id
+                        ? <>This imported candidate&apos;s entire content matched a draft already in the intake queue: <a href={`/reviewer/events/${event.duplicate_of_id}`}>record {String(event.duplicate_of_id)}</a>. Review and publish that record instead.</>
+                        : 'This imported candidate duplicated an event already obtained from a more direct source.'}
                     {' '}It is preserved so the imported version can be compared with the version on the calendar.
                   </p>
                   {Boolean(duplicateMatch?.field_diffs?.length) && (
@@ -1021,7 +1033,7 @@ export default function ReviewEventPage() {
                         <input id="record-image" className="input" type="url" aria-invalid={Boolean(imageUrl && !validHttpUrl(imageUrl))} value={imageUrl} onChange={event => setField('image_cdn_url', event.target.value)} placeholder="https://…" />
                       <span className="field__hint">CommunityHub receives a stable application-served poster URL, not the third-party URL directly.</span>
                       {!imageUrl && !event?.has_image_data && (
-                        <div className="field__error">No poster is attached. Paste the image URL from the event's source page.</div>
+                        <div className="field__error">No poster is attached. Paste the image URL from the event&apos;s source page.</div>
                       )}
                     </div>
                   </StudioSection>

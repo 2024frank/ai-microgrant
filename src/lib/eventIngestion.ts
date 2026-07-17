@@ -13,6 +13,7 @@ import { computeDedupKey } from './eventDedup';
 import { validatePublicHttpUrl } from './publicHttpUrl';
 import { applyContentPolicy } from './contentPolicy';
 import {
+  compareLocalEventContent,
   fetchCommunityHubInventory,
   findBestContentMatch,
   type CommunityHubInventory,
@@ -21,12 +22,14 @@ import {
 import {
   buildRunComparisonReport,
   diffCandidateAgainstRemote,
+  loadActiveComparableRows,
   loadRetainedLocalRows,
   organizationNamesForSource,
   recordRunComparison,
   remotePostSnapshot,
   type CandidatePayloadSnapshot,
   type ComparisonCandidate,
+  type LocalComparableRow,
 } from './runComparison';
 
 const MAX_POSTER_IMAGES = 4;
@@ -203,7 +206,7 @@ function buildCandidate(
 } {
   const rawImage = readString(raw.image_cdn_url);
   const policy = applyContentPolicy(raw);
-  const candidate = {
+  const candidate: Record<string, unknown> = {
     ...policy.record,
     email: submitterEmail,
     calendarSourceName:
@@ -214,6 +217,15 @@ function buildCandidate(
     image_cdn_url: rawImage.startsWith('data:') ? undefined : rawImage || undefined,
   };
   applySourceOrganizationMetadata(candidate, source);
+  // Every draft must reach review with a website: the agent's value, then the
+  // configured organization site (stamped above), then the event's own source
+  // page. This runs after content policy so a filled fallback can never be
+  // mistaken for a registration link the agent placed in the website field.
+  if (!readString(candidate.website)) {
+    const sourcePage = readString(candidate.calendarSourceUrl)
+      || readString(candidate.calendar_source_url);
+    if (sourcePage) candidate.website = sourcePage;
+  }
   let result = validateCommunityHubPayload(candidate);
   // Venue calendars rarely name an organizer, so extractors legitimately omit
   // sponsors; the source itself is the organizer of record.
@@ -234,6 +246,66 @@ function buildCandidate(
         issues: mergeIssues(policy.issues, result.errors),
         adjustments: policy.adjustments,
       };
+}
+
+/** Probable matches may only suppress a candidate with schedule evidence. */
+const TEMPORAL_MATCH_REASONS = new Set([
+  'shared session start',
+  'shared session date',
+  'session date in post content',
+]);
+
+type LocalContentDuplicate = {
+  eventId: number;
+  sourceId: number | null;
+  sourceKind: string | null;
+  kind: 'exact' | 'probable';
+  reasons: string[];
+  title: string;
+};
+
+/**
+ * Whole-content match of a candidate against the retained intake queue
+ * (meeting follow-up: system duplicate checking must use the entire content,
+ * never signatures or IDs). Only an 'exact' match may SUPPRESS a candidate:
+ * unlike CommunityHub posts, retained drafts are unreviewed, so a probable
+ * match (same day but a moved time, an edited end time, a similar title)
+ * frequently means the candidate IS the correction and shelving it would
+ * publish stale data. Probable matches with temporal evidence are still
+ * returned so the run comparison records them for the reviewer.
+ */
+function findLocalContentDuplicate(
+  payload: CommunityHubPayload,
+  rows: LocalComparableRow[],
+): LocalContentDuplicate | null {
+  const local = {
+    title: payload.title,
+    eventType: payload.eventType,
+    description: payload.description,
+    extendedDescription: payload.extendedDescription,
+    calendarSourceUrl: payload.calendarSourceUrl,
+    sessions: payload.sessions,
+  };
+  let probable: LocalContentDuplicate | null = null;
+  for (const row of rows) {
+    const rowId = Number(row.id);
+    if (!Number.isSafeInteger(rowId) || rowId <= 0) continue;
+    const match = compareLocalEventContent(local, row);
+    if (match.kind === 'none') continue;
+    const found: LocalContentDuplicate = {
+      eventId: rowId,
+      sourceId: Number.isSafeInteger(Number(row.source_id)) ? Number(row.source_id) : null,
+      sourceKind: typeof row.source_kind === 'string' ? row.source_kind : null,
+      kind: match.kind,
+      reasons: match.reasons,
+      title: typeof row.title === 'string' ? row.title : '',
+    };
+    if (match.kind === 'exact') return found;
+    if (probable === null && match.reasons.some(reason => TEMPORAL_MATCH_REASONS.has(reason))) {
+      probable = found;
+    }
+  }
+  return probable;
 }
 
 const INVENTORY_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -427,6 +499,26 @@ export async function persistExtractedEvents(
     ? { inventory: null, inventoryError: null }
     : await loadInventoryForComparison();
 
+  // The retained intake queue, loaded once per run for whole-content local
+  // duplicate matching. Inserted candidates join the list as the run goes so
+  // near-duplicates inside one batch are caught too. A load failure degrades
+  // to signature-only matching instead of failing the run. Known limit: the
+  // snapshot is not refreshed mid-run, so two sources dispatched in the same
+  // scheduler tick can miss each other's inserts; the signature check's row
+  // locks, the agents' own inventory check, and human review remain the
+  // guards for that window.
+  let activeLocalRows: LocalComparableRow[] = [];
+  if (!isCorrectionRun) {
+    try {
+      activeLocalRows = await loadActiveComparableRows();
+    } catch (error) {
+      console.error(
+        `[ingestion] run=${runId} could not load the intake queue for content matching:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+
   const conn = await pool.getConnection();
 
   try {
@@ -562,6 +654,21 @@ export async function persistExtractedEvents(
         payload.description,
         payload.extendedDescription,
       );
+
+      // Whole-content match against the retained intake queue. A correction
+      // (either kind) is exempt: it would only match the original it fixes.
+      const localContentDuplicate = fixedFromId
+        ? null
+        : findLocalContentDuplicate(payload, activeLocalRows);
+      if (localContentDuplicate) {
+        comparisonEntry.local_match = {
+          kind: localContentDuplicate.kind,
+          reasons: localContentDuplicate.reasons,
+          matched_event_id: localContentDuplicate.eventId,
+          matched_source_id: localContentDuplicate.sourceId,
+          matched_title: localContentDuplicate.title,
+        };
+      }
       const rawImage = readString(raw.image_cdn_url);
       let imageData: string | null = null;
       const imageIssues: CommunityHubPayloadIssue[] = [];
@@ -633,6 +740,17 @@ export async function persistExtractedEvents(
           'image_cdn_url',
           'image_missing',
           'the agent supplied no event image; add the image from the source page before publishing',
+        ));
+      }
+
+      // The contract also requires a website; the source-page fallback in
+      // buildCandidate makes this rare, so a miss means the record carries no
+      // usable public link at all and must be held for a reviewer.
+      if (!payload.website && !fixedFromId) {
+        imageIssues.push(issue(
+          'website',
+          'website_missing',
+          'no website came from the source; add the event page or organization site URL before publishing',
         ));
       }
 
@@ -715,13 +833,16 @@ export async function persistExtractedEvents(
         // re-scrape of identical content can never re-enter review or trigger
         // the auto-reject/requeue loop again. A corrected version with real
         // changes gets a different signature and still comes back.
+        // A correction may collide with a preserved-duplicate row that a
+        // re-scrape created from the same corrected content; that echo of
+        // the original must not block the correction from landing.
         const [duplicateRows] = await conn.query(
           `SELECT id FROM raw_events
            WHERE source_id=? AND dedup_key=?
              AND status IN ('pending','submitted','approved','pending_fix','publishing','resubmitted','duplicate','rejected')
-             ${fixedFromId ? 'AND id<>?' : ''}
+             ${fixedFromId ? "AND id<>? AND NOT (status='duplicate' AND duplicate_of_id=?)" : ''}
            LIMIT 1 FOR UPDATE`,
-          fixedFromId ? [source.id, dedupKey, fixedFromId] : [source.id, dedupKey],
+          fixedFromId ? [source.id, dedupKey, fixedFromId, fixedFromId] : [source.id, dedupKey],
         ) as any;
         if (Array.isArray(duplicateRows) && duplicateRows.length > 0) {
           await (conn as any).rollback();
@@ -759,22 +880,38 @@ export async function persistExtractedEvents(
         // generic calendar URL with an OLDER post is a new occurrence, not a
         // duplicate, and must reach review (the match evidence still appears
         // in the run comparison for the reviewer).
+        // System-first duplicate decision: an EXACT whole-content match
+        // against the retained intake queue preserves the candidate as a
+        // duplicate of that draft before the calendar is even consulted.
+        // Source priority still holds in both directions: a direct source's
+        // candidate never defers to an aggregator's draft, or run order
+        // would decide which version keeps the organization metadata.
+        const isLocalContentDuplicate = !fixedFromId
+          && crossSourceDuplicateOfId === null
+          && localContentDuplicate !== null
+          && localContentDuplicate.kind === 'exact'
+          && (
+            localContentDuplicate.sourceId === source.id
+            || source.source_kind === 'aggregator'
+            || localContentDuplicate.sourceKind !== 'aggregator'
+          );
+
         const chMatch = comparisonEntry.communityhub_match;
         const probableHasTemporalEvidence = chMatch !== null
           && chMatch.kind === 'probable'
-          && chMatch.reasons.some(reason => (
-            reason === 'shared session start'
-            || reason === 'shared session date'
-            || reason === 'session date in post content'
-          ));
+          && chMatch.reasons.some(reason => TEMPORAL_MATCH_REASONS.has(reason));
         const isCommunityHubDuplicate = !fixedFromId
           && crossSourceDuplicateOfId === null
+          && !isLocalContentDuplicate
           && chMatch !== null
           && (chMatch.kind === 'exact' || probableHasTemporalEvidence);
 
+        const duplicateOfLocalId = crossSourceDuplicateOfId
+          ?? (isLocalContentDuplicate ? localContentDuplicate.eventId : null);
+
         const rowStatus = fixedFromId
           ? 'pending'
-          : crossSourceDuplicateOfId !== null || isCommunityHubDuplicate
+          : duplicateOfLocalId !== null || isCommunityHubDuplicate
             ? 'duplicate'
             : autoRejectForMissingFields
               ? 'rejected'
@@ -824,7 +961,7 @@ export async function persistExtractedEvents(
             cleanText(fixEntry?.sent_by_email, 150),
             dedupKey,
             validationErrors.length ? JSON.stringify(validationErrors) : null,
-            crossSourceDuplicateOfId,
+            duplicateOfLocalId,
             isCommunityHubDuplicate
               ? JSON.stringify(comparisonEntry.communityhub_match)
               : null,
@@ -965,8 +1102,12 @@ export async function persistExtractedEvents(
           duplicatesPreserved++;
           comparisonEntry.outcome = crossSourceDuplicateOfId !== null
             ? 'duplicate_cross_source'
-            : 'duplicate_communityhub';
-          comparisonEntry.duplicate_of_event_id = crossSourceDuplicateOfId;
+            : isLocalContentDuplicate
+              ? localContentDuplicate.sourceId === source.id
+                ? 'duplicate_local'
+                : 'duplicate_cross_source'
+              : 'duplicate_communityhub';
+          comparisonEntry.duplicate_of_event_id = duplicateOfLocalId;
           continue;
         }
         if (rowStatus === 'rejected') {
@@ -977,6 +1118,20 @@ export async function persistExtractedEvents(
           continue;
         }
         comparisonEntry.outcome = 'inserted';
+        // The new draft joins the matching list so a near-duplicate later in
+        // this same batch is caught by content, not only by signature.
+        activeLocalRows.push({
+          id: eventId,
+          source_id: source.id,
+          source_kind: source.source_kind ?? null,
+          status: 'pending',
+          title: payload.title,
+          event_type: payload.eventType,
+          description: payload.description,
+          extended_description: payload.extendedDescription ?? null,
+          calendar_source_url: payload.calendarSourceUrl ?? null,
+          sessions: payload.sessions,
+        });
         inserted.push({
           id: eventId,
           title: payload.title,

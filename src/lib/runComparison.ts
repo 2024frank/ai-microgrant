@@ -20,8 +20,10 @@ import {
  *
  * Direction 2 — calendar → integration: CommunityHub posts attributed to the
  * organization (by calendar source name, sponsor, or organization) that match
- * neither this run's candidates nor any retained local event are reported as
- * events the integration missed.
+ * neither this run's candidates nor any retained local event. Since agents
+ * now drop duplicates themselves, this bucket means "on the calendar with no
+ * local counterpart" — direct submissions the integration never ingested,
+ * which may include source-listed events an agent correctly skipped.
  */
 
 export type CandidateOutcome =
@@ -81,6 +83,14 @@ export type ComparisonCandidate = {
     reasons: string[];
     field_diffs: ComparisonFieldDiff[];
     remote: RemotePostSnapshot;
+  };
+  /** Whole-content match against a retained intake draft (never by ID). */
+  local_match?: null | {
+    kind: 'exact' | 'probable';
+    reasons: string[];
+    matched_event_id: number;
+    matched_source_id: number | null;
+    matched_title: string;
   };
   issues: Array<{ path: string; code: string; message: string }>;
   adjustments: string[];
@@ -177,7 +187,11 @@ export function attributeRemotePosts(
   });
 }
 
-type LocalComparableRow = {
+export type LocalComparableRow = {
+  id?: number;
+  source_id?: number;
+  source_kind?: string | null;
+  status?: string;
   title: unknown;
   event_type: unknown;
   description: unknown;
@@ -230,6 +244,25 @@ export async function loadRetainedLocalRows(sourceId: number): Promise<LocalComp
   return Array.isArray(rows) ? rows as LocalComparableRow[] : [];
 }
 
+/**
+ * Active drafts across ALL sources for whole-content duplicate matching at
+ * ingestion. Preserved duplicates and rejected rows are deliberately absent:
+ * matching against a duplicate would chain evidence, and a reviewer's
+ * rejection must not silently swallow a re-extraction with real changes.
+ */
+export async function loadActiveComparableRows(): Promise<LocalComparableRow[]> {
+  const [rows] = await pool.query(
+    `SELECT re.id, re.source_id, s.source_kind, re.status, re.title,
+            re.event_type, re.description, re.extended_description,
+            re.calendar_source_url, re.sessions
+     FROM raw_events re
+     JOIN sources s ON s.id = re.source_id
+     WHERE re.status IN ('pending','submitted','approved','publishing',
+                         'resubmitted','pending_fix')`,
+  ) as any;
+  return Array.isArray(rows) ? rows as LocalComparableRow[] : [];
+}
+
 export function buildRunComparisonReport(options: {
   organizationNames: string[];
   candidates: ComparisonCandidate[];
@@ -251,9 +284,16 @@ export function buildRunComparisonReport(options: {
       matched_both: matchedBoth,
       integration_only: candidates.length - matchedBoth,
       calendar_only: calendarOnly.length,
+      // A duplicate is PRESERVED only when a row was written (event_id set);
+      // signature-skip duplicates share the 'duplicate_local' outcome but
+      // leave no row behind.
       duplicates_preserved: candidates.filter(candidate => (
-        candidate.outcome === 'duplicate_communityhub'
-        || candidate.outcome === 'duplicate_cross_source'
+        candidate.event_id !== null
+        && (
+          candidate.outcome === 'duplicate_communityhub'
+          || candidate.outcome === 'duplicate_cross_source'
+          || candidate.outcome === 'duplicate_local'
+        )
       )).length,
     },
     inventory_error: inventoryError,

@@ -367,7 +367,167 @@ describe('persistExtractedEvents comparison and duplicate handling', () => {
     );
     expect(dedupCall).toBeDefined();
     expect(dedupCall![0]).toContain('AND id<>?');
-    expect(dedupCall![1]).toEqual([SOURCE.id, expect.any(String), 99]);
+    // A preserved-duplicate echo of the correction target must not block the
+    // correction from landing.
+    expect(dedupCall![0]).toContain("NOT (status='duplicate' AND duplicate_of_id=?)");
+    expect(dedupCall![1]).toEqual([SOURCE.id, expect.any(String), 99, 99]);
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  // Whole-content matching against the retained intake queue: the candidate's
+  // signature differs (punctuation, wording) but the content is the same.
+  function withActiveIntakeRows(rows: Array<Record<string, unknown>>) {
+    db.default.query.mockReset().mockImplementation((sql: string) => {
+      if (typeof sql === 'string' && sql.includes('FROM integration_run_comparisons')) {
+        return Promise.resolve([[]]);
+      }
+      if (typeof sql === 'string' && sql.includes('SELECT re.id, re.source_id, s.source_kind')) {
+        return Promise.resolve([rows]);
+      }
+      if (typeof sql === 'string' && sql.includes('FROM raw_events')) {
+        return Promise.resolve([[]]);
+      }
+      return Promise.resolve([{ affectedRows: 1 }]);
+    });
+  }
+
+  it('preserves a whole-content match against a retained draft even when the signature differs', async () => {
+    withActiveIntakeRows([{
+      id: 88,
+      source_id: SOURCE.id,
+      status: 'pending',
+      // Punctuation differs, so the dedup_key signature differs; the
+      // normalized whole content is identical.
+      title: 'Community Jazz Night!',
+      event_type: 'ot',
+      description: 'An evening of live community jazz in downtown Oberlin.',
+      extended_description: null,
+      calendar_source_url: null,
+      sessions: JSON.stringify(VALID_EVENT.sessions),
+    }]);
+
+    const result = await persistExtractedEvents([VALID_EVENT], SOURCE, 12);
+
+    expect(result.duplicates_preserved).toBe(1);
+    expect(result.inserted).toHaveLength(0);
+    expect(result.comparison[0].outcome).toBe('duplicate_local');
+    expect(result.comparison[0].duplicate_of_event_id).toBe(88);
+    expect(result.comparison[0].local_match).toEqual(expect.objectContaining({
+      kind: 'exact',
+      matched_event_id: 88,
+      matched_source_id: SOURCE.id,
+    }));
+    const insert = findRawEventsInsert();
+    expect(insert).toBeDefined();
+    expect(insert![1].at(-1)).toBe('duplicate');
+    expect(insert![1].at(-3)).toBe(88); // duplicate_of_id
+    expect(insert![1].at(-2)).toBeNull(); // not a CommunityHub match
+  });
+
+  it('reports a cross-source outcome when the matched draft came from another source', async () => {
+    withActiveIntakeRows([{
+      id: 61,
+      source_id: 3,
+      status: 'submitted',
+      title: 'Community Jazz Night',
+      event_type: 'ot',
+      description: 'An evening of live community jazz in downtown Oberlin.',
+      extended_description: null,
+      calendar_source_url: null,
+      sessions: JSON.stringify(VALID_EVENT.sessions),
+    }]);
+
+    const result = await persistExtractedEvents([VALID_EVENT], SOURCE, 12);
+
+    expect(result.duplicates_preserved).toBe(1);
+    expect(result.comparison[0].outcome).toBe('duplicate_cross_source');
+    expect(result.comparison[0].duplicate_of_event_id).toBe(61);
+  });
+
+  it('sends a probable local match WITH temporal evidence to review, recording the evidence', async () => {
+    // Unlike CommunityHub posts, retained drafts are unreviewed: a same-day
+    // probable match is frequently the schedule CORRECTION (moved time,
+    // added end time), so suppressing it would publish stale data.
+    withActiveIntakeRows([{
+      id: 63,
+      source_id: SOURCE.id,
+      status: 'pending',
+      title: 'Community Jazz Night',
+      event_type: 'ot',
+      description: 'An evening of live community jazz in downtown Oberlin.',
+      extended_description: null,
+      calendar_source_url: null,
+      // Same day, moved one hour: probable with 'shared session date'.
+      sessions: JSON.stringify([{ startTime: 1_800_003_600, endTime: 1_800_007_200 }]),
+    }]);
+
+    const result = await persistExtractedEvents([VALID_EVENT], SOURCE, 12);
+
+    expect(result.duplicates_preserved).toBe(0);
+    expect(result.inserted).toHaveLength(1);
+    expect(result.comparison[0].outcome).toBe('inserted');
+    expect(result.comparison[0].local_match).toEqual(expect.objectContaining({
+      kind: 'probable',
+      matched_event_id: 63,
+    }));
+  });
+
+  it('never defers a direct source to an aggregator draft, regardless of run order', async () => {
+    withActiveIntakeRows([{
+      id: 64,
+      source_id: 3,
+      source_kind: 'aggregator',
+      status: 'pending',
+      title: 'Community Jazz Night',
+      event_type: 'ot',
+      description: 'An evening of live community jazz in downtown Oberlin.',
+      extended_description: null,
+      calendar_source_url: null,
+      sessions: JSON.stringify(VALID_EVENT.sessions),
+    }]);
+
+    const originalOrgSource = { ...SOURCE, source_kind: 'original_org' as const };
+    const result = await persistExtractedEvents([VALID_EVENT], originalOrgSource, 12);
+
+    expect(result.duplicates_preserved).toBe(0);
+    expect(result.inserted).toHaveLength(1);
+    expect(result.comparison[0].outcome).toBe('inserted');
+    // The match is still recorded so a human can resolve the pair.
+    expect(result.comparison[0].local_match?.matched_event_id).toBe(64);
+  });
+
+  it('sends a probable local match without temporal evidence to review', async () => {
+    withActiveIntakeRows([{
+      id: 62,
+      source_id: SOURCE.id,
+      status: 'pending',
+      title: 'Community Jazz Night',
+      event_type: 'ot',
+      description: 'An evening of live community jazz in downtown Oberlin.',
+      extended_description: null,
+      calendar_source_url: null,
+      // A different week: a new occurrence of a recurring event.
+      sessions: JSON.stringify([{ startTime: 1_800_604_800, endTime: 1_800_608_400 }]),
+    }]);
+
+    const result = await persistExtractedEvents([VALID_EVENT], SOURCE, 12);
+
+    expect(result.duplicates_preserved).toBe(0);
+    expect(result.inserted).toHaveLength(1);
+    expect(result.comparison[0].outcome).toBe('inserted');
+    const insert = findRawEventsInsert();
+    expect(insert![1].at(-1)).toBe('pending');
+  });
+
+  it('catches a near-duplicate later in the same batch by content', async () => {
+    const result = await persistExtractedEvents([
+      VALID_EVENT,
+      { ...VALID_EVENT, title: 'Community Jazz Night!' },
+    ], SOURCE, 12);
+
+    expect(result.inserted).toHaveLength(1);
+    expect(result.duplicates_preserved).toBe(1);
+    expect(result.comparison[1].outcome).toBe('duplicate_local');
+    expect(result.comparison[1].duplicate_of_event_id).toBe(40);
   });
 });

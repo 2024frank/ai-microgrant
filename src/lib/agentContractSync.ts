@@ -5,7 +5,10 @@ import {
 } from './communityHubPayload';
 import {
   COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS,
+  COMMUNITY_HUB_INVENTORY_URL,
+  INTAKE_INVENTORY_URL,
 } from './communityHubInventory';
+import { withIntakeInventoryToken } from './intakeInventoryAccess';
 
 /**
  * Managed-agent contract synchronization (2026-07-16 meeting, item 2).
@@ -37,7 +40,7 @@ Re-read the live source pages on every run. Extract only public events or announ
 
 ${COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS}
 
-Return only one raw JSON array. Do not call, authenticate to, or submit data to the Event Intake application. The application receives your JSON response, validates every field, handles deduplication, and stores the draft for human review.
+Return only one raw JSON array. Never authenticate to or submit data to the Event Intake application; the read-only intake inventory GET above is the only request you may make to it. The application receives your JSON response, validates every field, re-checks both inventories for duplicates, and stores the draft for human review.
 
 Every object must follow this exact contract:
 - eventType: only "ot" for Event, "an" for Announcement, or "jp" for Job. Never use a category code here.
@@ -48,13 +51,14 @@ Every object must follow this exact contract:
 - extendedDescription: optional factual detail, at most 1000 characters. Never include URLs, the street address, or facts already carried by the dedicated location, date, time, registration, sponsor, or contact fields; never state the event's date or time in description or extendedDescription because the sessions field carries the schedule and the calendar displays it. Never pad it with filler or invented content. When the entire source description fits within 200 characters, put it in description and omit extendedDescription entirely. Refer to the venue by its actual name (for example "at Common Ground"), never ambiguously as "here" or "there"; if such a sentence is unnecessary, omit it.
 - image_cdn_url: REQUIRED. Before returning any event, find its image on the source page (the event photo, flyer, or the page's share image / og:image all count) and set image_cdn_url to that image's public HTTPS URL. An event without its source image is incomplete for review and will be held from publishing. Omit the field only when you actually checked the event's page, including its share metadata, and it displays no image at all.
 - registrationUrl: when the source says registration is required, set this to the exact registration link. The platform places it in the registration button and ends the short description with "Registration required." Never put a registration URL inside description or extendedDescription.
+- website: REQUIRED. Set it to the event's public web page URL, normally the page you extracted the event from; when the event has no page of its own, use the organization's website. Never leave it empty.
 - sponsors: non-empty string array containing only organizers or sponsors supported by the current source.
 - postTypeId: non-empty number array using only these categories: ${CATEGORY_CONTRACT}.
 - sessions: non-empty array of { "startTime": integer Unix seconds, "endTime": integer Unix seconds }. Interpret local times in America/New_York. Never return ISO strings or 13-digit milliseconds. endTime must not precede startTime. Always extract the stated end time. If an EVENT's source states a start but no end, use the start timestamp for both values; the platform holds such drafts for a human to set the end because CommunityHub cannot publish an event whose end equals its start. Never estimate a duration. Announcements use their display window as the session.
 - Include only future or currently ongoing records; at least one session must not have ended.
 - locationType: "ph2" physical, "on" online, "bo" hybrid, or "ne" neither. ph2/bo require location; on/bo require urlLink.
 - display: "all" all public screens, "ps" school screens, "sps" school plus public screens, or "ss" specific screens. Normally use "all". "ss" requires a non-empty positive-integer screensIds array.
-- Optional source-backed fields: location, urlLink, contactEmail, phone, website, placeName, roomNum, buttons, image_cdn_url, calendarSourceName, calendarSourceUrl.
+- Optional source-backed fields: location, urlLink, contactEmail, phone, placeName, roomNum, buttons, calendarSourceName, calendarSourceUrl.
 
 Never invent, estimate, or carry forward stale facts. If a required factual value is absent, omit it rather than guessing; server validation will surface it for a reviewer. An empty result is exactly [].`;
 
@@ -157,16 +161,17 @@ export function sanitizeSourceInstructions(system: unknown): string {
 
 export function buildSystemPrompt(source: SourceRow, currentSystem: unknown): string {
   const sourceInstructions = sanitizeSourceInstructions(currentSystem);
-  return `${CANONICAL_CONTRACT}\n\n## Source-specific instructions for ${source.name}\n\n${sourceInstructions}\n\nReturn only the JSON array.`;
+  return withIntakeInventoryToken(
+    `${CANONICAL_CONTRACT}\n\n## Source-specific instructions for ${source.name}\n\n${sourceInstructions}\n\nReturn only the JSON array.`,
+  );
 }
 
 const COMMUNITY_HUB_HOST = 'oberlin.communityhub.cloud';
 
 function externalSourceUrls(prompt: unknown): string[] {
-  // The CommunityHub inventory URL lived in the OLD dedup instructions and is
-  // intentionally removed by the new contract (duplicate matching moved
-  // server-side); it is platform plumbing, not a source page, so its removal
-  // must not trip the source-URL preservation check.
+  // The CommunityHub and intake inventory URLs are platform plumbing owned by
+  // the canonical contract, not source pages, so they never participate in
+  // the source-URL preservation check.
   return [...new Set((String(prompt ?? '').match(/https?:\/\/[^\s<>()"']+/g) ?? [])
     .map(url => url.replace(/[.,;:]+$/, ''))
     .filter(url => !url.includes(APPLICATION_HOST) && !url.includes(COMMUNITY_HUB_HOST)))];
@@ -184,9 +189,13 @@ export function assertSafePrompt(prompt: string) {
     'display: "all" all public screens',
     'integer Unix seconds',
     'Return only one raw JSON array',
-    'Extract and return EVERY eligible event',
-    'Do not fetch the CommunityHub inventory',
-    'compares every candidate against the complete approved-and-pending CommunityHub inventory server-side',
+    'Duplicate checking is your responsibility',
+    COMMUNITY_HUB_INVENTORY_URL,
+    INTAKE_INVENTORY_URL,
+    'using the entire content',
+    'Never compare IDs',
+    're-checks every candidate against both inventories server-side',
+    'website: REQUIRED',
     'Register for',
     'registrationUrl',
     'Registration required.',
@@ -208,8 +217,18 @@ export function assertSafePrompt(prompt: string) {
     /estimate (?:2|two) hours/i,
     /set endTime to/i,
   ];
+  // The canonical read-only "GET <intake inventory URL>" reference (with its
+  // optional read token) is the single sanctioned mention of the application
+  // host. The URL must end exactly there — a suffix-extended path or any
+  // other framing (for example an instruction to POST to it) keeps the host
+  // visible to the forbidden patterns below.
+  const intakeUrlPattern = new RegExp(
+    `GET ${INTAKE_INVENTORY_URL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\?token=[a-f0-9]+)?(?![\\w\\-./?=&%])`,
+    'g',
+  );
+  const scrubbed = prompt.replace(intakeUrlPattern, 'GET [intake inventory]');
   for (const pattern of forbidden) {
-    if (pattern.test(prompt)) throw new Error(`new prompt still matches forbidden pattern ${pattern}`);
+    if (pattern.test(scrubbed)) throw new Error(`new prompt still matches forbidden pattern ${pattern}`);
   }
   const configuredIngestSecret = process.env.INGEST_SECRET?.trim();
   if (configuredIngestSecret && prompt.includes(configuredIngestSecret)) {

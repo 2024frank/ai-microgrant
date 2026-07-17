@@ -21,7 +21,7 @@ function pendingRow(overrides: Record<string, unknown> = {}): PendingEventRow {
     display: 'all',
     screen_ids: '[]',
     buttons: '[]',
-    website: null,
+    website: 'https://www.oberlin.edu/events/jazz-night',
     image_cdn_url: null,
     email: 'calendar@oberlin.edu',
     ...overrides,
@@ -34,6 +34,60 @@ describe('planQueueConformance', () => {
     expect(plan.decision).toBe('leave');
     expect(plan.updates).toEqual({});
     expect(plan.validation_errors).toEqual([]);
+  });
+
+  it('fills an empty website from the configured organization site first', () => {
+    const plan = planQueueConformance(pendingRow({
+      website: null,
+      source_org_website: 'https://www.favagallery.org',
+      calendar_source_url: 'https://www.favagallery.org/classes/watercolor',
+    }));
+    expect(plan.decision).toBe('correct');
+    expect(plan.updates.website).toBe('https://www.favagallery.org');
+    expect(plan.validation_errors).toEqual([]);
+    expect(plan.notes).toContain('website filled from the source configuration or the event page');
+  });
+
+  it('fills an empty website from the event page when no organization site is configured', () => {
+    const plan = planQueueConformance(pendingRow({
+      website: null,
+      calendar_source_url: 'https://www.favagallery.org/classes/watercolor',
+    }));
+    expect(plan.decision).toBe('correct');
+    expect(plan.updates.website).toBe('https://www.favagallery.org/classes/watercolor');
+  });
+
+  it('never stamps an aggregator source\'s configured site onto relayed events', () => {
+    const plan = planQueueConformance(pendingRow({
+      website: null,
+      source_kind: 'aggregator',
+      source_org_website: 'https://aggregator.example.org',
+      calendar_source_url: 'https://www.favagallery.org/classes/watercolor',
+    }));
+    expect(plan.decision).toBe('correct');
+    expect(plan.updates.website).toBe('https://www.favagallery.org/classes/watercolor');
+  });
+
+  it('holds an event with no derivable website behind a website_missing issue', () => {
+    const plan = planQueueConformance(pendingRow({ website: null }));
+    expect(plan.decision).toBe('leave');
+    expect(plan.updates).toEqual({});
+    expect(plan.validation_errors).toEqual([{
+      path: 'website',
+      code: 'website_missing',
+      message: 'no website came from the source; add the event page or organization site URL before publishing',
+    }]);
+  });
+
+  it('does not rewrite a website it already filled (idempotent resweep)', () => {
+    const plan = planQueueConformance(pendingRow({
+      website: 'https://www.favagallery.org',
+      source_org_website: 'https://www.favagallery.org',
+      calendar_source_url: 'https://www.favagallery.org/classes/watercolor',
+    }));
+    expect(plan.decision).toBe('leave');
+    expect(plan.updates).toEqual({});
+    expect(plan.notes).toEqual([]);
   });
 
   it('corrects a queued Apollo announcement to the agreed exact title', () => {
@@ -50,14 +104,26 @@ describe('planQueueConformance', () => {
   });
 
   it('applies the registration marker and button to an old-format event', () => {
+    // The link must come from the source's own prose (or an explicit
+    // registrationUrl); the website field is never adopted as one.
+    const plan = planQueueConformance(pendingRow({
+      description: 'A hands-on pottery class. Register now at https://studio.example.org/classes to reserve a wheel.',
+      website: 'https://studio.example.org',
+    }));
+    expect(plan.decision).toBe('correct');
+    expect(String(plan.updates.description)).toMatch(/Registration required\.$/);
+    expect(String(plan.updates.description)).not.toContain('https://');
+    const buttons = plan.updates.buttons as Array<{ title: string; link: string }>;
+    expect(buttons[0]).toEqual({ title: 'Register', link: 'https://studio.example.org/classes' });
+  });
+
+  it('routes a registration event with no findable link to the correction agent', () => {
     const plan = planQueueConformance(pendingRow({
       description: 'A hands-on pottery class. Register now to reserve a wheel.',
       website: 'https://studio.example.org/classes',
     }));
-    expect(plan.decision).toBe('correct');
-    expect(String(plan.updates.description)).toMatch(/Registration required\.$/);
-    const buttons = plan.updates.buttons as Array<{ title: string; link: string }>;
-    expect(buttons[0]).toEqual({ title: 'Register', link: 'https://studio.example.org/classes' });
+    expect(plan.decision).toBe('reject_missing_required');
+    expect(plan.notes.join(' ')).toContain('registrationUrl');
   });
 
   it('strips URLs and the event address from a queued long description', () => {
@@ -86,6 +152,7 @@ describe('planQueueConformance', () => {
       event_type: 'an',
       title: 'Summer Symphony',
       description: 'Registration is required for the summer symphony day camp.',
+      buttons: JSON.stringify([{ title: 'Register', link: 'https://symphony.example.org/camp' }]),
       website: 'https://symphony.example.org/camp',
     }));
     expect(plan.decision).toBe('reject_format');

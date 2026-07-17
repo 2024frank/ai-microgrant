@@ -539,9 +539,6 @@ export default function SourcesPage() {
       <div aria-live="polite" aria-atomic="true">
         {toast && <div className={`toast ${toast.error ? 'toast--error' : ''}`} role={toast.error ? 'alert' : 'status'}>{toast.message}</div>}
       </div>
-      <datalist id="schedule-presets">
-        {SCHEDULE_PRESETS.map(option => <option key={option.value} value={option.value} label={option.label} />)}
-      </datalist>
 
       <main className="page-main">
         <header className="page-header">
@@ -671,18 +668,30 @@ export default function SourcesPage() {
                         }}
                         style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 6 }}
                       >
-                        <input
-                          className="input tnum"
-                          aria-label={`Five-field cron schedule for ${source.name}`}
+                        <select
+                          className="input"
+                          aria-label={`Fetch schedule for ${source.name}`}
                           aria-describedby="scheduler-contract"
                           aria-invalid={source.schedule_valid === false}
-                          list="schedule-presets"
                           value={scheduleDraft}
-                          style={{ width: 160, minHeight: 34, paddingBlock: 5 }}
+                          style={{ width: 210, minHeight: 34, paddingBlock: 5 }}
                           onChange={event => setScheduleDraft(event.target.value)}
-                          autoComplete="off"
                           autoFocus
-                        />
+                        >
+                          {/* The stored custom schedule stays selectable for the
+                              whole edit, even after previewing a preset, so a
+                              tailored schedule is never one click from gone. */}
+                          {!SCHEDULE_PRESETS.some(option => option.value === source.schedule_cron) && (
+                            <option value={source.schedule_cron}>{describeCronExpression(source.schedule_cron)} (current)</option>
+                          )}
+                          {!SCHEDULE_PRESETS.some(option => option.value === scheduleDraft)
+                            && scheduleDraft !== source.schedule_cron && (
+                            <option value={scheduleDraft}>{describeCronExpression(scheduleDraft)}</option>
+                          )}
+                          {SCHEDULE_PRESETS.map(option => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
                         <button type="submit" className="btn-primary" style={{ minHeight: 32, paddingInline: 10 }} disabled={scheduleSaving || !scheduleDraft.trim()}>
                           {scheduleSaving ? <span className="spinner" /> : <Check size={13} />} Save
                         </button>
@@ -693,7 +702,7 @@ export default function SourcesPage() {
                         type="button"
                         className="btn-ghost"
                         style={{ minHeight: 32, paddingInline: 10 }}
-                        title={`Edit advanced schedule (${source.schedule_cron})`}
+                        title="Change how often this source is fetched"
                         onClick={() => beginScheduleEdit(source)}
                       >
                         <Pencil size={12} /> {scheduleDescription}
@@ -872,18 +881,19 @@ export default function SourcesPage() {
                 <span className="field__hint">Required by the currently configured extraction provider.</span>
               </div>
               <div className="field">
-                <label className="field__label" htmlFor="source-schedule">Five-field cron schedule</label>
-                <input
+                <label className="field__label" htmlFor="source-schedule">Fetch schedule</label>
+                <select
                   id="source-schedule"
-                  className="input tnum"
-                  list="schedule-presets"
+                  className="input"
                   aria-describedby="source-schedule-hint scheduler-contract"
                   value={form.schedule_cron}
                   onChange={event => setForm(current => ({ ...current, schedule_cron: event.target.value }))}
-                  placeholder="minute hour day-of-month month day-of-week"
-                  autoComplete="off"
-                />
-                <span className="field__hint" id="source-schedule-hint">Standard five-field cron in America/New_York. Presets are suggestions; custom expressions are accepted and validated by the server.</span>
+                >
+                  {SCHEDULE_PRESETS.map(option => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+                <span className="field__hint" id="source-schedule-hint">When this source is fetched, in the America/New_York timezone.</span>
               </div>
             </div>
             <div className="dialog__actions">

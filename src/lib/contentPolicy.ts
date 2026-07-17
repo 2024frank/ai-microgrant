@@ -238,14 +238,13 @@ export function applyContentPolicy(input: Record<string, unknown>): ContentPolic
   const registrationEvidence = hasRegistrationEvidence(record);
   let registrationUrl = findRegistrationUrl(record);
   if (registrationEvidence && !registrationUrl) {
-    // Legacy prompts placed the registration link in `website`; adopt it only
-    // when the source text itself says registration applies.
-    const website = text(record.website).trim();
+    // The website field is no longer a registration-link stand-in: it is a
+    // REQUIRED field the platform fills with the organization site or the
+    // event page, so adopting it would fabricate Register buttons pointing
+    // at generic pages. Only an explicit registrationUrl or a link in the
+    // source's own prose may become the registration button.
     const textEvidence = REGISTRATION_TEXT_PATTERN.test(`${description} ${extended}`);
-    if (website && isHttpUrl(website) && textEvidence) {
-      registrationUrl = website;
-      adjustments.push('registration URL adopted from website field');
-    } else if (textEvidence) {
+    if (textEvidence) {
       // The link is sometimes only in the prose ("Register now at https://...").
       const proseUrl = (`${description} ${extended}`.match(URL_PATTERN) ?? [])
         .map(candidate => candidate.replace(/[.,;:)\]]+$/, ''))

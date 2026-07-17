@@ -40,19 +40,22 @@ describe('applyContentPolicy', () => {
       expect(result.issues).toEqual([]);
     });
 
-    it('adopts the website as the registration URL when the text says registration applies', () => {
+    it('never adopts the website field as the registration URL', () => {
+      // The website field is REQUIRED and platform-filled (organization site
+      // or event page), so treating it as a registration link would fabricate
+      // Register buttons pointing at generic pages.
       const result = applyContentPolicy({
         title: 'Community Workshop',
         description: 'Register now to join.',
         website: 'https://x.example/site',
       });
 
-      expect(result.record.description).toBe(`Register now to join. ${REGISTRATION_SENTENCE}`);
       const buttons = result.record.buttons as Array<{ title: string; link: string }>;
-      expect(buttons[0]).toEqual({ title: 'Register', link: 'https://x.example/site' });
-      expect(result.adjustments).toContain('registration URL adopted from website field');
-      expect(result.adjustments).toContain('registration button added from registration URL');
-      expect(result.issues).toEqual([]);
+      expect(buttons).toEqual([]);
+      expect(result.adjustments).not.toContain('registration URL adopted from website field');
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({ path: 'registrationUrl', code: 'required' }),
+      );
     });
 
     it('reports a required issue and skips the marker when registration has no valid URL', () => {

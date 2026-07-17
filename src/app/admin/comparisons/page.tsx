@@ -44,6 +44,13 @@ interface ReportCandidate {
     field_diffs: FieldDiff[];
     remote: { name?: string; moderation?: string; submission_origin?: string };
   };
+  local_match?: null | {
+    kind: string;
+    reasons: string[];
+    matched_event_id: number;
+    matched_source_id: number | null;
+    matched_title: string;
+  };
   issues?: Array<{ path?: string; message?: string }>;
   adjustments?: string[];
 }
@@ -231,6 +238,14 @@ export default function AdminComparisonsPage() {
                             <a href={`/reviewer/events/${candidate.event_id}`} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>
                               <ExternalLink size={11} style={{ verticalAlign: 'middle' }} /> Open record #{candidate.event_id}
                             </a>
+                          )}
+                          {candidate.local_match && (
+                            <div style={{ marginTop: 8, fontSize: 13 }}>
+                              Whole-content match with intake draft “{candidate.local_match.matched_title || 'untitled'}” ({candidate.local_match.kind} match{candidate.local_match.reasons?.length ? ` on ${candidate.local_match.reasons.join(', ')}` : ''}) —{' '}
+                              <a href={`/reviewer/events/${candidate.local_match.matched_event_id}`} target="_blank" rel="noreferrer">
+                                record #{candidate.local_match.matched_event_id}
+                              </a>
+                            </div>
                           )}
                           {candidate.communityhub_match && (
                             <div style={{ marginTop: 8, fontSize: 13 }}>

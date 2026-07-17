@@ -72,7 +72,6 @@ export default function EventDeepLinkPage() {
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- event identity is captured by has_image + updated_at
   }, [id, authToken, event?.has_image, event?.updated_at]);
 
   useEffect(() => {

@@ -44,6 +44,7 @@ const SOURCE = {
 const AGENT_EVENT = {
   eventType: 'ot', title: 'Jazz Night', description: 'Live jazz at Apollo.',
   image_cdn_url: 'https://images.example.org/poster.jpg',
+  website: 'https://www.example.org/events/jazz-night',
   sponsors: ['Apollo Theatre'], postTypeId: [8],
   sessions: [{ startTime: 2000000000, endTime: 2000003600 }],
   locationType: 'ph2', location: '19 E College St, Oberlin, OH 44074',
@@ -257,10 +258,12 @@ describe('triggerAgentRun — happy path', () => {
 // ── Multiple events ───────────────────────────────────────────────────────────
 describe('triggerAgentRun — multiple events', () => {
   it('isolates each inserted event in its own transaction', async () => {
+    // Three genuinely distinct events: whole-content batch matching preserves
+    // near-identical items as duplicates, so each needs its own content.
     const events = [
-      { ...AGENT_EVENT, title: 'Event A' },
-      { ...AGENT_EVENT, title: 'Event B' },
-      { ...AGENT_EVENT, title: 'Event C' },
+      { ...AGENT_EVENT, title: 'Morning Yoga Session', description: 'A gentle sunrise yoga class for all levels.', sessions: [{ startTime: 2000000000, endTime: 2000003600 }] },
+      { ...AGENT_EVENT, title: 'Jazz Trio Performance', description: 'An evening set from the resident jazz trio.', sessions: [{ startTime: 2000100000, endTime: 2000103600 }] },
+      { ...AGENT_EVENT, title: 'Pottery Wheel Workshop', description: 'Hands-on wheel throwing for beginners at the studio.', sessions: [{ startTime: 2000200000, endTime: 2000203600 }] },
     ];
     mockSessionsEventsList.mockResolvedValue(makeSessionEvents(events));
 

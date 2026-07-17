@@ -328,6 +328,19 @@ Cron/`CRON_SECRET` endpoint. Requeues events the platform auto-rejected as
 correction workflow — one bounded attempt per event, never creating duplicates
 (corrections must reference the original via `fixedFromEventId`).
 
+#### `GET /api/inventory/intake?token=…`
+Read-only, gated by a read token derived from `CRON_SECRET` (HMAC, no new
+secret to provision; `CRON_SECRET` bearer auth also works). The intake queue
+as comparison content for duplicate checking: active drafts (`pending`,
+`submitted`, `approved`, `publishing`, `resubmitted`, `pending_fix`) with
+title, event type, both descriptions, source page URL, normalized sessions,
+status, and source name. Extraction agents receive the tokened URL inside
+their private instructions at contract-sync time, fetch this together with
+the CommunityHub inventory, and drop events whose entire content already
+appears in either place. Carries no record IDs (IDs never participate in
+duplicate matching) and no contact or reviewer data — drafts here are
+unreviewed, which is why the endpoint is not anonymous.
+
 ---
 
 ### Review

@@ -4,7 +4,12 @@ const MAX_INVENTORY_PAGES = 20;
 
 export const COMMUNITY_HUB_INVENTORY_URL = `${INVENTORY_ENDPOINT}?limit=10000&page=0&filter=future&tab=main-feed&isJobs=false&order=ASC&postType=All&allPosts=`;
 
-export const COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS = `Extract and return EVERY eligible event from the source, including events that may already exist on the CommunityHub calendar. Do not fetch the CommunityHub inventory and do not skip an event because you believe it is a duplicate — the platform compares every candidate against the complete approved-and-pending CommunityHub inventory server-side, records the comparison for human review, and preserves duplicates instead of publishing them twice. Send a distinct calendarSourceUrl per item (the specific event page when one exists) so the server-side comparison stays accurate.`;
+export const INTAKE_INVENTORY_URL = 'https://ai-microgrant-research-oberlin.vercel.app/api/inventory/intake';
+
+export const COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS = `Duplicate checking is your responsibility on every extraction run. Before returning your events, fetch both live inventories:
+- The CommunityHub calendar, approved and pending posts: GET ${COMMUNITY_HUB_INVENTORY_URL}
+- This platform's intake queue, drafts already collected and awaiting review or publication: GET ${INTAKE_INVENTORY_URL}
+Compare every event you extracted against every entry in BOTH lists using the entire content: the title, every session date and time, the description, the extended description, and the event page URL. Never compare IDs; the systems do not share IDs and an ID proves nothing about content. Two records are the same event when their titles and schedules describe the same real-world occurrence, even when the wording differs. If an event you extracted already appears in either inventory, do not return it. When you are genuinely unsure whether two records are the same event, return yours; the platform re-checks every candidate against both inventories server-side and preserves duplicates instead of publishing twice. If either inventory request fails, return your full extraction anyway. Correction runs are exempt: when your task is to fix one identified event, return the corrected event even though its original appears in the inventories. Send a distinct calendarSourceUrl per item (the specific event page when one exists) so duplicate matching stays accurate.`;
 
 export type ContentSession = {
   start: number;
@@ -341,6 +346,24 @@ export function compareEventContent(
   }
 
   return { kind: 'none', reasons: [] };
+}
+
+/**
+ * Whole-content comparison between a candidate and a locally retained draft,
+ * using the exact rules of remote matching. The retained row is adapted to
+ * the comparable-post shape; IDs never participate in the comparison.
+ */
+export function compareLocalEventContent(
+  local: ComparableEventContent,
+  retained: ComparableEventContent & { timezone?: string },
+): ContentMatch {
+  const content = normalizedContent(retained);
+  if (!content.title || content.sessions.length === 0) return { kind: 'none', reasons: [] };
+  return compareEventContent(local, {
+    ...content,
+    timezone: retained.timezone || 'America/New_York',
+    moderation: 'pending',
+  });
 }
 
 export function findBestContentMatch(

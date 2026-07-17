@@ -87,8 +87,8 @@ describe('POST /api/agent/queue-conformance', () => {
 
   it('corrects an old-format queued event in place and leaves it for review', async () => {
     mockQueue([pendingRow({
-      description: 'A hands-on pottery class. Register now to reserve a wheel.',
-      website: 'https://studio.example.org/classes',
+      description: 'A hands-on pottery class. Register now at https://studio.example.org/classes to reserve a wheel.',
+      website: 'https://studio.example.org',
     })]);
 
     const data = await (await POST(makeReq())).json();
@@ -225,6 +225,7 @@ describe('POST /api/agent/queue-conformance', () => {
       event_type: 'an',
       title: 'Summer Symphony',
       description: 'Registration is required for the summer symphony day camp.',
+      buttons: JSON.stringify([{ title: 'Register', link: 'https://symphony.example.org/camp' }]),
       website: 'https://symphony.example.org/camp',
     })]);
 

@@ -1,6 +1,9 @@
 import {
   COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS,
+  COMMUNITY_HUB_INVENTORY_URL,
+  INTAKE_INVENTORY_URL,
   compareEventContent,
+  compareLocalEventContent,
   fetchCommunityHubInventory,
   findBestContentMatch,
   normalizeContentSessions,
@@ -222,10 +225,42 @@ describe('CommunityHub content inventory', () => {
     });
   });
 
-  it('instructs the agent to return every eligible event and leave deduplication to the server', () => {
-    expect(COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS).toContain('EVERY eligible event');
-    expect(COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS).toContain('server-side');
-    expect(COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS).toContain('Do not fetch the CommunityHub inventory');
+  it('matches a retained local draft by whole content with the remote rules', () => {
+    const retained = {
+      title: 'Summer Jazz Night!',
+      event_type: 'ot',
+      description: 'An evening of live jazz downtown.',
+      extended_description: null,
+      calendar_source_url: 'https://example.org/events/jazz',
+      sessions: JSON.stringify([{ startTime: 1_800_000_000, endTime: 1_800_003_600 }]),
+    };
+    const exact = compareLocalEventContent({
+      title: 'Summer Jazz Night',
+      eventType: 'ot',
+      description: 'An evening of live jazz downtown.',
+      sessions: [{ startTime: 1_800_000_000, endTime: 1_800_003_600 }],
+    }, retained);
+    expect(exact.kind).toBe('exact');
+
+    // A retained row without comparable content can never match.
+    const empty = compareLocalEventContent(
+      { title: 'Summer Jazz Night', sessions: [{ startTime: 1, endTime: 2 }] },
+      { title: '', sessions: [] },
+    );
+    expect(empty.kind).toBe('none');
+  });
+
+  it('instructs the agent to deduplicate against both inventories by entire content', () => {
+    expect(COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS).toContain('Duplicate checking is your responsibility');
+    expect(COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS).toContain(COMMUNITY_HUB_INVENTORY_URL);
+    expect(COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS).toContain(INTAKE_INVENTORY_URL);
+    expect(COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS).toContain('using the entire content');
+    expect(COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS).toContain('Never compare IDs');
+    // Uncertainty and inventory failures must never suppress extraction; the
+    // server-side comparison is the backstop. Corrections are exempt.
+    expect(COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS).toContain('return yours');
+    expect(COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS).toContain('return your full extraction anyway');
+    expect(COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS).toContain('Correction runs are exempt');
     expect(COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS).not.toContain('Skip a source event');
   });
 

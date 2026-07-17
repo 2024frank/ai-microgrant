@@ -264,6 +264,8 @@ describe('runComparison', () => {
       const matched = makeCandidate({
         index: 0,
         outcome: 'duplicate_communityhub',
+        // Preserved duplicates always have a written row behind them.
+        event_id: 91,
         communityhub_match: {
           kind: 'exact',
           reasons: ['normalized title', 'complete session windows'],
@@ -272,7 +274,7 @@ describe('runComparison', () => {
         },
       });
       const crossSource = makeCandidate(
-        { index: 1, title: 'Cross Source Event', outcome: 'duplicate_cross_source' },
+        { index: 1, title: 'Cross Source Event', outcome: 'duplicate_cross_source', event_id: 92 },
         {
           title: 'Cross Source Event',
           description: 'Cross source description.',

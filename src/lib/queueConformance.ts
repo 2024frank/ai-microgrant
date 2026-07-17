@@ -55,6 +55,11 @@ export type PendingEventRow = Record<string, unknown> & {
   website: string | null;
   location: string | null;
   image_cdn_url: string | null;
+  calendar_source_url?: string | null;
+  /** Configured organization site of the row's source (joined by the route). */
+  source_org_website?: string | null;
+  /** The row's source kind (joined by the route). */
+  source_kind?: string | null;
 };
 
 export type ConformancePlan = {
@@ -143,6 +148,21 @@ export function planQueueConformance(
     location: row.location ?? undefined,
   });
 
+  // Every record must carry a website (the reviewer sees "Ready" only on a
+  // complete payload). Preference order matches ingestion: the stored value,
+  // the configured organization site, then the event's page. An aggregator
+  // is not the organizer of what it relays, so its configured site is never
+  // stamped onto relayed events.
+  const configuredOrgSite = row.source_kind === 'aggregator'
+    ? ''
+    : text(row.source_org_website).trim();
+  const filledWebsite = text(row.website).trim()
+    || configuredOrgSite
+    || text(row.calendar_source_url).trim();
+  if (filledWebsite && filledWebsite !== text(row.website).trim()) {
+    notes.push('website filled from the source configuration or the event page');
+  }
+
   const merged: Record<string, unknown> = {
     ...row,
     email: options.submitterEmail || row.email || '',
@@ -150,12 +170,20 @@ export function planQueueConformance(
     description: policy.record.description,
     extended_description: (policy.record.extendedDescription as string | undefined) ?? null,
     buttons: policy.record.buttons,
+    website: filledWebsite || null,
   };
   const validation = validateCommunityHubPayload(merged);
   const payload = validation.success ? validation.data : validation.normalized;
   const issues = validation.success
     ? [...policy.issues]
     : [...policy.issues, ...validation.errors];
+  if (!text(payload.website).trim()) {
+    issues.push({
+      path: 'website',
+      code: 'website_missing',
+      message: 'no website came from the source; add the event page or organization site URL before publishing',
+    });
+  }
 
   const updates: Record<string, unknown> = {};
   const fieldPairs: Array<[string, unknown]> = [
@@ -163,6 +191,7 @@ export function planQueueConformance(
     ['description', payload.description],
     ['extended_description', payload.extendedDescription ?? null],
     ['buttons', payload.buttons],
+    ['website', text(payload.website).trim() || null],
   ];
   for (const [field, nextValue] of fieldPairs) {
     if (canonical(row[field]) !== canonical(nextValue)) updates[field] = nextValue;

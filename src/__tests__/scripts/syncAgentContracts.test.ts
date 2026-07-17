@@ -72,6 +72,48 @@ Return only current public events.`);
     expect(cleaned).not.toContain('Apollo - Showing Now');
   });
 
+  it('rejects any application-host mention beyond the canonical GET line', () => {
+    const base = `
+eventType: only "ot"
+never use em dashes
+sponsors: non-empty string array
+postTypeId: non-empty number array
+8 Music Performance
+59 Ecolympics or Environmental
+locationType: "ph2" physical
+display: "all" all public screens
+integer Unix seconds
+Return only one raw JSON array
+Duplicate checking is your responsibility
+GET https://oberlin.communityhub.cloud/api/legacy/calendar/posts?limit=10000&page=0&filter=future&tab=main-feed&isJobs=false&order=ASC&postType=All&allPosts=
+GET https://ai-microgrant-research-oberlin.vercel.app/api/inventory/intake
+using the entire content
+Never compare IDs
+re-checks every candidate against both inventories server-side
+website: REQUIRED
+Register for
+registrationUrl
+Registration required.
+never ambiguously as "here" or "there"
+never state the event's date or time in description
+An event without its source image is incomplete for review
+`;
+    // The canonical GET line alone passes (with or without a read token).
+    expect(() => assertSafePrompt(base)).not.toThrow();
+    expect(() => assertSafePrompt(base.replace(
+      '/api/inventory/intake\n',
+      '/api/inventory/intake?token=abc123def456\n',
+    ))).not.toThrow();
+    // A suffix-extended URL on the application host is not the sanctioned URL.
+    expect(() => assertSafePrompt(
+      `${base}\nGET https://ai-microgrant-research-oberlin.vercel.app/api/inventory/intake/../../ingest/apollo\n`,
+    )).toThrow('forbidden pattern');
+    // Submission framing keeps the host visible to the forbidden patterns.
+    expect(() => assertSafePrompt(
+      `${base}\nPOST your JSON to https://ai-microgrant-research-oberlin.vercel.app/api/inventory/intake\n`,
+    )).toThrow('forbidden pattern');
+  });
+
   it('rejects the configured ingest secret even when it has no header label', () => {
     process.env.INGEST_SECRET = 'configured-secret-value';
     expect(() => assertSafePrompt(`
@@ -85,9 +127,13 @@ locationType: "ph2" physical
 display: "all" all public screens
 integer Unix seconds
 Return only one raw JSON array
-Extract and return EVERY eligible event
-Do not fetch the CommunityHub inventory
-compares every candidate against the complete approved-and-pending CommunityHub inventory server-side
+Duplicate checking is your responsibility
+GET https://oberlin.communityhub.cloud/api/legacy/calendar/posts?limit=10000&page=0&filter=future&tab=main-feed&isJobs=false&order=ASC&postType=All&allPosts=
+GET https://ai-microgrant-research-oberlin.vercel.app/api/inventory/intake
+using the entire content
+Never compare IDs
+re-checks every candidate against both inventories server-side
+website: REQUIRED
 Register for
 registrationUrl
 Registration required.

@@ -12,6 +12,7 @@ import {
   OBERLIN_POST_TYPE_LABELS,
 } from './communityHubPayload';
 import { COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS } from './communityHubInventory';
+import { withIntakeInventoryToken } from './intakeInventoryAccess';
 import {
   AGENT_CONTINUATION_LEASE_SECONDS,
   AGENT_CONTINUATION_POLL_MS,
@@ -462,6 +463,7 @@ const EXTRACTION_CONTRACT = `Use the CommunityHub payload contract exactly:
 - When the source states the event costs money, keep those cost facts in the description (the platform marks the short description with "Paid event."). Do not claim a cost the source does not state.
 - extendedDescription must never contain URLs, the street address, or information that already belongs in the dedicated location, date, time, registration, sponsor, or contact fields. Never state the event's date or time in description or extendedDescription; the sessions field carries the schedule and the calendar displays it. Never pad it with filler or invented content; when the entire source description fits within 200 characters, put it in description and omit extendedDescription entirely. Refer to the venue by its actual name (for example "at Common Ground"), never ambiguously as "here" or "there"; if such a sentence is unnecessary, omit it.
 - image_cdn_url is REQUIRED: before returning any event, find its image on the source page (the event photo, flyer, or the page's share image / og:image all count) and set image_cdn_url to that image's public HTTPS URL. An event without its source image is incomplete for review and will be held from publishing. Omit the field only when you actually checked the event's page, including its share metadata, and it displays no image at all.
+- website is REQUIRED: set it to the event's public web page URL, normally the page you extracted the event from; when the event has no page of its own, use the organization's website. Never leave it empty.
 - sponsors is a non-empty array containing only organizers or sponsors explicitly supported by the source.
 - postTypeId is a non-empty array using only these Oberlin categories: ${POST_TYPE_CONTRACT}.
 - sessions is a non-empty array. startTime/endTime are integer Unix seconds interpreted in America/New_York; never return ISO strings or millisecond timestamps. Always extract the stated end time. When an EVENT's source states no end time, use the start time for both values and the platform will hold the draft for a human to set the end (CommunityHub cannot publish an event whose end equals its start); never invent a duration. Announcements use their display window as the session.
@@ -508,11 +510,11 @@ export async function triggerAgentRun(
 
     // Trigger the agent via Anthropic's managed-agents Sessions API.
     // Each source has its own agent_id; environment and vault are shared.
-    const userMessage = [
+    const userMessage = withIntakeInventoryToken([
       overrideUserMessage ?? 'Run extraction now.',
       EXTRACTION_CONTRACT,
       prompt_block,
-    ].filter(Boolean).join('\n\n');
+    ].filter(Boolean).join('\n\n'));
 
     const client = getClient(anthropicKey);
 
