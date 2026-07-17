@@ -116,10 +116,16 @@ export function buildSystemPrompt(source: SourceRow, currentSystem: unknown): st
   return `${CANONICAL_CONTRACT}\n\n## Source-specific instructions for ${source.name}\n\n${sourceInstructions}\n\nReturn only the JSON array.`;
 }
 
+const COMMUNITY_HUB_HOST = 'oberlin.communityhub.cloud';
+
 function externalSourceUrls(prompt: unknown): string[] {
+  // The CommunityHub inventory URL lived in the OLD dedup instructions and is
+  // intentionally removed by the new contract (duplicate matching moved
+  // server-side); it is platform plumbing, not a source page, so its removal
+  // must not trip the source-URL preservation check.
   return [...new Set((String(prompt ?? '').match(/https?:\/\/[^\s<>()"']+/g) ?? [])
     .map(url => url.replace(/[.,;:]+$/, ''))
-    .filter(url => !url.includes(APPLICATION_HOST)))];
+    .filter(url => !url.includes(APPLICATION_HOST) && !url.includes(COMMUNITY_HUB_HOST)))];
 }
 
 export function assertSafePrompt(prompt: string) {
