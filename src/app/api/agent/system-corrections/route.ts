@@ -7,20 +7,27 @@ import { enqueueAgentContinuation } from '@/lib/agentContinuation';
 export const maxDuration = 300;
 
 /**
- * Automatic required-field requeue (2026-07-16 meeting, item 12).
+ * Automatic correction dispatch, run by the scheduler.
  *
- * Ingestion rejects a contract-invalid draft as "Required fields are missing"
- * (rejection_origin='system') and preserves the reason. This dispatcher — run
- * by the scheduler — requeues those rejections through the existing correction
- * workflow: a needs_fix entry plus a correction agent run whose output must
- * reference the original via fixedFromEventId, so a retry can never create a
- * duplicate event. One automatic attempt per event; a failed correction stays
- * rejected for a human.
+ * Two candidate classes route through the existing correction workflow (a
+ * needs_fix entry plus a correction agent run whose output must reference
+ * the original via fixedFromEventId, so a retry can never create a
+ * duplicate event):
+ *  - required-field rejections (2026-07-16 meeting, item 12): drafts
+ *    ingestion rejected as "Required fields are missing"
+ *    (rejection_origin='system') with the reason preserved;
+ *  - imageless drafts: the contract requires the event's image, and the
+ *    deterministic page scan already tried and failed
+ *    (image_discovery_at set, still no poster), so the agent is sent to
+ *    find the event's real image from the source's official channels.
+ * One automatic attempt per event; a failed correction returns the event to
+ * its prior queue state for a human.
  */
 const MAX_DISPATCH_PER_INVOCATION = 2;
 const MAX_EVENT_AGE_DAYS = 7;
 
-type CandidateRow = Record<string, any>;
+type CorrectionKind = 'missing_fields' | 'missing_image';
+type CandidateRow = Record<string, any> & { correction_kind: CorrectionKind };
 
 function isDuplicateEntry(error: any): boolean {
   return error?.code === 'ER_DUP_ENTRY' || error?.errno === 1062;
@@ -49,10 +56,20 @@ async function restoreFailedCorrection(eventId: number, runId: number, message: 
        )`,
     [eventId, runId],
   );
+  // An imageless-draft correction returns to the review queue on failure.
+  await bestEffortQuery(
+    `UPDATE raw_events SET status='pending', sent_for_correction=0
+     WHERE id=? AND status='pending_fix'
+       AND NOT EXISTS (
+         SELECT 1 FROM agent_runs ar
+         WHERE ar.correction_event_id=raw_events.id AND ar.status='running' AND ar.id<>?
+       )`,
+    [eventId, runId],
+  );
   await bestEffortQuery('DELETE FROM needs_fix WHERE raw_event_id=?', [eventId]);
 }
 
-async function selectCandidates(): Promise<CandidateRow[]> {
+async function selectRejectedCandidates(): Promise<CandidateRow[]> {
   const [rows] = await pool.query(
     `SELECT re.*,
             latest_rejection.reason_codes AS rejection_reason_codes,
@@ -86,15 +103,57 @@ async function selectCandidates(): Promise<CandidateRow[]> {
        )
      ORDER BY re.created_at ASC`,
   ) as any;
-  const candidates = Array.isArray(rows) ? rows as CandidateRow[] : [];
-  // One correction per source per invocation: a source supports only one
-  // active run at a time.
+  return (Array.isArray(rows) ? rows : [])
+    .map(row => ({ ...row, correction_kind: 'missing_fields' as const }));
+}
+
+async function selectImagelessCandidates(): Promise<CandidateRow[]> {
+  const [rows] = await pool.query(
+    `SELECT re.*,
+            NULL AS rejection_reason_codes,
+            NULL AS rejection_reviewer_note
+     FROM raw_events re
+     JOIN sources s ON s.id=re.source_id AND s.active=1
+     WHERE re.status='pending'
+       AND COALESCE(re.sent_for_correction, 0)=0
+       AND re.superseded_by_id IS NULL
+       AND re.corrected_from_id IS NULL
+       AND re.image_data IS NULL
+       AND (re.image_cdn_url IS NULL OR re.image_cdn_url='')
+       -- The deterministic page scan already tried and found nothing.
+       AND re.image_discovery_at IS NOT NULL
+       AND re.created_at > DATE_SUB(NOW(), INTERVAL ${MAX_EVENT_AGE_DAYS} DAY)
+       AND NOT EXISTS (SELECT 1 FROM needs_fix nf WHERE nf.raw_event_id=re.id)
+       -- One automatic attempt per event, ever.
+       AND NOT EXISTS (
+         SELECT 1 FROM agent_runs prior WHERE prior.correction_event_id=re.id
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM agent_runs active
+         WHERE active.source_id=re.source_id AND active.status='running'
+       )
+     ORDER BY re.created_at ASC`,
+  ) as any;
+  return (Array.isArray(rows) ? rows : [])
+    .map(row => ({ ...row, correction_kind: 'missing_image' as const }));
+}
+
+async function selectCandidates(): Promise<CandidateRow[]> {
+  const candidates = [
+    ...await selectRejectedCandidates(),
+    ...await selectImagelessCandidates(),
+  ];
+  // One correction per source per invocation (a source supports only one
+  // active run at a time), rejections first, never the same event twice.
   const seenSources = new Set<number>();
+  const seenEvents = new Set<number>();
   const selected: CandidateRow[] = [];
   for (const candidate of candidates) {
     const sourceId = Number(candidate.source_id);
-    if (seenSources.has(sourceId)) continue;
+    const eventId = Number(candidate.id);
+    if (seenSources.has(sourceId) || seenEvents.has(eventId)) continue;
     seenSources.add(sourceId);
+    seenEvents.add(eventId);
     selected.push(candidate);
     if (selected.length >= MAX_DISPATCH_PER_INVOCATION) break;
   }
@@ -103,11 +162,13 @@ async function selectCandidates(): Promise<CandidateRow[]> {
 
 async function dispatchOne(event: CandidateRow, origin: string): Promise<{
   event_id: number;
+  kind: CorrectionKind;
   status: 'dispatched' | 'skipped' | 'error';
   run_id?: number;
   error?: string;
 }> {
   const eventId = Number(event.id);
+  const kind = event.correction_kind;
   let runId: number;
   try {
     const [runResult] = await pool.query(
@@ -118,21 +179,29 @@ async function dispatchOne(event: CandidateRow, origin: string): Promise<{
     runId = Number(runResult.insertId);
   } catch (error) {
     if (isDuplicateEntry(error)) {
-      return { event_id: eventId, status: 'skipped', error: 'source already has an active run' };
+      return { event_id: eventId, kind, status: 'skipped', error: 'source already has an active run' };
     }
     return {
       event_id: eventId,
+      kind,
       status: 'error',
       error: error instanceof Error ? error.message : 'Unable to claim a correction run',
     };
   }
 
-  const notes = [
-    // The system rejection note leads with the exact problem class
-    // ("Required fields are missing." or the format violation).
-    String(event.rejection_reviewer_note || 'This extracted event does not satisfy the platform contract.').slice(0, 1500),
-    'Re-read the original source and correct only what the note describes. Do not invent values the source does not state; if the source truly lacks a required fact, return the event without inventing it.',
-  ].filter(Boolean).join(' ');
+  const notes = event.correction_kind === 'missing_image'
+    ? [
+        'This event is missing its REQUIRED image (image_cdn_url), and the platform already scanned the event page section without finding one.',
+        `Find the event's real image from the source's official channels: the event page itself (${String(event.calendar_source_url || 'no page recorded')}), the organization's website or its official social media post for this exact event, or the venue's official page for this exact event. Set image_cdn_url to that image's public HTTPS URL.`,
+        'Never attach an unrelated or generic image and never fabricate one; if no official image for this event exists anywhere, return the event unchanged apart from fixSummary saying so.',
+        'Keep every other field exactly as the source supports it.',
+      ].join(' ')
+    : [
+        // The system rejection note leads with the exact problem class
+        // ("Required fields are missing." or the format violation).
+        String(event.rejection_reviewer_note || 'This extracted event does not satisfy the platform contract.').slice(0, 1500),
+        'Re-read the original source and correct only what the note describes. Do not invent values the source does not state; if the source truly lacks a required fact, return the event without inventing it.',
+      ].filter(Boolean).join(' ');
 
   const conn = await pool.getConnection();
   try {
@@ -140,16 +209,27 @@ async function dispatchOne(event: CandidateRow, origin: string): Promise<{
     await conn.query(
       `INSERT INTO needs_fix
        (raw_event_id, source_id, correction_notes, sent_by_user_id, sent_by_email)
-       VALUES (?, ?, ?, NULL, 'system@required-fields')
+       VALUES (?, ?, ?, NULL, ?)
        ON DUPLICATE KEY UPDATE
          correction_notes=VALUES(correction_notes), created_at=CURRENT_TIMESTAMP`,
-      [eventId, event.source_id, notes],
+      [
+        eventId,
+        event.source_id,
+        notes,
+        event.correction_kind === 'missing_image' ? 'system@image-recovery' : 'system@required-fields',
+      ],
     );
-    const [claim] = await conn.query(
-      `UPDATE raw_events SET sent_for_correction=1, updated_at=NOW()
-       WHERE id=? AND status='rejected' AND sent_for_correction=0`,
-      [eventId],
-    ) as any;
+    const [claim] = event.correction_kind === 'missing_image'
+      ? await conn.query(
+          `UPDATE raw_events SET status='pending_fix', sent_for_correction=1, updated_at=NOW()
+           WHERE id=? AND status='pending' AND COALESCE(sent_for_correction, 0)=0`,
+          [eventId],
+        ) as any
+      : await conn.query(
+          `UPDATE raw_events SET sent_for_correction=1, updated_at=NOW()
+           WHERE id=? AND status='rejected' AND sent_for_correction=0`,
+          [eventId],
+        ) as any;
     if (!claim.affectedRows) throw new Error('Event is no longer available for correction');
     await conn.query(
       `INSERT INTO review_sessions
@@ -166,6 +246,7 @@ async function dispatchOne(event: CandidateRow, origin: string): Promise<{
     );
     return {
       event_id: eventId,
+      kind,
       status: 'error',
       run_id: runId,
       error: error instanceof Error ? error.message : 'Unable to queue correction',
@@ -198,7 +279,7 @@ async function dispatchOne(event: CandidateRow, origin: string): Promise<{
     }
   });
 
-  return { event_id: eventId, status: 'dispatched', run_id: runId };
+  return { event_id: eventId, kind, status: 'dispatched', run_id: runId };
 }
 
 async function handle(req: NextRequest) {

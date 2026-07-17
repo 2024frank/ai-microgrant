@@ -77,8 +77,11 @@ describe('POST /api/agent/system-corrections', () => {
 
   it('dispatches a correction run for a system-rejected candidate', async () => {
     db.default.query.mockImplementation((sql: string) => {
-      if (typeof sql === 'string' && sql.includes('FROM raw_events re')) {
+      if (typeof sql === 'string' && sql.includes('latest_rejection')) {
         return Promise.resolve([[CANDIDATE]]);
+      }
+      if (typeof sql === 'string' && sql.includes('image_discovery_at IS NOT NULL')) {
+        return Promise.resolve([[]]);
       }
       if (typeof sql === 'string' && sql.includes('INSERT INTO agent_runs')) {
         return Promise.resolve([{ insertId: 55 }]);
@@ -144,10 +147,101 @@ describe('POST /api/agent/system-corrections', () => {
     expect(mockEnqueueContinuation).not.toHaveBeenCalled();
   });
 
+  it('dispatches an image-recovery correction for an imageless pending draft', async () => {
+    const imageless = {
+      id: 223,
+      source_id: 9,
+      title: 'Attend the First Church Ball Game outing',
+      status: 'pending',
+      sent_for_correction: 0,
+      image_data: null,
+      image_cdn_url: null,
+      image_discovery_at: '2026-07-17 15:00:00',
+      calendar_source_url: 'https://firstchurchoberlin.org/events/',
+      rejection_reason_codes: null,
+      rejection_reviewer_note: null,
+    };
+    db.default.query.mockImplementation((sql: string) => {
+      if (typeof sql === 'string' && sql.includes('latest_rejection')) {
+        return Promise.resolve([[]]);
+      }
+      if (typeof sql === 'string' && sql.includes('image_discovery_at IS NOT NULL')) {
+        return Promise.resolve([[imageless]]);
+      }
+      if (typeof sql === 'string' && sql.includes('INSERT INTO agent_runs')) {
+        return Promise.resolve([{ insertId: 77 }]);
+      }
+      return Promise.resolve([{ affectedRows: 1 }]);
+    });
+
+    const response = await POST(request());
+    const body = await response.json();
+
+    expect(body).toMatchObject({
+      ok: true,
+      considered: 1,
+      dispatched: 1,
+      results: [{ event_id: 223, kind: 'missing_image', status: 'dispatched', run_id: 77 }],
+    });
+
+    // The draft leaves the review queue as pending_fix while the agent works.
+    const claimUpdate = db.mockConn.query.mock.calls.find(
+      ([sql]: [string]) => typeof sql === 'string' && sql.includes("status='pending_fix'"),
+    );
+    expect(claimUpdate).toBeDefined();
+    expect(claimUpdate![1]).toEqual([223]);
+
+    // The correction notes demand the event's real image, never a stand-in.
+    const needsFixInsert = db.mockConn.query.mock.calls.find(
+      ([sql]: [string]) => typeof sql === 'string' && sql.includes('INSERT INTO needs_fix'),
+    );
+    expect(needsFixInsert![1][2]).toContain('REQUIRED image');
+    expect(needsFixInsert![1][2]).toContain('https://firstchurchoberlin.org/events/');
+    expect(needsFixInsert![1][2]).toContain('Never attach an unrelated or generic image');
+    expect(needsFixInsert![1][3]).toBe('system@image-recovery');
+
+    await callbacks[0]();
+    expect(mockTriggerAgentRun).toHaveBeenCalledWith(
+      9,
+      77,
+      'test-key',
+      'env-test',
+      expect.stringContaining('"fixedFromEventId": "223"'),
+      { expectedCorrectionEventId: 223 },
+    );
+  });
+
+  it('prefers a required-field rejection over an imageless draft from the same source', async () => {
+    const imageless = {
+      id: 224, source_id: 4, status: 'pending', sent_for_correction: 0,
+      image_discovery_at: '2026-07-17 15:00:00',
+    };
+    db.default.query.mockImplementation((sql: string) => {
+      if (typeof sql === 'string' && sql.includes('latest_rejection')) {
+        return Promise.resolve([[CANDIDATE]]);
+      }
+      if (typeof sql === 'string' && sql.includes('image_discovery_at IS NOT NULL')) {
+        return Promise.resolve([[imageless]]);
+      }
+      if (typeof sql === 'string' && sql.includes('INSERT INTO agent_runs')) {
+        return Promise.resolve([{ insertId: 55 }]);
+      }
+      return Promise.resolve([{ affectedRows: 1 }]);
+    });
+
+    const body = await (await POST(request())).json();
+    // Same source: only the rejection is dispatched this tick.
+    expect(body.considered).toBe(1);
+    expect(body.results[0]).toMatchObject({ event_id: 10, kind: 'missing_fields' });
+  });
+
   it('skips a candidate when the run claim hits a duplicate-key conflict', async () => {
     db.default.query.mockImplementation((sql: string) => {
-      if (typeof sql === 'string' && sql.includes('FROM raw_events re')) {
+      if (typeof sql === 'string' && sql.includes('latest_rejection')) {
         return Promise.resolve([[CANDIDATE]]);
+      }
+      if (typeof sql === 'string' && sql.includes('image_discovery_at IS NOT NULL')) {
+        return Promise.resolve([[]]);
       }
       if (typeof sql === 'string' && sql.includes('INSERT INTO agent_runs')) {
         return Promise.reject({ code: 'ER_DUP_ENTRY' });
@@ -174,8 +268,11 @@ describe('POST /api/agent/system-corrections', () => {
 
   it('marks the run failed when the event can no longer be claimed', async () => {
     db.default.query.mockImplementation((sql: string) => {
-      if (typeof sql === 'string' && sql.includes('FROM raw_events re')) {
+      if (typeof sql === 'string' && sql.includes('latest_rejection')) {
         return Promise.resolve([[CANDIDATE]]);
+      }
+      if (typeof sql === 'string' && sql.includes('image_discovery_at IS NOT NULL')) {
+        return Promise.resolve([[]]);
       }
       if (typeof sql === 'string' && sql.includes('INSERT INTO agent_runs')) {
         return Promise.resolve([{ insertId: 55 }]);
