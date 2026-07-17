@@ -127,8 +127,14 @@ async function selectImagelessCandidates(): Promise<CandidateRow[]> {
        -- agent already recorded why the image is missing needs no further
        -- hunt; this is also what stops a note-only correction from looping.
        AND JSON_EXTRACT(re.field_notes, '$.image_cdn_url') IS NULL
-       -- The deterministic page scan already tried and found nothing.
-       AND re.image_discovery_at IS NOT NULL
+       -- Let the cheap deterministic page scan try first; but an event with no
+       -- source page to scan never gets stamped, so send it to the agent
+       -- directly rather than leaving it forever unexplained.
+       AND (
+         re.image_discovery_at IS NOT NULL
+         OR re.calendar_source_url IS NULL
+         OR re.calendar_source_url = ''
+       )
        AND re.created_at > DATE_SUB(NOW(), INTERVAL ${MAX_EVENT_AGE_DAYS} DAY)
        AND NOT EXISTS (SELECT 1 FROM needs_fix nf WHERE nf.raw_event_id=re.id)
        -- One automatic attempt per event, ever.
