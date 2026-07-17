@@ -7,8 +7,11 @@ import { validatePublicHttpUrl } from './publicHttpUrl';
  * to represent the page. Many small-organization pages declare no share
  * metadata at all yet display the event's photo in the page body, so the
  * page's content images are the fallback, filtered against icons, logos,
- * and tracking pixels. Nothing is invented: every candidate comes from the
- * source page and still goes through the safe image pipeline (public-host
+ * and tracking pixels. On a page announcing several events at once, plain
+ * document order attaches a NEIGHBOR's photo, so content candidates are
+ * ordered by proximity to the event's own title text when a title hint is
+ * available. Nothing is invented: every candidate comes from the source
+ * page and still goes through the safe image pipeline (public-host
  * validation, pinned-DNS fetch, sharp re-encode) before any byte is stored.
  */
 
@@ -26,6 +29,11 @@ const IMAGE_META_NAMES = new Set([
 /** Filename fragments that mark chrome, not content. */
 const JUNK_IMAGE_PATTERN = /(?:logo|icon|sprite|avatar|badge|pixel|spacer|blank|placeholder|button|banner-ad|favicon)/i;
 const MAX_CONTENT_CANDIDATES = 5;
+/** Ubiquitous words that cannot anchor a title inside a page. */
+const TITLE_STOPWORDS = new Set([
+  'the', 'and', 'for', 'with', 'from', 'this', 'that', 'your', 'our',
+  'are', 'not', 'all', 'will', 'have', 'more', 'about',
+]);
 
 function attribute(tag: string, name: string): string {
   const match = new RegExp(`\\b${name}\\s*=\\s*("([^"]*)"|'([^']*)')`, 'i').exec(tag);
@@ -63,22 +71,22 @@ function declaredDimension(tag: string, name: string): number | null {
   return Number(raw);
 }
 
-/**
- * Content-image URL candidates from the page body, in document order (may be
- * relative). Lazy-loading attributes are honored because server-fetched HTML
- * often carries the real URL only in data-src/data-original/srcset while src
- * holds a placeholder. Declared-tiny images and chrome filenames are skipped;
- * undeclared sizes pass because the safe image pipeline enforces real limits
- * when the bytes are actually fetched.
- */
-export function extractContentImageCandidates(html: string): string[] {
-  const candidates: string[] = [];
-  for (const tag of html.match(IMG_TAG_PATTERN) ?? []) {
+type ContentImageCandidate = { url: string; index: number };
+
+function collectContentImageCandidates(html: string): ContentImageCandidate[] {
+  const seen = new Set<string>();
+  const candidates: ContentImageCandidate[] = [];
+  const pattern = new RegExp(IMG_TAG_PATTERN.source, 'gi');
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(html)) !== null) {
+    const tag = match[0];
     const width = declaredDimension(tag, 'width');
     const height = declaredDimension(tag, 'height');
     if ((width !== null && width < 200) || (height !== null && height < 200)) continue;
     const srcset = decodeEntities(attribute(tag, 'srcset') || attribute(tag, 'data-srcset'));
     const fromSrcset = srcset.split(',')[0]?.trim().split(/\s+/)[0] ?? '';
+    // Lazy-loading attributes are honored because server-fetched HTML often
+    // carries the real URL only in data-src/srcset while src is a placeholder.
     const sources = [
       decodeEntities(attribute(tag, 'src')),
       decodeEntities(attribute(tag, 'data-src')),
@@ -92,22 +100,70 @@ export function extractContentImageCandidates(html: string): string[] {
       && !/\.svg(?:[?#]|$)/i.test(value)
       && !JUNK_IMAGE_PATTERN.test(value)
     ));
-    if (url) candidates.push(url);
+    if (url && !seen.has(url)) {
+      seen.add(url);
+      candidates.push({ url, index: match.index });
+    }
   }
-  return [...new Set(candidates)].slice(0, MAX_CONTENT_CANDIDATES);
+  return candidates;
+}
+
+/** Content-image URL candidates from the page body, in document order. */
+export function extractContentImageCandidates(html: string): string[] {
+  return collectContentImageCandidates(html)
+    .slice(0, MAX_CONTENT_CANDIDATES)
+    .map(candidate => candidate.url);
 }
 
 /**
+ * Position of the event's title inside the page, anchored on the RAREST
+ * title token present: on a page announcing several events, common words
+ * ("first", "church") appear everywhere while the distinctive one
+ * ("crushers") appears once, exactly at the event's own section.
+ */
+function titleAnchorIndex(html: string, titleHint: string): number | null {
+  const lower = html.toLocaleLowerCase('en-US');
+  const tokens = [...new Set(
+    titleHint
+      .normalize('NFKC')
+      .toLocaleLowerCase('en-US')
+      .split(/[^\p{L}\p{N}]+/u)
+      .filter(token => token.length >= 4 && !TITLE_STOPWORDS.has(token)),
+  )];
+  let best: { count: number; index: number } | null = null;
+  for (const token of tokens) {
+    let at = lower.indexOf(token);
+    if (at === -1) continue;
+    const first = at;
+    let count = 0;
+    while (at !== -1 && count < 50) {
+      count++;
+      at = lower.indexOf(token, at + token.length);
+    }
+    if (!best || count < best.count) best = { count, index: first };
+  }
+  return best?.index ?? null;
+}
+
+export type DiscoverSourcePageImageOptions = {
+  fetcher?: typeof fetch;
+  /** The event's title, used to prefer images near its section of the page. */
+  titleHint?: string;
+};
+
+/**
  * Fetch the event's source page and return its publicly hosted poster
- * candidates in priority order: share metadata first, then content images.
- * The page fetch itself is bounded; each candidate image is fetched later
- * through the hardened safeRemoteImage pipeline, so callers try candidates
- * in order until one loads.
+ * candidates in priority order: share metadata first, then content images
+ * (nearest to the event's title first when a hint is given). The page fetch
+ * itself is bounded; each candidate image is fetched later through the
+ * hardened safeRemoteImage pipeline, so callers try candidates in order
+ * until one loads.
  */
 export async function discoverSourcePageImageCandidates(
   pageUrl: string,
-  fetcher: typeof fetch = fetch,
+  options: DiscoverSourcePageImageOptions = {},
 ): Promise<string[]> {
+  const fetcher = options.fetcher ?? fetch;
   const page = validatePublicHttpUrl(pageUrl);
   if (!page.success) return [];
 
@@ -135,10 +191,18 @@ export async function discoverSourcePageImageCandidates(
     return [];
   }
 
+  const anchor = options.titleHint ? titleAnchorIndex(html, options.titleHint) : null;
+  const contentCandidates = collectContentImageCandidates(html);
+  if (anchor !== null) {
+    contentCandidates.sort((left, right) => (
+      Math.abs(left.index - anchor) - Math.abs(right.index - anchor)
+    ));
+  }
+
   const base = (typeof response.url === 'string' && response.url) || page.url.toString();
   const ordered = [
     ...extractMetaImageCandidates(html),
-    ...extractContentImageCandidates(html),
+    ...contentCandidates.slice(0, MAX_CONTENT_CANDIDATES).map(candidate => candidate.url),
   ];
   const resolved: string[] = [];
   for (const candidate of ordered) {
@@ -158,8 +222,8 @@ export async function discoverSourcePageImageCandidates(
 /** First discovered poster candidate, or null when the page yields none. */
 export async function discoverSourcePageImage(
   pageUrl: string,
-  fetcher: typeof fetch = fetch,
+  options: DiscoverSourcePageImageOptions = {},
 ): Promise<string | null> {
-  const candidates = await discoverSourcePageImageCandidates(pageUrl, fetcher);
+  const candidates = await discoverSourcePageImageCandidates(pageUrl, options);
   return candidates[0] ?? null;
 }

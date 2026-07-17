@@ -138,7 +138,10 @@ describe('POST /api/agent/queue-conformance', () => {
     const data = await (await POST(makeReq())).json();
 
     expect(data.items[0].image_action).toBe('discovered');
-    expect(discoverSourcePageImageCandidates).toHaveBeenCalledWith('https://library.example.org/event/storytime');
+    expect(discoverSourcePageImageCandidates).toHaveBeenCalledWith(
+      'https://library.example.org/event/storytime',
+      { titleHint: 'Community Jazz Night' },
+    );
     expect(loadImageAsJpeg).toHaveBeenCalledWith('https://cdn.example.org/storytime.jpg');
     const update = db.mockConn.query.mock.calls.find(
       ([sql]: [string]) => typeof sql === 'string' && sql.includes('UPDATE raw_events SET'),

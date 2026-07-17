@@ -43,7 +43,7 @@ describe('discoverSourcePageImage', () => {
     const fetcher = jest.fn().mockResolvedValue(htmlResponse(
       '<meta property="og:image" content="/media/storytime.jpg">',
     )) as unknown as typeof fetch;
-    await expect(discoverSourcePageImage('https://library.example.org/event/storytime', fetcher))
+    await expect(discoverSourcePageImage('https://library.example.org/event/storytime', { fetcher: fetcher }))
       .resolves.toBe('https://library.example.org/media/storytime.jpg');
   });
 
@@ -51,15 +51,15 @@ describe('discoverSourcePageImage', () => {
     const nonHtml = jest.fn().mockResolvedValue(htmlResponse('', {
       headers: { get: () => 'application/pdf' },
     })) as unknown as typeof fetch;
-    await expect(discoverSourcePageImage('https://library.example.org/flyer.pdf', nonHtml))
+    await expect(discoverSourcePageImage('https://library.example.org/flyer.pdf', { fetcher: nonHtml }))
       .resolves.toBeNull();
 
     const failing = jest.fn().mockRejectedValue(new Error('boom')) as unknown as typeof fetch;
-    await expect(discoverSourcePageImage('https://library.example.org/event', failing))
+    await expect(discoverSourcePageImage('https://library.example.org/event', { fetcher: failing }))
       .resolves.toBeNull();
 
     const never = jest.fn() as unknown as typeof fetch;
-    await expect(discoverSourcePageImage('http://localhost/internal', never)).resolves.toBeNull();
+    await expect(discoverSourcePageImage('http://localhost/internal', { fetcher: never })).resolves.toBeNull();
     expect(never).not.toHaveBeenCalled();
   });
 
@@ -68,7 +68,7 @@ describe('discoverSourcePageImage', () => {
       <meta property="og:image" content="http://127.0.0.1/poster.jpg">
       <meta property="og:image:secure_url" content="https://cdn.example.org/safe.jpg">
     `)) as unknown as typeof fetch;
-    await expect(discoverSourcePageImage('https://library.example.org/event', fetcher))
+    await expect(discoverSourcePageImage('https://library.example.org/event', { fetcher: fetcher }))
       .resolves.toBe('https://cdn.example.org/safe.jpg');
   });
 });
@@ -102,11 +102,31 @@ describe('discoverSourcePageImageCandidates', () => {
       <img src="/mt-content/uploads/2026/05/pexels-baseball.jpg" width="7008" height="4672">
       <img src="/mt-content/uploads/2025/05/other-photo.jpg" width="1200" height="800">
     `)) as unknown as typeof fetch;
-    await expect(discoverSourcePageImageCandidates('https://firstchurch.example.org/events/', fetcher))
+    await expect(discoverSourcePageImageCandidates('https://firstchurch.example.org/events/', { fetcher }))
       .resolves.toEqual([
         'https://library.example.org/mt-content/uploads/2026/05/pexels-baseball.jpg',
         'https://library.example.org/mt-content/uploads/2025/05/other-photo.jpg',
       ]);
+  });
+
+  it('prefers the content image nearest the event title on a multi-event page', async () => {
+    // First Church's announcements page lists several events, each with its
+    // own photo; the rarest title token ("crushers") anchors the section.
+    const fetcher = jest.fn().mockResolvedValue(htmlResponse(`
+      <h2>Summer Storytime Sign-up!</h2>
+      <img src="/uploads/storytime-reading.jpg" width="1200" height="800">
+      <p>Come read a story to the kids of First Church this summer.</p>
+      <h2>First Church is Going Out to the Ball Game!</h2>
+      <img src="/uploads/pexels-baseball.jpg" width="7008" height="4672">
+      <p>Join First Church at the Lake Erie Crushers game on July 19th.</p>
+    `)) as unknown as typeof fetch;
+    await expect(discoverSourcePageImageCandidates(
+      'https://firstchurch.example.org/events/',
+      { fetcher, titleHint: 'Join the First Church Crushers ball game outing' },
+    )).resolves.toEqual([
+      'https://library.example.org/uploads/pexels-baseball.jpg',
+      'https://library.example.org/uploads/storytime-reading.jpg',
+    ]);
   });
 
   it('keeps share metadata ahead of content images', async () => {
@@ -114,7 +134,7 @@ describe('discoverSourcePageImageCandidates', () => {
       <meta property="og:image" content="https://cdn.example.org/share.jpg">
       <img src="https://cdn.example.org/body.jpg" width="800">
     `)) as unknown as typeof fetch;
-    await expect(discoverSourcePageImageCandidates('https://library.example.org/event', fetcher))
+    await expect(discoverSourcePageImageCandidates('https://library.example.org/event', { fetcher }))
       .resolves.toEqual([
         'https://cdn.example.org/share.jpg',
         'https://cdn.example.org/body.jpg',

@@ -116,7 +116,9 @@ async function handle(req: NextRequest) {
         markDiscoveryAttempt = true;
         try {
           const { discoverSourcePageImageCandidates } = await import('@/lib/sourcePageImage');
-          const candidates = (await discoverSourcePageImageCandidates(sourcePage)).slice(0, 3);
+          const candidates = (await discoverSourcePageImageCandidates(sourcePage, {
+            titleHint: String(row.title ?? ''),
+          })).slice(0, 3);
           if (candidates.length === 0) {
             item.image_action = 'no_source_image';
             item.image_note = 'the source page names no usable image';
