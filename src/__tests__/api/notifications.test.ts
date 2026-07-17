@@ -91,10 +91,12 @@ describe('POST /api/notifications/review', () => {
     }));
   });
 
-  it('emails reviewer with all-source view when no specific assignment', async () => {
+  it('emails reviewer with an explicit all-source permission', async () => {
     db.default.query
       .mockResolvedValueOnce([[ADMIN]])
-      .mockResolvedValueOnce([[{ ...REVIEWER, source_names: null }]])    // no assignment
+      .mockResolvedValueOnce([[
+        { ...REVIEWER, can_review_all_sources: 1, source_names: null },
+      ]])
       .mockResolvedValueOnce([[{ name: 'Apollo', count: 3 }, { name: 'City', count: 2 }]]) // all sources pending
       .mockResolvedValueOnce([[{ created_at: new Date() }]]);
 

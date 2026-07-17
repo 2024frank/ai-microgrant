@@ -1,28 +1,18 @@
 import pool from './db';
 import type { AuthUser } from './auth';
 
-/**
- * Reviewers with no explicit assignments retain the shared-queue behavior.
- * Once assignments exist, every detail and mutation route enforces them.
- */
+/** Reviewers are global only through an explicit permission; otherwise deny by default. */
 export async function canAccessSource(user: AuthUser, sourceId: number): Promise<boolean> {
-  if (user.role === 'admin') return true;
+  if (user.role === 'admin' || user.canReviewAllSources) return true;
   if (!Number.isSafeInteger(sourceId) || sourceId < 1) return false;
 
   try {
     const result = await pool.query(
-      `SELECT
-         NOT EXISTS (
-           SELECT 1 FROM reviewer_sources rs
-           JOIN users u ON u.id = rs.reviewer_id
-           WHERE u.firebase_uid = ?
-         )
-         OR EXISTS (
-           SELECT 1 FROM reviewer_sources rs
-           JOIN users u ON u.id = rs.reviewer_id
-           WHERE u.firebase_uid = ? AND rs.source_id = ?
-         ) AS allowed`,
-      [user.uid, user.uid, sourceId],
+      `SELECT EXISTS (
+         SELECT 1 FROM reviewer_sources
+         WHERE reviewer_id=? AND source_id=?
+       ) AS allowed`,
+      [user.id, sourceId],
     ) as any;
     const rows = Array.isArray(result) ? result[0] : null;
     const row = Array.isArray(rows) ? rows[0] : null;

@@ -10,7 +10,13 @@ export default function AdminControlsPage() {
   const [sources, setSources] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm]       = useState({ email: '', full_name: '', role: 'reviewer', source_ids: [] as number[] });
+  const [form, setForm]       = useState({
+    email: '',
+    full_name: '',
+    role: 'reviewer',
+    source_ids: [] as number[],
+    can_review_all_sources: false,
+  });
   const [adding, setAdding]   = useState(false);
   const [error, setError]     = useState('');
   const [savingId, setSavingId] = useState<number | null>(null);
@@ -44,6 +50,23 @@ export default function AdminControlsPage() {
     setSavingId(null);
   }
 
+  async function changeRole(target: any, nextRole: 'admin' | 'reviewer') {
+    if (target.role === nextRole) return;
+    if (nextRole === 'reviewer') {
+      const confirmed = window.confirm(
+        `Demote ${target.full_name} to reviewer and explicitly grant access to all current and future sources? Cancel if they should have a narrower source assignment.`,
+      );
+      if (!confirmed) return;
+      await updateUser(target.id, {
+        role: 'reviewer',
+        can_review_all_sources: true,
+        source_ids: [],
+      });
+      return;
+    }
+    await updateUser(target.id, { role: 'admin' });
+  }
+
   async function deleteUser(u: any) {
     if (!confirm(`Delete ${u.full_name} (${u.email})? This cannot be undone.`)) return;
     await fetch(`/api/users/${u.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
@@ -61,7 +84,7 @@ export default function AdminControlsPage() {
     const data = await res.json();
     if (!res.ok) { setError(data.error || 'Failed'); setAdding(false); return; }
     setShowAdd(false);
-    setForm({ email: '', full_name: '', role: 'reviewer', source_ids: [] });
+    setForm({ email: '', full_name: '', role: 'reviewer', source_ids: [], can_review_all_sources: false });
     load();
     showToast(`${form.full_name} invited — welcome email sent`);
     setAdding(false);
@@ -70,6 +93,7 @@ export default function AdminControlsPage() {
   function toggleSource(id: number) {
     setForm(f => ({
       ...f,
+      can_review_all_sources: false,
       source_ids: f.source_ids.includes(id) ? f.source_ids.filter(s => s !== id) : [...f.source_ids, id],
     }));
   }
@@ -139,7 +163,10 @@ export default function AdminControlsPage() {
                           <div style={{ display: 'flex', gap: 4 }}>
                             {['reviewer', 'admin'].map(r => (
                               <button key={r}
-                                onClick={() => !isSaving && u.role !== r && updateUser(u.id, { role: r })}
+                                onClick={() => !isSaving && u.role !== r && changeRole(
+                                  u,
+                                  r as 'admin' | 'reviewer',
+                                )}
                                 style={{
                                   padding: '3px 10px', borderRadius: 20, border: '1.5px solid',
                                   fontSize: 11, fontWeight: 600, cursor: isSaving || u.role === r ? 'default' : 'pointer',
@@ -158,7 +185,11 @@ export default function AdminControlsPage() {
                       </td>
 
                       <td style={{ padding: '0.875rem 1rem', fontSize: 12, color: '#666' }}>
-                        {assigned.length > 0 ? assigned.map((s: any) => s.name).join(', ') : <span style={{ color: '#bbb' }}>All sources</span>}
+                        {u.role === 'admin' || Number(u.can_review_all_sources) === 1
+                          ? 'All sources'
+                          : assigned.length > 0
+                          ? assigned.map((s: any) => s.name).join(', ')
+                          : <span style={{ color: '#c0392b' }}>No source access</span>}
                       </td>
 
                       <td style={{ padding: '0.875rem 1rem' }}>
@@ -217,7 +248,12 @@ export default function AdminControlsPage() {
             <label style={labelStyle}>Role</label>
             <div style={{ display: 'flex', gap: 8, marginBottom: '1rem' }}>
               {['reviewer', 'admin'].map(r => (
-                <button key={r} onClick={() => setForm(f => ({ ...f, role: r }))}
+                <button key={r} onClick={() => setForm(f => ({
+                  ...f,
+                  role: r,
+                  source_ids: r === 'admin' ? [] : f.source_ids,
+                  can_review_all_sources: r === 'admin' ? false : f.can_review_all_sources,
+                }))}
                   style={{ flex: 1, padding: '0.5rem', borderRadius: 6, border: '1.5px solid', fontSize: 13, cursor: 'pointer', fontWeight: form.role === r ? 600 : 400, borderColor: form.role === r ? '#3a8c3f' : '#ddd', background: form.role === r ? '#e8f5e9' : 'white', color: form.role === r ? '#2a6b2e' : '#555', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
                   {r === 'admin' ? <Shield size={13}/> : <Eye size={13}/>} {r}
                 </button>
@@ -226,7 +262,20 @@ export default function AdminControlsPage() {
 
             {form.role === 'reviewer' && sources.length > 0 && (
               <>
-                <label style={labelStyle}>Assign sources <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>(empty = all)</span></label>
+                <label style={labelStyle}>Source access</label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer', padding: '0.45rem', borderRadius: 4, marginBottom: 6, background: form.can_review_all_sources ? '#e8f5e9' : 'transparent' }}>
+                  <input
+                    type="checkbox"
+                    checked={form.can_review_all_sources}
+                    onChange={event => setForm(f => ({
+                      ...f,
+                      can_review_all_sources: event.target.checked,
+                      source_ids: event.target.checked ? [] : f.source_ids,
+                    }))}
+                  />
+                  All current and future sources
+                </label>
+                <div style={{ fontSize: 11, color: '#777', marginBottom: 6 }}>Or choose one or more specific sources:</div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: '1rem', maxHeight: 140, overflowY: 'auto', border: '1.5px solid #ddd', borderRadius: 6, padding: '0.5rem' }}>
                   {sources.map(s => (
                     <label key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer', padding: '0.25rem 0.4rem', borderRadius: 4, background: form.source_ids.includes(s.id) ? '#e8f5e9' : 'transparent' }}>
@@ -243,7 +292,17 @@ export default function AdminControlsPage() {
 
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button onClick={() => { setShowAdd(false); setError(''); }} className="btn-ghost" style={{ fontSize: 13 }}>Cancel</button>
-              <button onClick={invite} disabled={!form.email || !form.full_name || adding} className="btn-primary" style={{ fontSize: 13 }}>
+              <button
+                onClick={invite}
+                disabled={
+                  !form.email
+                  || !form.full_name
+                  || adding
+                  || (form.role === 'reviewer' && !form.can_review_all_sources && form.source_ids.length === 0)
+                }
+                className="btn-primary"
+                style={{ fontSize: 13 }}
+              >
                 {adding ? 'Inviting…' : 'Send invite'}
               </button>
             </div>

@@ -60,7 +60,7 @@ export default function AdminStatsPage() {
               Today
             </span>
             <TodayStat label="Extracted" val={activity.today.extracted_today || 0}/>
-            <TodayStat label="Approved"  val={activity.today.approved_today  || 0}/>
+            <TodayStat label="Published" val={activity.today.approved_today  || 0}/>
             <TodayStat label="Rejected"  val={activity.today.rejected_today  || 0} color="#c0392b"/>
             <TodayStat label="Pending"   val={activity.today.pending         || 0} color="#e67e22"/>
           </div>
@@ -69,21 +69,21 @@ export default function AdminStatsPage() {
         {stats && (
           <div className="stagger responsive-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
             <StatCard label="Extracted"    value={stats.total_extracted || 0} icon={<TrendingUp size={18} color="#3a8c3f"/>} />
-            <StatCard label="Approved"     value={stats.total_approved  || 0} icon={<CheckCircle size={18} color="#3a8c3f"/>} color="#e8f5e9" />
+            <StatCard label="Published"    value={stats.total_approved  || 0} icon={<CheckCircle size={18} color="#3a8c3f"/>} color="#e8f5e9" />
             <StatCard label="Rejected"     value={stats.total_rejected  || 0} icon={<XCircle size={18} color="#c0392b"/>}    color="#fdecea" />
-            <StatCard label="Approval rate" value={stats.approval_rate !== null && stats.approval_rate !== undefined ? `${stats.approval_rate}%` : '—'} icon={<Activity size={18} color="#3a8c3f"/>} color="#e8f5e9" />
+            <StatCard label="Publication rate" value={stats.approval_rate !== null && stats.approval_rate !== undefined ? `${stats.approval_rate}%` : '—'} icon={<Activity size={18} color="#3a8c3f"/>} color="#e8f5e9" />
           </div>
         )}
 
         <div className="responsive-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem', marginBottom: '1.25rem' }}>
           <div className="card">
-            <h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: '1rem' }}>Approval rate by source</h3>
+            <h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: '1rem' }}>Publication rate by source</h3>
             {sources.map(s => (
               <div key={s.id} style={{ marginBottom: '0.75rem' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
                   <span style={{ fontWeight: 600 }}>{s.name}</span>
                   <span style={{ color: '#888' }}>
-                    {s.approved||0}/{s.total||0} approved
+                    {s.approved||0}/{s.total||0} published
                     {s.approval_rate !== null && s.approval_rate !== undefined ? ` · ${s.approval_rate}%` : ''}
                   </span>
                 </div>
@@ -148,7 +148,7 @@ export default function AdminStatsPage() {
               {timeline.slice(-30).map((t:any,i:number) => {
                 const maxVal = Math.max(...timeline.map((x:any)=>x.extracted),1);
                 return (
-                  <div key={i} title={`${t.date}: ${t.extracted} extracted, ${t.approved} approved`}
+                  <div key={i} title={`${t.date}: ${t.extracted} extracted, ${t.approved} published`}
                     style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 1, cursor: 'default' }}>
                     <div style={{ width: '100%', background: '#3a8c3f', borderRadius: '2px 2px 0 0', height: `${(t.approved/maxVal)*60}px`, minHeight: t.approved>0?2:0 }}/>
                     <div style={{ width: '100%', background: '#c8e6c9', height: `${((t.extracted-t.approved)/maxVal)*60}px`, minHeight: (t.extracted-t.approved)>0?2:0 }}/>
@@ -157,7 +157,7 @@ export default function AdminStatsPage() {
               })}
             </div>
             <div style={{ display: 'flex', gap: 12, marginTop: 8, fontSize: 10, color: '#888' }}>
-              <span><span style={{ display: 'inline-block', width: 8, height: 8, background: '#3a8c3f', borderRadius: 2, marginRight: 3 }}/>Approved</span>
+              <span><span style={{ display: 'inline-block', width: 8, height: 8, background: '#3a8c3f', borderRadius: 2, marginRight: 3 }}/>Published</span>
               <span><span style={{ display: 'inline-block', width: 8, height: 8, background: '#c8e6c9', borderRadius: 2, marginRight: 3 }}/>Extracted</span>
             </div>
           </div>

@@ -12,6 +12,15 @@ import {
 import { canAccessSource } from '@/lib/reviewerAccess';
 import { validatePublicHttpUrl } from '@/lib/publicHttpUrl';
 import { isRejectionReasonCode } from '@/lib/rejectionReasons';
+import { extractCommunityHubPostId } from '@/lib/communityHubResponse';
+import { fieldAuditValue } from '@/lib/fieldAuditValue';
+import {
+  eventImageEditErrorStatus,
+  normalizeEventImageEdit,
+  type NormalizedEventImageEdit,
+} from '@/lib/eventImageEdits';
+import { boundedEventSnapshot } from '@/lib/eventImagePrivacy';
+import { recoverSucceededCommunityHubSubmission } from '@/lib/communityHubSubmissions';
 
 const CH_BASE = 'https://oberlin.communityhub.cloud/api/legacy/calendar';
 const EDITABLE_FIELDS = [
@@ -77,7 +86,8 @@ function mergeAllowListed(event: any, edits: Record<string, unknown>) {
 
 function buildPayload(eventId: string, merged: any): CommunityHubPayload {
   let imageUrl: string | undefined;
-  if (merged.image_data || merged.image_cdn_url) {
+  const mediaValue = merged.image_data || merged.image_cdn_url;
+  if (mediaValue) {
     if (merged.image_cdn_url && !String(merged.image_cdn_url).startsWith('data:')) {
       const originalImageUrl = validatePublicHttpUrl(String(merged.image_cdn_url));
       if (!originalImageUrl.success) {
@@ -93,7 +103,7 @@ function buildPayload(eventId: string, merged: any): CommunityHubPayload {
       || process.env.NEXT_PUBLIC_APP_URL
       || 'https://ai-microgrant-research-oberlin.vercel.app'
     ).replace(/\/$/, '');
-    const mediaToken = createEventMediaToken(eventId);
+    const mediaToken = createEventMediaToken(eventId, String(mediaValue));
     imageUrl = `${appUrl}/api/events/${eventId}/poster.jpg?media_token=${encodeURIComponent(mediaToken)}`;
   }
 
@@ -147,6 +157,10 @@ async function bestEffortQuery(sql: string, params: unknown[]): Promise<void> {
   } catch {
     // Preserve the primary response when diagnostic state cannot be persisted.
   }
+}
+
+function permanentClientFailure(status: number): boolean {
+  return status >= 400 && status < 500 && ![408, 409, 425, 429].includes(status);
 }
 
 export async function POST(
@@ -223,7 +237,7 @@ export async function POST(
           JSON.stringify(edits.reason_codes),
           String(edits.reviewer_note ?? '').slice(0, 2000),
           event.title,
-          JSON.stringify(event),
+          JSON.stringify(boundedEventSnapshot(event)),
         ],
       );
       await conn.query(
@@ -245,16 +259,77 @@ export async function POST(
     }
   }
 
+  if (!['pending', 'publishing'].includes(event.status)) {
+    return Response.json({ error: 'Event is already publishing or reviewed' }, { status: 409 });
+  }
+
   let payload!: CommunityHubPayload;
   let hash = '';
+  let normalizedImageEdit: NormalizedEventImageEdit | undefined;
   const originalStatus = 'pending';
   const conn = await pool.getConnection();
   try {
     await (conn as any).beginTransaction();
 
-    // Claim the row before building the outbound payload. A concurrent save
-    // must finish first, and no save/correction can start after this state
-    // transition. The payload below is therefore built from the locked row.
+    const [[currentEvent]] = await conn.query(
+      'SELECT * FROM raw_events WHERE id=? LIMIT 1 FOR UPDATE',
+      [eventId],
+    ) as any;
+    if (!currentEvent) throw new Error('Event disappeared while preparing publication');
+    if (!['pending', 'publishing'].includes(currentEvent.status)) {
+      await (conn as any).rollback();
+      return Response.json({ error: 'Event is already publishing or reviewed' }, { status: 409 });
+    }
+
+    // A previous request may have reached CommunityHub and durably recorded
+    // its post ID before local finalization failed. Link that exact post before
+    // considering this request's (possibly changed) edits; never issue a
+    // second POST for the same intake record.
+    const recoveredSubmission = await recoverSucceededCommunityHubSubmission(
+      conn,
+      eventId,
+      { reviewerId, timeSpentSec },
+    );
+    if (recoveredSubmission) {
+      await (conn as any).commit();
+      return Response.json({
+        ok: true,
+        already_submitted: true,
+        status: 'submitted',
+        moderation_status: 'pending',
+        communityhub_post_id: recoveredSubmission.postId,
+        communityhub: recoveredSubmission.response,
+      });
+    }
+
+    // `prepared` proves the process never claimed permission to send the HTTP
+    // request. A retry can safely retire that abandoned intent and reclaim the
+    // local event. Once an intent is `sending`, its outcome stays locked until
+    // an operator links or explicitly releases it.
+    const [preparedRows] = await conn.query(
+      `SELECT id FROM communityhub_submissions
+       WHERE raw_event_id=? AND status='prepared'
+       ORDER BY id DESC FOR UPDATE`,
+      [eventId],
+    ) as any;
+    if (Array.isArray(preparedRows) && preparedRows.length > 0) {
+      await conn.query(
+        `UPDATE communityhub_submissions
+         SET status='failed', error_message='Prepared submission was safely superseded before dispatch'
+         WHERE raw_event_id=? AND status='prepared'`,
+        [eventId],
+      );
+      await conn.query(
+        `UPDATE raw_events SET status='pending', publish_started_at=NULL
+         WHERE id=? AND status='publishing'`,
+        [eventId],
+      );
+      currentEvent.status = 'pending';
+    }
+
+    // Claim only after checking for a recorded remote success. This lets an
+    // immediate retry finish a failed local finalization even while the normal
+    // five-minute publishing lease is still fresh.
     const [claim] = await conn.query(
       `UPDATE raw_events
        SET status='publishing', publish_started_at=NOW(), validation_errors=NULL
@@ -269,15 +344,27 @@ export async function POST(
       return Response.json({ error: 'Event is already publishing or reviewed' }, { status: 409 });
     }
 
-    const [[currentEvent]] = await conn.query(
-      'SELECT * FROM raw_events WHERE id=? LIMIT 1 FOR UPDATE',
-      [eventId],
-    ) as any;
-    if (!currentEvent) throw new Error('Event disappeared while preparing publication');
     const merged = mergeAllowListed(currentEvent, edits);
     try {
+      const explicitImageEdit = Object.hasOwn(edits, 'image_cdn_url');
+      const effectiveImage = explicitImageEdit
+        ? edits.image_cdn_url
+        : currentEvent.image_cdn_url || currentEvent.image_data || null;
+      normalizedImageEdit = await normalizeEventImageEdit(effectiveImage);
+      merged.image_cdn_url = normalizedImageEdit.imageCdnUrl;
+      merged.image_data = normalizedImageEdit.imageData;
       payload = buildPayload(eventId, merged);
     } catch (error) {
+      if (
+        error instanceof TypeError
+        || (error !== null && typeof error === 'object' && 'code' in error)
+      ) {
+        await (conn as any).rollback();
+        const status = eventImageEditErrorStatus(error);
+        return Response.json({
+          error: error instanceof Error ? error.message : 'Invalid event image',
+        }, { status });
+      }
       if (error instanceof CommunityHubPayloadValidationError) {
         await (conn as any).rollback();
         await bestEffortQuery(
@@ -298,7 +385,7 @@ export async function POST(
     // and risks a duplicate public post.
     const [unresolvedRows] = await conn.query(
       `SELECT id FROM communityhub_submissions
-       WHERE raw_event_id=? AND status='sending'
+       WHERE raw_event_id=? AND status IN ('sending','accepted_unreconciled')
        ORDER BY id DESC LIMIT 1 FOR UPDATE`,
       [eventId],
     ) as any;
@@ -306,24 +393,35 @@ export async function POST(
       await (conn as any).rollback();
       return Response.json({
         error: 'A prior CommunityHub submission has an unresolved outcome and requires manual reconciliation',
-        submission_state: 'sending',
+        submission_state: 'unresolved',
         retry_safe: false,
       }, { status: 409 });
     }
 
-    // If a prior request reached CommunityHub but failed during the final local
-    // update, recover from the durable submission record without posting twice.
-    const [priorRows] = await conn.query(
-      `SELECT status, communityhub_post_id, response
-       FROM communityhub_submissions
-       WHERE raw_event_id=? AND payload_hash=?
-       LIMIT 1 FOR UPDATE`,
-      [eventId, hash],
-    ) as any;
-    const prior = Array.isArray(priorRows) ? priorRows[0] : null;
-
     for (const field of EDITABLE_FIELDS) {
       if (edits[field] === undefined) continue;
+      if (field === 'image_cdn_url' && normalizedImageEdit) {
+        const oldValue = canonicalValue(currentEvent.image_data || currentEvent.image_cdn_url);
+        const newValue = canonicalValue(
+          normalizedImageEdit.imageData || normalizedImageEdit.imageCdnUrl,
+        );
+        if (oldValue !== newValue) {
+          await conn.query(
+            `INSERT INTO field_edit_log
+             (raw_event_id, source_id, reviewer_id, field_name, old_value, new_value)
+             VALUES (?,?,?,?,?,?)`,
+            [
+              eventId,
+              currentEvent.source_id,
+              reviewerId,
+              field,
+              fieldAuditValue(oldValue),
+              fieldAuditValue(newValue),
+            ],
+          );
+        }
+        continue;
+      }
       const oldValue = canonicalValue(currentEvent[field]);
       const newValue = persistedEditValue(field, edits[field], payload);
       if (oldValue === newValue) continue;
@@ -331,11 +429,20 @@ export async function POST(
         `INSERT INTO field_edit_log
          (raw_event_id, source_id, reviewer_id, field_name, old_value, new_value)
          VALUES (?,?,?,?,?,?)`,
-        [eventId, currentEvent.source_id, reviewerId, field, oldValue, newValue],
+        [
+          eventId,
+          currentEvent.source_id,
+          reviewerId,
+          field,
+          fieldAuditValue(oldValue),
+          fieldAuditValue(newValue),
+        ],
       );
     }
 
-    const updateFields = EDITABLE_FIELDS.filter(field => edits[field] !== undefined);
+    const updateFields = EDITABLE_FIELDS.filter(
+      field => field !== 'image_cdn_url' && edits[field] !== undefined,
+    );
     if (updateFields.length > 0) {
       const values = updateFields.map(field => persistedEditValue(field, edits[field], payload));
       await conn.query(
@@ -343,31 +450,23 @@ export async function POST(
         [...values, eventId],
       );
     }
-
-    if (prior?.status === 'succeeded') {
+    if (normalizedImageEdit && (
+      Object.hasOwn(edits, 'image_cdn_url')
+      || canonicalValue(currentEvent.image_cdn_url) !== canonicalValue(normalizedImageEdit.imageCdnUrl)
+      || canonicalValue(currentEvent.image_data) !== canonicalValue(normalizedImageEdit.imageData)
+    )) {
       await conn.query(
-        `UPDATE raw_events
-         SET status='approved', communityhub_post_id=?, validation_errors=NULL,
-             publish_started_at=NULL
-         WHERE id=?`,
-        [prior.communityhub_post_id, eventId],
+        `UPDATE raw_events SET image_cdn_url=?, image_data=? WHERE id=?`,
+        [normalizedImageEdit.imageCdnUrl, normalizedImageEdit.imageData, eventId],
       );
-      await conn.query(
-        `INSERT INTO review_sessions
-         (raw_event_id, reviewer_id, action, time_spent_sec, submitted_to_ch, ch_response)
-         VALUES (?,?,'approved',?,1,?)`,
-        [eventId, reviewerId, timeSpentSec, prior.response],
-      );
-      await (conn as any).commit();
-      return Response.json({ ok: true, already_submitted: true, communityhub: prior.response });
     }
 
     await conn.query(
       `INSERT INTO communityhub_submissions
        (raw_event_id, payload_hash, status, payload, reviewer_id)
-       VALUES (?,?,'sending',?,?)
+       VALUES (?,?,'prepared',?,?)
        ON DUPLICATE KEY UPDATE
-         status=IF(status='succeeded', status, 'sending'),
+         status=IF(status IN ('succeeded','accepted_unreconciled'), status, 'prepared'),
          payload=VALUES(payload), reviewer_id=VALUES(reviewer_id),
          error_message=NULL`,
       [eventId, hash, JSON.stringify(payload), reviewerId],
@@ -383,6 +482,27 @@ export async function POST(
     (conn as any).release();
   }
 
+  // This durable transition is the boundary after which a missing HTTP
+  // response is ambiguous. Never start fetch unless the exact prepared intent
+  // was successfully claimed as sending.
+  try {
+    const [dispatchClaim] = await pool.query(
+      `UPDATE communityhub_submissions SET status='sending'
+       WHERE raw_event_id=? AND payload_hash=? AND status='prepared'`,
+      [eventId, hash],
+    ) as any;
+    if (Number(dispatchClaim?.affectedRows || 0) !== 1) {
+      throw new Error('Submission dispatch intent could not be claimed');
+    }
+  } catch {
+    return Response.json({
+      error: 'CommunityHub submission is prepared but dispatch did not start. It will be safely recovered before retry.',
+      submission_state: 'prepared',
+      retry_safe: false,
+      recoverable: true,
+    }, { status: 503 });
+  }
+
   let response: Response;
   try {
     response = await fetch(`${CH_BASE}/post/submit`, {
@@ -396,6 +516,11 @@ export async function POST(
     // A network error is ambiguous: CommunityHub may have accepted the POST
     // even though its response never reached us. Keep the durable `sending`
     // state and block automatic retry rather than risk a duplicate public post.
+    await bestEffortQuery(
+      `UPDATE communityhub_submissions SET error_message=?
+       WHERE raw_event_id=? AND payload_hash=? AND status='sending'`,
+      [message, eventId, hash],
+    );
     return Response.json({
       error: message,
       submission_state: 'unknown',
@@ -406,6 +531,22 @@ export async function POST(
   const communityHub = await readCommunityHubResponse(response);
   if (!response.ok) {
     const message = `CommunityHub ${response.status}: ${communityHub.raw ?? JSON.stringify(communityHub)}`;
+    if (!permanentClientFailure(response.status)) {
+      // A timeout, conflict, rate limit, or server error can arrive after the
+      // remote service committed the POST. Preserve the unresolved lease and
+      // require lookup/manual linkage instead of making a duplicate retry safe.
+      await bestEffortQuery(
+        `UPDATE communityhub_submissions SET error_message=?
+         WHERE raw_event_id=? AND payload_hash=? AND status='sending'`,
+        [message, eventId, hash],
+      );
+      return Response.json({
+        error: message,
+        submission_state: 'unknown',
+        retry_safe: false,
+        response_status: response.status,
+      }, { status: 502 });
+    }
     await bestEffortQuery(
       `UPDATE communityhub_submissions
        SET status='failed', error_message=?
@@ -420,16 +561,34 @@ export async function POST(
     return Response.json({ error: message }, { status: 502 });
   }
 
-  const communityHubPostId = communityHub?.id ?? communityHub?.postId ?? communityHub?.post_id ?? null;
+  const communityHubPostId = extractCommunityHubPostId(communityHub);
+  if (!communityHubPostId) {
+    await bestEffortQuery(
+      `UPDATE communityhub_submissions
+       SET status='accepted_unreconciled', response=?,
+           error_message='CommunityHub returned 2xx without a usable post id'
+       WHERE raw_event_id=? AND payload_hash=?`,
+      [JSON.stringify(communityHub), eventId, hash],
+    );
+    return Response.json({
+      error: 'CommunityHub accepted the submission but did not return a usable post id. Manual reconciliation is required before retrying.',
+      external_submission_succeeded: true,
+      submission_state: 'accepted_unreconciled',
+      retry_safe: false,
+    }, { status: 503 });
+  }
   // Record the external success first. A retry can now repair local state
   // without issuing a second CommunityHub POST.
   try {
-    await pool.query(
+    const [recorded] = await pool.query(
       `UPDATE communityhub_submissions
        SET status='succeeded', response=?, communityhub_post_id=?, error_message=NULL
        WHERE raw_event_id=? AND payload_hash=?`,
       [JSON.stringify(communityHub), communityHubPostId, eventId, hash],
-    );
+    ) as any;
+    if (Number(recorded?.affectedRows || 0) !== 1) {
+      throw new Error('Submission outbox row was not found');
+    }
   } catch {
     return Response.json({
       error: 'CommunityHub accepted the post, but its success could not be recorded. Manual reconciliation is required before retrying.',
@@ -439,16 +598,28 @@ export async function POST(
     }, { status: 503 });
   }
 
-  const finalConn = await pool.getConnection();
+  let finalConn: Awaited<ReturnType<typeof pool.getConnection>>;
+  try {
+    finalConn = await pool.getConnection();
+  } catch {
+    return Response.json({
+      error: 'CommunityHub accepted the post, but local finalization could not start. Retry safely to reconcile it.',
+      recoverable: true,
+    }, { status: 503 });
+  }
   try {
     await (finalConn as any).beginTransaction();
-    await finalConn.query(
+    const [finalized] = await finalConn.query(
       `UPDATE raw_events
-       SET status='approved', communityhub_post_id=?, validation_errors=NULL,
-           publish_started_at=NULL
+       SET status='submitted', communityhub_post_id=?, validation_errors=NULL,
+           publish_started_at=NULL, communityhub_moderation_status='pending',
+           communityhub_checked_at=NULL, communityhub_moderation_error=NULL
        WHERE id=? AND status='publishing'`,
       [communityHubPostId, eventId],
-    );
+    ) as any;
+    if (Number(finalized?.affectedRows || 0) !== 1) {
+      throw new Error('Publication claim no longer owns the event');
+    }
     await finalConn.query(
       `INSERT INTO review_sessions
        (raw_event_id, reviewer_id, action, time_spent_sec, submitted_to_ch, ch_response)
@@ -469,5 +640,11 @@ export async function POST(
     (finalConn as any).release();
   }
 
-  return Response.json({ ok: true, communityhub: communityHub });
+  return Response.json({
+    ok: true,
+    status: 'submitted',
+    moderation_status: 'pending',
+    communityhub_post_id: communityHubPostId,
+    communityhub: communityHub,
+  });
 }

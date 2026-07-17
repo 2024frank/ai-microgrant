@@ -138,6 +138,59 @@ describe('POST /api/events/:id/edit', () => {
     expect(rejectionInsert[1]).toContain(JSON.stringify(['field_correction']));
   });
 
+  it('replaces a stale embedded poster with an external URL atomically', async () => {
+    const eventWithEmbedded = {
+      ...MOCK_EVENT,
+      image_cdn_url: null,
+      image_data: 'data:image/jpeg;base64,b2xk',
+    };
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[eventWithEmbedded]])
+      .mockResolvedValueOnce([[{ id: 1 }]])
+      .mockResolvedValueOnce([[
+        { ...eventWithEmbedded, image_cdn_url: 'https://images.example.com/new.jpg', image_data: null },
+      ]]);
+
+    const response = await POST(makeReq('10', {
+      edits: { image_cdn_url: 'https://images.example.com/new.jpg' },
+    }), ctx('10'));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    const update = db.mockConn.query.mock.calls.find(
+      ([sql]: [string]) => sql.includes('image_cdn_url = ?') && sql.includes('image_data = ?'),
+    );
+    expect(update?.[1]).toEqual(expect.arrayContaining([
+      'https://images.example.com/new.jpg',
+      null,
+    ]));
+    expect(body.event).not.toHaveProperty('image_data');
+    expect(body.event.has_image_data).toBe(false);
+  });
+
+  it('redacts embedded poster bytes from permanent correction snapshots', async () => {
+    const eventWithEmbedded = {
+      ...MOCK_EVENT,
+      image_data: `data:image/png;base64,${'A'.repeat(100_000)}`,
+    };
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[eventWithEmbedded]])
+      .mockResolvedValueOnce([[{ id: 1 }]])
+      .mockResolvedValueOnce([[eventWithEmbedded]]);
+
+    await POST(makeReq('10', { edits: { title: 'Safer title' } }), ctx('10'));
+
+    const rejectionInsert = db.mockConn.query.mock.calls.find(
+      ([sql]: [string]) => sql.includes('INSERT INTO rejection_log'),
+    );
+    const snapshot = JSON.parse(rejectionInsert[1][6]);
+    expect(snapshot).not.toHaveProperty('image_data');
+    expect(snapshot.image_data_redacted).toContain('embedded image redacted');
+    expect(rejectionInsert[1][6].length).toBeLessThan(5_000);
+  });
+
   it('returns 404 when event not found', async () => {
     db.default.query
       .mockResolvedValueOnce([[ADMIN]])

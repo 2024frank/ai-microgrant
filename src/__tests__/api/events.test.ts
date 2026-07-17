@@ -5,7 +5,7 @@ const db = require('@/lib/db');
 
 const EVENTS = [
   { id: 1, title: 'Jazz Night',           status: 'pending',  event_type: 'ot', sponsors: '[]', post_type_ids: '[]', sessions: '[]', buttons: '[]' },
-  { id: 2, title: 'City Council Meeting', status: 'approved', event_type: 'ot', sponsors: '[]', post_type_ids: '[]', sessions: '[]', buttons: '[]' },
+  { id: 2, title: 'City Council Meeting', status: 'approved', communityhub_moderation_status: 'approved', event_type: 'ot', sponsors: '[]', post_type_ids: '[]', sessions: '[]', buttons: '[]' },
   { id: 3, title: 'Job Opening',          status: 'rejected', event_type: 'jp', sponsors: '[]', post_type_ids: '[]', sessions: '[]', buttons: '[]' },
 ];
 
@@ -35,6 +35,7 @@ describe('GET /api/events (public — no auth required)', () => {
     expect(data.filters.status).toBe('approved');
     expect(data.pagination.has_next).toBe(false);
     expect(data.pagination.has_prev).toBe(false);
+    expect(db.default.query.mock.calls[1][0]).toContain("communityhub_moderation_status = 'approved'");
   });
 
   it('returns CORS headers', async () => {

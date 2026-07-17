@@ -14,6 +14,7 @@ import { adminAuth } from '@/lib/firebase-admin';
 import { triggerAgentRun, triggerEmailIngest } from '@/lib/agentRunner';
 
 const db = require('@/lib/db');
+const mockConn = db.mockConn;
 const mockVerify = adminAuth.verifyIdToken as jest.Mock;
 const mockAfter = after as jest.Mock;
 const mockAgentRun = triggerAgentRun as jest.Mock;
@@ -53,8 +54,18 @@ function mockSuccessfulClaim({ internal = false, source = SOURCE, runId = 7 } = 
   db.default.query
     .mockResolvedValueOnce([[source]])
     .mockResolvedValueOnce([{ affectedRows: 0 }])
-    .mockResolvedValueOnce([{ affectedRows: 0 }])
-    .mockResolvedValueOnce([{ insertId: runId }]);
+    .mockResolvedValueOnce([{ affectedRows: 0 }]);
+  if (internal) {
+    mockConn.query
+      .mockResolvedValueOnce([[{ acquired: 1 }]])
+      .mockResolvedValueOnce([[
+        { failed_attempts: 0, reserved_runs: 0, retry_after_seconds: null },
+      ]])
+      .mockResolvedValueOnce([{ insertId: runId }])
+      .mockResolvedValueOnce([[{ released: 1 }]]);
+    return;
+  }
+  db.default.query.mockResolvedValueOnce([{ insertId: runId }]);
 }
 
 describe('POST /api/agent/trigger/:source_id', () => {
@@ -65,6 +76,10 @@ describe('POST /api/agent/trigger/:source_id', () => {
     process.env.ANTHROPIC_API_KEY = 'test-key';
     process.env.SOURCE_BUILDER_ENVIRONMENT_ID = 'env-test';
     db.default.query.mockReset();
+    db.default.getConnection.mockReset().mockResolvedValue(mockConn);
+    mockConn.query.mockReset();
+    mockConn.release.mockReset();
+    mockConn.destroy = jest.fn();
     mockVerify.mockReset().mockResolvedValue({ uid: 'uid-admin', email: 'admin@oberlin.edu' });
     mockAgentRun.mockReset().mockResolvedValue({ run_id: 7, inserted: 3 });
     mockEmailRun.mockReset().mockResolvedValue({ run_id: 7, inserted: 3, skipped: 0 });
@@ -100,8 +115,11 @@ describe('POST /api/agent/trigger/:source_id', () => {
       ok: true,
       scheduled: true,
       schedule_slot: '2026-07-13T10:30:00.000Z',
+      attempt: 1,
     });
     const insert = db.default.query.mock.calls.find(
+      (call: any[]) => typeof call[0] === 'string' && call[0].includes('INSERT INTO agent_runs'),
+    ) || mockConn.query.mock.calls.find(
       (call: any[]) => typeof call[0] === 'string' && call[0].includes('INSERT INTO agent_runs'),
     );
     expect(insert?.[1]).toEqual([3, '2026-07-13 10:30:00']);
@@ -130,13 +148,138 @@ describe('POST /api/agent/trigger/:source_id', () => {
       .mockResolvedValueOnce([[SOURCE]])
       .mockResolvedValueOnce([{ affectedRows: 0 }])
       .mockResolvedValueOnce([{ affectedRows: 0 }])
-      .mockRejectedValueOnce(duplicate)
       .mockResolvedValueOnce([[{ id: 19, status: 'running', schedule_slot: '2026-07-13 10:30:00' }]]);
+    mockConn.query
+      .mockResolvedValueOnce([[{ acquired: 1 }]])
+      .mockResolvedValueOnce([[
+        { failed_attempts: 0, reserved_runs: 0, retry_after_seconds: null },
+      ]])
+      .mockRejectedValueOnce(duplicate)
+      .mockResolvedValueOnce([[{ released: 1 }]]);
 
     const response = await POST(cronReq(), ctx('3'));
     const data = await response.json();
     expect(response.status).toBe(409);
     expect(data).toMatchObject({ duplicate: true, reason: 'source_already_running', run_id: 19 });
+    expect(mockAfter).not.toHaveBeenCalled();
+  });
+
+  it('retries a failed scheduled slot after the cooldown', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[SOURCE]])
+      .mockResolvedValueOnce([{ affectedRows: 0 }])
+      .mockResolvedValueOnce([{ affectedRows: 0 }]);
+    mockConn.query
+      .mockResolvedValueOnce([[{ acquired: 1 }]])
+      .mockResolvedValueOnce([[
+        { failed_attempts: '1', reserved_runs: '0', retry_after_seconds: -1 },
+      ]])
+      .mockResolvedValueOnce([{ insertId: 20 }])
+      .mockResolvedValueOnce([[{ released: 1 }]]);
+
+    const response = await POST(cronReq(), ctx('3'));
+    const data = await response.json();
+
+    expect(response.status).toBe(202);
+    expect(data).toMatchObject({ ok: true, run_id: 20, attempt: 2 });
+    expect(mockAfter).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns a specific 409 while a failed scheduled slot is cooling down', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[SOURCE]])
+      .mockResolvedValueOnce([{ affectedRows: 0 }])
+      .mockResolvedValueOnce([{ affectedRows: 0 }]);
+    mockConn.query
+      .mockResolvedValueOnce([[{ acquired: 1 }]])
+      .mockResolvedValueOnce([[
+        { failed_attempts: 1, reserved_runs: 0, retry_after_seconds: 420 },
+      ]])
+      .mockResolvedValueOnce([[{ released: 1 }]]);
+
+    const response = await POST(cronReq(), ctx('3'));
+    const data = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(response.headers.get('retry-after')).toBe('420');
+    expect(data).toMatchObject({
+      reason: 'schedule_slot_retry_cooldown',
+      attempts: 1,
+      max_attempts: 3,
+      retry_after_seconds: 420,
+    });
+    expect(mockAfter).not.toHaveBeenCalled();
+    expect(mockConn.query.mock.calls.some(
+      (call: any[]) => typeof call[0] === 'string' && call[0].includes('INSERT INTO agent_runs'),
+    )).toBe(false);
+  });
+
+  it('returns a non-conflict error after three failed scheduled attempts', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[SOURCE]])
+      .mockResolvedValueOnce([{ affectedRows: 0 }])
+      .mockResolvedValueOnce([{ affectedRows: 0 }]);
+    mockConn.query
+      .mockResolvedValueOnce([[{ acquired: 1 }]])
+      .mockResolvedValueOnce([[
+        { failed_attempts: 3, reserved_runs: 0, retry_after_seconds: 0 },
+      ]])
+      .mockResolvedValueOnce([[{ released: 1 }]]);
+
+    const response = await POST(cronReq(), ctx('3'));
+    const data = await response.json();
+
+    expect(response.status).toBe(422);
+    expect(data).toMatchObject({
+      error: 'Scheduled slot retry limit exhausted',
+      reason: 'schedule_slot_retry_exhausted',
+      attempts: 3,
+      max_attempts: 3,
+    });
+    expect(mockAfter).not.toHaveBeenCalled();
+  });
+
+  it('keeps completed scheduled slots idempotent even with older failures', async () => {
+    const duplicate = Object.assign(new Error('duplicate'), { code: 'ER_DUP_ENTRY', errno: 1062 });
+    db.default.query
+      .mockResolvedValueOnce([[SOURCE]])
+      .mockResolvedValueOnce([{ affectedRows: 0 }])
+      .mockResolvedValueOnce([{ affectedRows: 0 }])
+      .mockResolvedValueOnce([[
+        { id: 24, status: 'completed', schedule_slot: '2026-07-13 10:30:00' },
+      ]]);
+    mockConn.query
+      .mockResolvedValueOnce([[{ acquired: 1 }]])
+      .mockResolvedValueOnce([[
+        { failed_attempts: 3, reserved_runs: 1, retry_after_seconds: 0 },
+      ]])
+      .mockRejectedValueOnce(duplicate)
+      .mockResolvedValueOnce([[{ released: 1 }]]);
+
+    const response = await POST(cronReq(), ctx('3'));
+    const data = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(data).toMatchObject({
+      duplicate: true,
+      reason: 'schedule_slot_already_claimed',
+      run_id: 24,
+    });
+  });
+
+  it('fails visibly when the scheduled slot claim lock cannot be acquired', async () => {
+    db.default.query
+      .mockResolvedValueOnce([[SOURCE]])
+      .mockResolvedValueOnce([{ affectedRows: 0 }])
+      .mockResolvedValueOnce([{ affectedRows: 0 }]);
+    mockConn.query.mockResolvedValueOnce([[{ acquired: 0 }]]);
+
+    const response = await POST(cronReq(), ctx('3'));
+    const data = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(data).toMatchObject({ reason: 'schedule_slot_claim_busy' });
+    expect(mockConn.release).toHaveBeenCalledTimes(1);
     expect(mockAfter).not.toHaveBeenCalled();
   });
 

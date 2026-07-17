@@ -20,9 +20,19 @@ describe('getAuthUser', () => {
   });
 
   it('returns null when token is invalid', async () => {
-    mockVerify.mockRejectedValueOnce(new Error('Token expired'));
+    mockVerify.mockRejectedValueOnce(Object.assign(new Error('Token expired'), {
+      code: 'auth/id-token-expired',
+    }));
     const result = await getAuthUser(makeReq('bad-token'));
     expect(result).toBeNull();
+  });
+
+  it('propagates Firebase configuration failures as service outages', async () => {
+    mockVerify.mockRejectedValueOnce(new SyntaxError('Malformed service account JSON'));
+
+    await expect(getAuthUser(makeReq('valid-token'))).rejects.toThrow(
+      'Malformed service account JSON',
+    );
   });
 
   it('returns null when email not in users table', async () => {
@@ -62,16 +72,47 @@ describe('getAuthUser', () => {
   });
 
   it('queries DB with correct email (lowercased)', async () => {
-    mockVerify.mockResolvedValueOnce({ uid: 'uid-x', email: 'User@Oberlin.EDU' });
+    mockVerify.mockResolvedValueOnce({ uid: 'uid-x', email: 'User@Oberlin.EDU', email_verified: true });
     db.default.query
       .mockResolvedValueOnce([[]])
+      .mockResolvedValueOnce([{ affectedRows: 1 }])
       .mockResolvedValueOnce([[{
-        id: 3, email: 'user@oberlin.edu', role: 'reviewer', full_name: 'User X', active: 1, firebase_uid: '',
-      }]])
-      .mockResolvedValueOnce([{ affectedRows: 1 }]);
+        id: 3, email: 'user@oberlin.edu', role: 'reviewer', full_name: 'User X', active: 1, firebase_uid: 'uid-x',
+      }]]);
 
-    await getAuthUser(makeReq('valid-token'));
+    const result = await getAuthUser(makeReq('valid-token'));
     const queryCall = db.default.query.mock.calls[1];
-    expect(queryCall[1][0]).toBe('user@oberlin.edu');
+    expect(queryCall[1]).toEqual(['uid-x', 'user@oberlin.edu']);
+    expect(result?.id).toBe(3);
+  });
+
+  it('does not bind an invitation from an unverified email claim', async () => {
+    mockVerify.mockResolvedValueOnce({
+      uid: 'uid-attacker', email: 'admin@oberlin.edu', email_verified: false,
+    });
+    db.default.query.mockResolvedValueOnce([[]]);
+
+    await expect(getAuthUser(makeReq('valid-token'))).resolves.toBeNull();
+    expect(db.default.query).toHaveBeenCalledTimes(1);
+  });
+
+  it('never rebinds an account that is already claimed by another uid', async () => {
+    mockVerify.mockResolvedValueOnce({
+      uid: 'uid-new', email: 'admin@oberlin.edu', email_verified: true,
+    });
+    db.default.query
+      .mockResolvedValueOnce([[]])
+      .mockResolvedValueOnce([{ affectedRows: 0 }])
+      .mockResolvedValueOnce([[]]);
+
+    await expect(getAuthUser(makeReq('valid-token'))).resolves.toBeNull();
+    expect(db.default.query.mock.calls[1][0]).toContain('firebase_uid IS NULL');
+  });
+
+  it('propagates database outages instead of misreporting them as invalid tokens', async () => {
+    mockVerify.mockResolvedValueOnce({ uid: 'uid-admin', email: 'admin@oberlin.edu' });
+    db.default.query.mockRejectedValueOnce(new Error('database unavailable'));
+
+    await expect(getAuthUser(makeReq('valid-token'))).rejects.toThrow('database unavailable');
   });
 });

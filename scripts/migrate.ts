@@ -22,6 +22,7 @@ import { join } from 'node:path';
 import mysql from 'mysql2/promise';
 
 const MIGRATIONS_DIR = join(process.cwd(), 'migrations');
+const MIGRATION_LOCK = 'ai-microgrant-schema-migrations';
 
 async function connect() {
   return mysql.createConnection({
@@ -58,7 +59,11 @@ async function appliedVersions(conn: Conn): Promise<Set<string>> {
 
 async function up() {
   const conn = await connect();
+  let locked = false;
   try {
+    const [[lock]] = await conn.query('SELECT GET_LOCK(?, 60) AS acquired', [MIGRATION_LOCK]) as any;
+    locked = lock?.acquired === 1 || lock?.acquired === '1' || lock?.acquired === true;
+    if (!locked) throw new Error('Timed out waiting for the schema migration lock');
     await ensureTrackingTable(conn);
     const applied = await appliedVersions(conn);
     const pending = migrationFiles().filter(f => !applied.has(f));
@@ -80,11 +85,12 @@ async function up() {
         console.log('FAILED');
         console.error(`\nMigration ${file} failed: ${err.message}`);
         console.error('Nothing was recorded for this migration. Fix it and re-run `npm run db:migrate`.');
-        process.exit(1);
+        throw err;
       }
     }
     console.log('\n✓ All migrations applied.');
   } finally {
+    if (locked) await conn.query('SELECT RELEASE_LOCK(?)', [MIGRATION_LOCK]).catch(() => undefined);
     await conn.end();
   }
 }

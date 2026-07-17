@@ -13,6 +13,7 @@ import {
   Database,
   LayoutDashboard,
   LogOut,
+  Hourglass,
   Settings,
   ShieldCheck,
   Users,
@@ -139,6 +140,11 @@ export default function Sidebar({
       label: 'Review queue',
       icon: <ClipboardCheck size={18} aria-hidden="true" />,
       badge: pendingCount && pendingCount > 0 ? pendingCount : undefined,
+    },
+    {
+      href: '/events/submitted',
+      label: 'Awaiting CommunityHub',
+      icon: <Hourglass size={18} aria-hidden="true" />,
     },
     {
       href: '/events/approved',

@@ -18,5 +18,7 @@ function getAdminApp(): App {
 }
 
 export const adminAuth = {
-  verifyIdToken: (token: string) => getAuth(getAdminApp()).verifyIdToken(token),
+  verifyIdToken: (token: string, checkRevoked = false) => (
+    getAuth(getAdminApp()).verifyIdToken(token, checkRevoked)
+  ),
 };

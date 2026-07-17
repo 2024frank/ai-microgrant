@@ -407,7 +407,8 @@ describe('Scenario 3 – Approve sends correct CommunityHub payload', () => {
       .mockResolvedValueOnce([[REVIEWER_USER]])
       .mockResolvedValueOnce([[RAW_EVENT]])
       .mockResolvedValueOnce([[{ allowed: 1 }]])
-      .mockResolvedValueOnce([[{ id: 5 }]]); // reviewer db id
+      .mockResolvedValueOnce([[{ id: 5 }]]) // reviewer db id
+      .mockResolvedValue([{ affectedRows: 1 }]);
   });
 
   it('submits event to CommunityHub endpoint', async () => {
@@ -476,7 +477,7 @@ describe('Scenario 3 – Approve sends correct CommunityHub payload', () => {
     );
 
     const updateCall = db.mockConn.query.mock.calls.find(
-      (c: any[]) => typeof c[0] === 'string' && c[0].includes("status='approved'")
+      (c: any[]) => typeof c[0] === 'string' && c[0].includes("status='submitted'")
     );
     expect(updateCall).toBeDefined();
     expect(updateCall[1]).toContain('ch_post_jazz_001');

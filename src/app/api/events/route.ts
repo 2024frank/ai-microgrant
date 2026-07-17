@@ -21,7 +21,7 @@ export async function GET(req: NextRequest) {
   const requestedStatus = searchParams.get('status') || 'all';
   const allowedStatuses = new Set([
     'all', 'pending', 'approved', 'rejected', 'resubmitted',
-    'pending_fix', 'publishing', 'superseded',
+    'pending_fix', 'publishing', 'superseded', 'submitted',
   ]);
   if (!allowedStatuses.has(requestedStatus)) {
     return Response.json({ error: 'Invalid status' }, { status: 400, headers: CORS });
@@ -45,20 +45,15 @@ export async function GET(req: NextRequest) {
   const params: any[]        = [];
 
   if (status !== 'all') { conditions.push('re.status = ?');      params.push(status); }
-  if (user?.role === 'reviewer') {
-    conditions.push(`(
-      NOT EXISTS (
-        SELECT 1 FROM reviewer_sources rs0
-        JOIN users u0 ON u0.id=rs0.reviewer_id
-        WHERE u0.firebase_uid=?
-      )
-      OR EXISTS (
-        SELECT 1 FROM reviewer_sources rs
-        JOIN users u ON u.id=rs.reviewer_id
-        WHERE u.firebase_uid=? AND rs.source_id=re.source_id
-      )
+  if (status === 'approved') {
+    conditions.push("re.communityhub_moderation_status = 'approved'");
+  }
+  if (user?.role === 'reviewer' && !user.canReviewAllSources) {
+    conditions.push(`EXISTS (
+      SELECT 1 FROM reviewer_sources rs
+      WHERE rs.reviewer_id=? AND rs.source_id=re.source_id
     )`);
-    params.push(user.uid, user.uid);
+    params.push(user.id);
   }
   if (source_id)        { conditions.push('re.source_id = ?');   params.push(source_id); }
   if (source_slug)      { conditions.push('s.slug = ?');         params.push(source_slug); }
@@ -86,6 +81,8 @@ export async function GET(req: NextRequest) {
        re.buttons, re.contact_email, re.phone, re.website, re.image_cdn_url,
        re.calendar_source_name, re.calendar_source_url, re.ingested_post_url,
        re.geo_scope, re.status, re.sent_for_correction, re.communityhub_post_id,
+       re.communityhub_moderation_status, re.communityhub_checked_at,
+       re.communityhub_moderation_error,
        re.created_at, re.updated_at,
        s.id AS source_id, s.name AS source_name, s.slug AS source_slug
      FROM raw_events re

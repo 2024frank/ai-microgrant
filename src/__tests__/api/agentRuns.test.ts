@@ -102,6 +102,27 @@ describe('GET /api/agent/runs', () => {
     expect(params[params.length - 1]).toBe(5);
   });
 
+  it('allows the scheduler secret to poll an exact set of dispatched run ids', async () => {
+    db.default.query.mockResolvedValueOnce([[COMPLETED_RUN, { ...COMPLETED_RUN, id: 2 }]]);
+    const response = await GET(new NextRequest('http://localhost/api/agent/runs?ids=1,2', {
+      headers: { Authorization: 'Bearer test-cron-secret' },
+    }));
+
+    expect(response.status).toBe(200);
+    expect(mockVerify).not.toHaveBeenCalled();
+    expect(db.default.query.mock.calls[0][0]).toContain('ar.id IN (?,?)');
+    expect(db.default.query.mock.calls[0][1]).toEqual([1, 2, 2]);
+    expect(await response.json()).toMatchObject({ terminal: true, failed: 0 });
+  });
+
+  it('rejects malformed run ids before querying the database', async () => {
+    const response = await GET(new NextRequest('http://localhost/api/agent/runs?ids=1,nope', {
+      headers: { Authorization: 'Bearer test-cron-secret' },
+    }));
+    expect(response.status).toBe(400);
+    expect(db.default.query).not.toHaveBeenCalled();
+  });
+
   it('returns 403 for reviewer', async () => {
     mockVerify.mockResolvedValue({ uid: 'uid-rev', email: 'rev@oberlin.edu' });
     db.default.query.mockResolvedValueOnce([[REVIEWER]]);

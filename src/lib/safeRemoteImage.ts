@@ -5,10 +5,10 @@ import { getSharp } from './sharp';
 import { isPublicIpAddress, validatePublicHttpUrl } from './publicHttpUrl';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
-const DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
+export const MAX_SAFE_IMAGE_BYTES = 5 * 1024 * 1024;
 const DEFAULT_MAX_REDIRECTS = 3;
 const MAX_INPUT_PIXELS = 40_000_000;
-const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
+const MAX_OUTPUT_BYTES = MAX_SAFE_IMAGE_BYTES;
 
 const ALLOWED_IMAGE_TYPES = new Set([
   'image/jpeg',
@@ -209,7 +209,7 @@ export async function fetchPublicImage(
   options: SafeImageFetchOptions = {},
 ): Promise<FetchedImage> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
+  const maxBytes = options.maxBytes ?? MAX_SAFE_IMAGE_BYTES;
   const maxRedirects = options.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
   const resolver = options.resolveHost ?? resolveHost;
   const makeRequest = options.requestOnce ?? requestOnce;
@@ -280,7 +280,7 @@ export async function fetchPublicImage(
 }
 
 function decodeDataImage(value: string, maxBytes: number): Buffer {
-  const match = /^data:(image\/(?:jpeg|png|gif|webp|avif));base64,([a-z0-9+/=]+)$/i.exec(value);
+  const match = /^data:(image\/(?:jpeg|png|gif|webp|avif));base64,([a-z0-9+/]*={0,2})$/i.exec(value);
   if (!match || !ALLOWED_IMAGE_TYPES.has(match[1].toLowerCase())) {
     throw new SafeImageError('UNSUPPORTED_TYPE', 'Image data must be a supported base64 raster image');
   }
@@ -290,6 +290,11 @@ function decodeDataImage(value: string, maxBytes: number): Buffer {
   }
   const bytes = Buffer.from(encoded, 'base64');
   if (bytes.byteLength === 0) throw new SafeImageError('INVALID_IMAGE', 'Embedded image is empty');
+  const canonicalInput = encoded.replace(/=+$/, '');
+  const canonicalDecoded = bytes.toString('base64').replace(/=+$/, '');
+  if (canonicalInput !== canonicalDecoded) {
+    throw new SafeImageError('INVALID_IMAGE', 'Embedded image base64 is malformed');
+  }
   if (bytes.byteLength > maxBytes) throw new SafeImageError('TOO_LARGE', 'Embedded image is too large');
   return bytes;
 }
@@ -299,7 +304,7 @@ export async function loadImageAsJpeg(
   value: string,
   options: SafeImageFetchOptions = {},
 ): Promise<Buffer> {
-  const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
+  const maxBytes = options.maxBytes ?? MAX_SAFE_IMAGE_BYTES;
   const raw = value.startsWith('data:')
     ? decodeDataImage(value, maxBytes)
     : (await fetchPublicImage(value, options)).bytes;
@@ -328,4 +333,13 @@ export async function loadImageAsJpeg(
     if (error instanceof SafeImageError) throw error;
     throw new SafeImageError('INVALID_IMAGE', 'Image bytes could not be decoded');
   }
+}
+
+/** Validate an embedded raster once at the write boundary and store normalized JPEG bytes. */
+export async function normalizeEmbeddedImageData(value: string): Promise<string> {
+  if (!value.startsWith('data:')) {
+    throw new SafeImageError('UNSUPPORTED_TYPE', 'Embedded image must use a data URI');
+  }
+  const jpeg = await loadImageAsJpeg(value, { maxBytes: MAX_SAFE_IMAGE_BYTES });
+  return `data:image/jpeg;base64,${jpeg.toString('base64')}`;
 }

@@ -34,27 +34,20 @@ export function useAuth(requiredRole?: 'admin' | 'reviewer') {
       localStorage.setItem('token', freshToken);
       setToken(freshToken);
 
-      // Use stored user data — only fetch from DB if not cached
-      const stored = localStorage.getItem('user');
-      if (stored) {
-        try {
-          const parsed = JSON.parse(stored) as AppUser;
-          if (requiredRole && parsed.role !== requiredRole && !(requiredRole === 'reviewer' && parsed.role === 'admin')) {
-            router.push('/login');
-            return;
-          }
-          setUser(parsed);
-          setReady(true);
-          return;
-        } catch {}
-      }
-
-      // No cached user — fetch from DB once
+      // The server is authoritative on every token refresh. A cached role can
+      // be stale after an administrator changes or disables an account.
       try {
         const res = await fetch('/api/auth/me', {
           headers: { Authorization: `Bearer ${freshToken}` },
         });
-        if (!res.ok) { router.push('/login'); return; }
+        if (!res.ok) {
+          if (res.status === 401 || res.status === 403) {
+            localStorage.removeItem('user');
+            router.push('/login');
+          }
+          setReady(true);
+          return;
+        }
         const userData = await res.json() as AppUser;
         if (requiredRole && userData.role !== requiredRole && !(requiredRole === 'reviewer' && userData.role === 'admin')) {
           router.push('/login');

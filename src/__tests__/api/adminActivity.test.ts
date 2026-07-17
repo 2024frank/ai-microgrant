@@ -46,6 +46,12 @@ describe('GET /api/admin/activity', () => {
     expect(data.recent_runs).toHaveLength(1);
     expect(data.today.pending).toBe(5);
     expect(data.today.approved_today).toBe(8);
+
+    const reviewerQuery = db.default.query.mock.calls[2][0];
+    const systemTodayQuery = db.default.query.mock.calls[4][0];
+    expect(reviewerQuery).toContain("rs.action = 'approved'");
+    expect(reviewerQuery).not.toContain('communityhub_moderation_status');
+    expect(systemTodayQuery).toContain("communityhub_moderation_status = 'approved'");
   });
 
   it('returns 403 for reviewer', async () => {

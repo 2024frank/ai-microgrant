@@ -1,4 +1,6 @@
 import pool from './db';
+import { fieldAuditValue } from './fieldAuditValue';
+import { boundedEventSnapshot } from './eventImagePrivacy';
 import { getAdminContact } from './adminContact';
 import {
   type CommunityHubPayload,
@@ -8,6 +10,8 @@ import {
 } from './communityHubPayload';
 import { computeDedupKey } from './eventDedup';
 import { validatePublicHttpUrl } from './publicHttpUrl';
+
+const MAX_POSTER_IMAGES = 4;
 
 export interface IngestionSource {
   id: number;
@@ -294,6 +298,17 @@ export async function persistExtractedEvents(
         // posts to both observe and replace the same original.
       }
 
+      // A correction may not supersede its evidence while documented payload
+      // blockers remain. The original stays recoverable and the failed run is
+      // surfaced to the reviewer instead of being labeled "fixed".
+      if (fixedFromId && issues.length > 0) {
+        skipped++;
+        invalid++;
+        failed++;
+        errors.push({ index, title, inserted: false, issues });
+        continue;
+      }
+
       const dedupKey = computeDedupKey(
         payload.title,
         payload.sessions,
@@ -301,31 +316,57 @@ export async function persistExtractedEvents(
         payload.description,
         payload.extendedDescription,
       );
-      if (!fixedFromId) {
-        const [duplicateRows] = await conn.query(
-          `SELECT id FROM raw_events
-           WHERE source_id = ? AND dedup_key = ?
-             AND status IN ('pending','approved','pending_fix','publishing')
-           LIMIT 1`,
-          [source.id, dedupKey],
-        ) as any;
-        if (Array.isArray(duplicateRows) && duplicateRows.length > 0) {
-          skipped++;
-          duplicates++;
-          continue;
+      const rawImage = readString(raw.image_cdn_url);
+      let imageData: string | null = null;
+      const imageIssues: CommunityHubPayloadIssue[] = [];
+
+      // Embedded images are untrusted model output. Decode and normalize them
+      // once at the write boundary so malformed, oversized, or deceptive bytes
+      // never become durable poster data. A bad optional poster does not discard
+      // an otherwise useful event; reviewers get a precise validation issue.
+      if (rawImage.startsWith('data:')) {
+        try {
+          const { normalizeEmbeddedImageData } = await import('./safeRemoteImage');
+          imageData = await normalizeEmbeddedImageData(rawImage);
+        } catch {
+          imageIssues.push(issue(
+            'image_cdn_url',
+            'invalid_embedded_image',
+            'the embedded poster was unsafe or could not be decoded; the event was kept without it',
+          ));
         }
       }
 
-      const rawImage = readString(raw.image_cdn_url);
-      let imageData: string | null = rawImage.startsWith('data:') ? rawImage : null;
-      const imageIssues: CommunityHubPayloadIssue[] = [];
-      const posterUrls = Array.isArray(raw.poster_urls)
-        ? raw.poster_urls.filter(isSafePosterUrl).slice(0, 8)
-        : [];
+      const rawPosterUrls = Array.isArray(raw.poster_urls) ? raw.poster_urls : [];
+      if (rawPosterUrls.length > MAX_POSTER_IMAGES) {
+        imageIssues.push(issue(
+          'poster_urls',
+          'too_many_posters',
+          `only the first ${MAX_POSTER_IMAGES} poster URLs were inspected and processed`,
+        ));
+      }
+      const inspectedPosterUrls = rawPosterUrls.slice(0, MAX_POSTER_IMAGES);
+      const safePosterUrls = inspectedPosterUrls.filter(isSafePosterUrl);
+      const unsafePosterCount = inspectedPosterUrls.length - safePosterUrls.length;
+      if (unsafePosterCount > 0) {
+        imageIssues.push(issue(
+          'poster_urls',
+          'unsafe_poster_url',
+          `${unsafePosterCount} poster URL${unsafePosterCount === 1 ? ' was' : 's were'} ignored because only public HTTPS image URLs are allowed`,
+        ));
+      }
+      const posterUrls = safePosterUrls;
       if (!imageData && posterUrls.length > 0) {
         try {
           const { mergePosterImages } = await import('./mergePosters');
           imageData = await mergePosterImages(posterUrls);
+          if (!imageData) {
+            imageIssues.push(issue(
+              'poster_urls',
+              'poster_images_unusable',
+              'none of the poster images could be safely decoded and merged; the event was kept without an embedded poster',
+            ));
+          }
         } catch {
           imageIssues.push(issue(
             'poster_urls',
@@ -340,6 +381,13 @@ export async function persistExtractedEvents(
 
       const validationErrors = mergeIssues(issues, imageIssues);
       const hadValidationErrors = validationErrors.length > 0;
+      if (fixedFromId && hadValidationErrors) {
+        skipped++;
+        invalid++;
+        failed++;
+        errors.push({ index, title, inserted: false, issues: validationErrors });
+        continue;
+      }
       if (hadValidationErrors) invalid++;
 
       try {
@@ -392,6 +440,24 @@ export async function persistExtractedEvents(
           }
         }
 
+        // The indexed equality lookup with FOR UPDATE takes an InnoDB next-key
+        // lock. Concurrent ingests for the same source+signature therefore
+        // cannot both pass the check and insert an active duplicate.
+        const [duplicateRows] = await conn.query(
+          `SELECT id FROM raw_events
+           WHERE source_id=? AND dedup_key=?
+             AND status IN ('pending','submitted','approved','pending_fix','publishing','resubmitted')
+             ${fixedFromId ? 'AND id<>?' : ''}
+           LIMIT 1 FOR UPDATE`,
+          fixedFromId ? [source.id, dedupKey, fixedFromId] : [source.id, dedupKey],
+        ) as any;
+        if (Array.isArray(duplicateRows) && duplicateRows.length > 0) {
+          await (conn as any).rollback();
+          skipped++;
+          duplicates++;
+          continue;
+        }
+
         const [result] = await conn.query(
           `INSERT INTO raw_events (
             source_id, agent_run_id, event_type, title, description,
@@ -440,14 +506,11 @@ export async function persistExtractedEvents(
 
         const eventId = result.insertId;
         const ingestedPostUrl = `${appUrl}/reviewer/events/${eventId}`;
-        const servingImageUrl = imageData
-          ? `${appUrl}/api/events/${eventId}/poster.jpg`
-          : null;
         await conn.query(
           `UPDATE raw_events
-           SET ingested_post_url = ?, image_cdn_url = COALESCE(?, image_cdn_url)
+           SET ingested_post_url = ?
            WHERE id = ?`,
-          [ingestedPostUrl, servingImageUrl, eventId],
+          [ingestedPostUrl, eventId],
         );
 
         if (fixedFromId && fixEntry) {
@@ -501,8 +564,8 @@ export async function persistExtractedEvents(
                 source.id,
                 fixEntry.sent_by_user_id ?? null,
                 field,
-                oldValue,
-                newValue,
+                fieldAuditValue(oldValue),
+                fieldAuditValue(newValue),
               ],
             );
           }
@@ -517,7 +580,7 @@ export async function persistExtractedEvents(
               JSON.stringify(['field_correction']),
               cleanText(fixEntry.correction_notes, 2000),
               originalEvent?.title ?? payload.title,
-              JSON.stringify(originalEvent ?? {}),
+              JSON.stringify(boundedEventSnapshot(originalEvent ?? {})),
             ],
           );
           await conn.query(
@@ -527,15 +590,15 @@ export async function persistExtractedEvents(
           if (fixEntry.sent_by_user_id) {
             const parts = [
               fixEntry.correction_notes ? `You asked: ${fixEntry.correction_notes}` : '',
-              raw.fixSummary ? `Fixed: ${cleanText(raw.fixSummary, 500)}` : '',
+              raw.fixSummary ? `Agent summary: ${cleanText(raw.fixSummary, 500)}` : '',
             ].filter(Boolean);
             await conn.query(
               `INSERT INTO notifications (user_id, type, title, message, raw_event_id)
                VALUES (?, 'event_fixed', ?, ?, ?)`,
               [
                 fixEntry.sent_by_user_id,
-                `Fixed: ${payload.title}`,
-                parts.join(' · ') || 'The corrected event is ready to review.',
+                `Correction draft ready: ${payload.title}`,
+                parts.join(' · ') || 'A contract-valid correction draft is ready for human review.',
                 eventId,
               ],
             );

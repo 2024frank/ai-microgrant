@@ -1,8 +1,15 @@
 jest.mock('@/lib/mergePosters', () => ({
   mergePosterImages: jest.fn().mockResolvedValue(null),
+  MAX_POSTER_IMAGES: 4,
+}));
+
+jest.mock('@/lib/safeRemoteImage', () => ({
+  normalizeEmbeddedImageData: jest.fn(),
 }));
 
 import { persistExtractedEvents } from '@/lib/eventIngestion';
+import { mergePosterImages } from '@/lib/mergePosters';
+import { normalizeEmbeddedImageData } from '@/lib/safeRemoteImage';
 
 const db = require('@/lib/db');
 
@@ -44,6 +51,10 @@ describe('persistExtractedEvents', () => {
     db.mockConn.commit = jest.fn().mockResolvedValue(undefined);
     db.mockConn.rollback = jest.fn().mockResolvedValue(undefined);
     db.mockConn.release = jest.fn();
+    (mergePosterImages as jest.Mock).mockReset().mockResolvedValue(null);
+    (normalizeEmbeddedImageData as jest.Mock).mockReset().mockImplementation(
+      async () => 'data:image/jpeg;base64,bm9ybWFsaXplZA==',
+    );
   });
 
   it('stores a contract-valid event with canonical fields', async () => {
@@ -91,7 +102,9 @@ describe('persistExtractedEvents', () => {
   });
 
   it('defaults omitted sponsors to the source organizer instead of failing validation', async () => {
-    const { sponsors: _omitted, ...eventWithoutSponsors } = VALID_EVENT;
+    const eventWithoutSponsors = Object.fromEntries(
+      Object.entries(VALID_EVENT).filter(([key]) => key !== 'sponsors'),
+    );
     const result = await persistExtractedEvents([eventWithoutSponsors], SOURCE, 12);
 
     expect(result.inserted).toHaveLength(1);
@@ -102,6 +115,83 @@ describe('persistExtractedEvents', () => {
     );
     expect(insert?.[1]).toEqual(expect.arrayContaining([
       JSON.stringify(['Oberlin Community Arts']),
+    ]));
+  });
+
+  it('normalizes embedded posters without persisting the local serving URL as CDN data', async () => {
+    const original = 'data:image/png;base64,aW1hZ2U=';
+    const normalized = 'data:image/jpeg;base64,bm9ybWFsaXplZA==';
+    (normalizeEmbeddedImageData as jest.Mock).mockResolvedValueOnce(normalized);
+
+    const result = await persistExtractedEvents([{
+      ...VALID_EVENT,
+      image_cdn_url: original,
+    }], SOURCE, 12);
+
+    expect(result).toMatchObject({ skipped: 0, invalid: 0 });
+    expect(normalizeEmbeddedImageData).toHaveBeenCalledWith(original);
+    const insert = db.mockConn.query.mock.calls.find(
+      ([sql]: [string]) => sql.includes('INSERT INTO raw_events'),
+    );
+    // image_cdn_url stays null; the verified bytes live only in image_data.
+    expect(insert?.[1][22]).toBeNull();
+    expect(insert?.[1][23]).toBe(normalized);
+    expect(db.mockConn.query).toHaveBeenCalledWith(
+      expect.stringMatching(/SET ingested_post_url = \?\s+WHERE id = \?/),
+      ['http://localhost:3000/reviewer/events/40', 40],
+    );
+    expect(db.mockConn.query.mock.calls.some(
+      ([sql, params]: [string, unknown[]]) => (
+        sql.includes('UPDATE raw_events')
+        && params?.some(value => typeof value === 'string' && value.includes('/poster.jpg'))
+      ),
+    )).toBe(false);
+  });
+
+  it('keeps an event but drops and reports an invalid embedded poster', async () => {
+    (normalizeEmbeddedImageData as jest.Mock).mockRejectedValueOnce(new Error('bad bytes'));
+
+    const result = await persistExtractedEvents([{
+      ...VALID_EVENT,
+      image_cdn_url: 'data:image/png;base64,bm90LWEtcmVhbC1pbWFnZQ==',
+    }], SOURCE, 12);
+
+    expect(result.inserted).toHaveLength(1);
+    expect(result.invalid).toBe(1);
+    expect(result.errors[0]).toMatchObject({ inserted: true });
+    expect(result.errors[0].issues).toContainEqual(expect.objectContaining({
+      path: 'image_cdn_url',
+      code: 'invalid_embedded_image',
+    }));
+    const insert = db.mockConn.query.mock.calls.find(
+      ([sql]: [string]) => sql.includes('INSERT INTO raw_events'),
+    );
+    expect(insert?.[1][22]).toBeNull();
+    expect(insert?.[1][23]).toBeNull();
+  });
+
+  it('reports unsafe, excess, and all-failed multi-poster input while keeping the event', async () => {
+    const safeUrls = Array.from(
+      { length: 5 },
+      (_, index) => `https://images.example.com/poster-${index}.jpg`,
+    );
+
+    const result = await persistExtractedEvents([{
+      ...VALID_EVENT,
+      poster_urls: [
+        'http://127.0.0.1/private.jpg',
+        'not-a-url',
+        ...safeUrls,
+      ],
+    }], SOURCE, 12);
+
+    expect(result.inserted).toHaveLength(1);
+    expect(result.invalid).toBe(1);
+    expect(mergePosterImages).toHaveBeenCalledWith(safeUrls.slice(0, 2));
+    expect(result.errors[0].issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'unsafe_poster_url' }),
+      expect.objectContaining({ code: 'too_many_posters' }),
+      expect.objectContaining({ code: 'poster_images_unusable' }),
     ]));
   });
 
@@ -267,7 +357,7 @@ describe('persistExtractedEvents', () => {
     db.mockConn.query.mockImplementation((sql: string) => {
       if (sql.includes('FROM agent_runs')) return Promise.resolve([[{ id: 13 }]]);
       if (sql.includes('FROM needs_fix')) return Promise.resolve([[fixRequest]]);
-      if (sql.includes('FROM raw_events') && sql.includes('FOR UPDATE')) {
+      if (sql.includes('SELECT * FROM raw_events') && sql.includes('FOR UPDATE')) {
         return Promise.resolve([[original]]);
       }
       if (sql.includes('INSERT INTO raw_events')) return Promise.resolve([{ insertId: 102 }]);
@@ -319,6 +409,42 @@ describe('persistExtractedEvents', () => {
     expect(db.mockConn.query.mock.calls.some(
       ([sql]: [string]) => sql.includes('INSERT INTO raw_events'),
     )).toBe(false);
+  });
+
+  it('does not supersede a rejected record with a correction that still violates the payload contract', async () => {
+    const result = await persistExtractedEvents(
+      [{ ...VALID_EVENT, fixedFromEventId: 99, postTypeId: [999] }],
+      SOURCE,
+      12,
+      { expectedCorrectionEventId: 99 },
+    );
+
+    expect(result).toMatchObject({ inserted: [], skipped: 1, invalid: 1, failed: 1 });
+    expect(result.errors[0].issues).toContainEqual(expect.objectContaining({
+      path: 'postTypeId[0]',
+    }));
+    expect(db.mockConn.beginTransaction).not.toHaveBeenCalled();
+  });
+
+  it('does not supersede correction evidence when the agent returns an unsafe poster', async () => {
+    (normalizeEmbeddedImageData as jest.Mock).mockRejectedValueOnce(new Error('unsafe poster'));
+
+    const result = await persistExtractedEvents(
+      [{
+        ...VALID_EVENT,
+        fixedFromEventId: 99,
+        image_cdn_url: 'data:image/png;base64,bm90LWltYWdl',
+      }],
+      SOURCE,
+      12,
+      { expectedCorrectionEventId: 99 },
+    );
+
+    expect(result).toMatchObject({ inserted: [], skipped: 1, invalid: 1, failed: 1 });
+    expect(result.errors[0].issues).toContainEqual(expect.objectContaining({
+      code: 'invalid_embedded_image',
+    }));
+    expect(db.mockConn.beginTransaction).not.toHaveBeenCalled();
   });
 
   it('continues after one event fails to write', async () => {

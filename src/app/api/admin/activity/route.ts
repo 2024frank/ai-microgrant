@@ -65,7 +65,9 @@ export async function GET(req: NextRequest) {
   const [[today]] = await pool.query(
     `SELECT
        SUM(status = 'pending')  AS pending,
-       SUM(status = 'approved' AND updated_at >= CURDATE()) AS approved_today,
+       SUM(status = 'approved'
+         AND communityhub_moderation_status = 'approved'
+         AND updated_at >= CURDATE()) AS approved_today,
        SUM(status = 'rejected' AND updated_at >= CURDATE()) AS rejected_today,
        SUM(created_at >= CURDATE()) AS extracted_today
      FROM raw_events`,

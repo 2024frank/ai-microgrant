@@ -29,7 +29,7 @@ ALTER TABLE raw_events
 
 ALTER TABLE raw_events
   MODIFY COLUMN status
-    ENUM('pending','approved','rejected','resubmitted','pending_fix')
+    ENUM('pending','submitted','approved','rejected','resubmitted','pending_fix')
     NOT NULL DEFAULT 'pending';
 
 ALTER TABLE review_sessions

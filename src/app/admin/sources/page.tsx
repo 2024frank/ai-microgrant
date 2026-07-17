@@ -44,6 +44,7 @@ interface SourceRecord {
   schedule_cron: string;
   total_events?: number;
   total_approved?: number;
+  total_submitted?: number;
   review_queue?: number;
   pending_review?: number;
   pending_fix?: number;
@@ -105,12 +106,25 @@ interface RunRecord {
   elapsed_sec?: number;
 }
 
+interface SubmissionIssue {
+  id: number;
+  raw_event_id: number;
+  status: 'sending' | 'accepted_unreconciled' | 'succeeded';
+  error_message?: string | null;
+  updated_at: string;
+  title: string;
+  source_name: string;
+}
+
 type Health = 'running' | 'failed' | 'completed' | 'stopped' | 'invalid' | 'paused' | 'never' | 'monitoring';
 
 export default function SourcesPage() {
   const { user, token, ready, getFreshToken } = useAuth('admin');
   const [sources, setSources] = useState<SourceRecord[]>([]);
   const [runs, setRuns] = useState<RunRecord[]>([]);
+  const [submissions, setSubmissions] = useState<SubmissionIssue[]>([]);
+  const [submissionError, setSubmissionError] = useState('');
+  const [resolvingSubmission, setResolvingSubmission] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [runsError, setRunsError] = useState('');
@@ -164,15 +178,29 @@ export default function SourcesPage() {
     }
   }, [token, authHeaders, loadSources]);
 
+  const loadSubmissions = useCallback(async () => {
+    if (!token) return;
+    try {
+      const response = await fetch('/api/communityhub/submissions', { headers: authHeaders() });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'Submission recovery state could not be loaded.');
+      setSubmissions(Array.isArray(payload.submissions) ? payload.submissions : []);
+      setSubmissionError('');
+    } catch (error) {
+      setSubmissionError(error instanceof Error ? error.message : 'Submission recovery state could not be loaded.');
+    }
+  }, [token, authHeaders]);
+
   useEffect(() => {
     if (!ready || !token) return;
     loadSources();
     loadRuns();
+    loadSubmissions();
     pollRef.current = window.setInterval(loadRuns, 10_000);
     return () => {
       if (pollRef.current) window.clearInterval(pollRef.current);
     };
-  }, [ready, token, loadSources, loadRuns]);
+  }, [ready, token, loadSources, loadRuns, loadSubmissions]);
 
   useEffect(() => {
     if (!addOpen && !promptSource) return;
@@ -416,6 +444,54 @@ export default function SourcesPage() {
     }
   }
 
+  async function linkSubmission(submission: SubmissionIssue) {
+    const postId = window.prompt(
+      `Enter the CommunityHub post ID that you verified belongs to “${submission.title}”.`,
+    )?.trim();
+    if (!postId) return;
+    setResolvingSubmission(submission.id);
+    try {
+      const freshToken = await getFreshToken();
+      const response = await fetch(`/api/communityhub/submissions/${submission.id}/reconcile`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
+        body: JSON.stringify({ communityhub_post_id: postId }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'The CommunityHub post could not be linked.');
+      showToast('CommunityHub post linked. Moderation will be checked next.');
+      await Promise.all([loadSubmissions(), loadSources()]);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'The CommunityHub post could not be linked.', true);
+    } finally {
+      setResolvingSubmission(null);
+    }
+  }
+
+  async function releaseSubmission(submission: SubmissionIssue) {
+    const confirmed = window.confirm(
+      `Release “${submission.title}” back to review?\n\nDo this only after searching CommunityHub and verifying that no post exists. The backend also enforces a 10-minute safety window.`,
+    );
+    if (!confirmed) return;
+    setResolvingSubmission(submission.id);
+    try {
+      const freshToken = await getFreshToken();
+      const response = await fetch(`/api/communityhub/submissions/${submission.id}/reconcile`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${freshToken}` },
+        body: JSON.stringify({ confirmation: 'NO_COMMUNITYHUB_POST_EXISTS' }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'The submission could not be released.');
+      showToast('Submission safely returned to the review queue.');
+      await Promise.all([loadSubmissions(), loadSources()]);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'The submission could not be released.', true);
+    } finally {
+      setResolvingSubmission(null);
+    }
+  }
+
   if (!ready || !user) return null;
 
   const activeRuns = runs.filter(run => run.status === 'running');
@@ -446,7 +522,7 @@ export default function SourcesPage() {
             <p>Monitor source health, inspect run failures, start an immediate extraction, and manage the exact ingest endpoint for each source.</p>
           </div>
           <div className="page-header__actions">
-            <button type="button" className="btn-secondary" onClick={() => { loadSources(); loadRuns(); }}><RefreshCcw size={15} /> Refresh</button>
+            <button type="button" className="btn-secondary" onClick={() => { loadSources(); loadRuns(); loadSubmissions(); }}><RefreshCcw size={15} /> Refresh</button>
             <button type="button" className="btn-primary" onClick={() => setAddOpen(true)}><Plus size={15} /> Add source</button>
           </div>
         </header>
@@ -531,6 +607,10 @@ export default function SourcesPage() {
                     <div className="source-card__metric">
                       <div className="source-card__metric-label">Published</div>
                       <div className="source-card__metric-value tnum">{Number(source.total_approved) || 0}</div>
+                    </div>
+                    <div className="source-card__metric" title="Accepted by CommunityHub and awaiting its moderation decision">
+                      <div className="source-card__metric-label">Awaiting CommunityHub</div>
+                      <div className="source-card__metric-value tnum">{Number(source.total_submitted) || 0}</div>
                     </div>
                     <div className="source-card__metric" title="Rejected records with no correction currently running">
                       <div className="source-card__metric-label">Rejected · idle</div>
@@ -656,6 +736,48 @@ export default function SourcesPage() {
                 </article>
               );
             })}
+          </section>
+        )}
+
+        {(submissionError || submissions.length > 0) && (
+          <section style={{ marginTop: 28 }} aria-label="CommunityHub submission recovery">
+            <div className="card__header">
+              <div>
+                <h2 className="card__title">CommunityHub recovery</h2>
+                <p className="card__subtitle">Remote outcomes that require verified operator resolution before another post can be sent.</p>
+              </div>
+              <span className="badge badge-amber tnum">{submissions.length} unresolved</span>
+            </div>
+            {submissionError ? (
+              <div className="alert alert--warning" role="alert"><AlertTriangle size={16} /> {submissionError}</div>
+            ) : (
+              <div className="run-list">
+                {submissions.map(submission => (
+                  <article className="run-row" key={submission.id}>
+                    <div className="run-row__summary" style={{ alignItems: 'flex-start' }}>
+                      <AlertTriangle size={17} color="var(--amber-600)" aria-hidden="true" />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div className="run-row__name">{submission.title}</div>
+                        <div className="run-row__meta">{submission.source_name} · {submission.status.replaceAll('_', ' ')} · last changed {new Date(submission.updated_at).toLocaleString()}</div>
+                        {submission.error_message && <div className="run-row__meta" style={{ color: 'var(--red-700)', marginTop: 4 }}>{submission.error_message}</div>}
+                      </div>
+                      {submission.status !== 'succeeded' ? (
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                          <button type="button" className="btn-secondary" disabled={resolvingSubmission === submission.id} onClick={() => linkSubmission(submission)}>
+                            <ShieldCheck size={13} /> Link verified post
+                          </button>
+                          {submission.status === 'sending' && (
+                            <button type="button" className="btn-danger" disabled={resolvingSubmission === submission.id} onClick={() => releaseSubmission(submission)}>
+                              <RefreshCcw size={13} /> Verified no post · release
+                            </button>
+                          )}
+                        </div>
+                      ) : <span className="badge badge-gray">Automatic local recovery pending</span>}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
           </section>
         )}
 

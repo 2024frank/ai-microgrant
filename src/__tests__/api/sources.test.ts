@@ -78,6 +78,9 @@ describe('GET /api/sources', () => {
       total_rejected: 2,
     });
     expect(db.default.query.mock.calls[2][0]).toContain("SUM(status='pending') AS review_queue");
+    expect(db.default.query.mock.calls[2][0]).toContain(
+      "status='approved' AND communityhub_moderation_status='approved'",
+    );
     expect(db.default.query.mock.calls[2][0]).toContain("status='rejected' AND COALESCE(sent_for_correction, 0)=0");
     expect(data[0].next_run_at).toEqual(expect.any(String));
     expect(data[0].recent_runs[0]).toMatchObject({
@@ -105,7 +108,7 @@ describe('GET /api/sources', () => {
     expect(data).toEqual([{ id: 2, name: 'Assigned Calendar' }]);
     const sourceQuery = db.default.query.mock.calls[1];
     expect(sourceQuery[0]).toContain('reviewer_sources');
-    expect(sourceQuery[1]).toEqual(['uid-rev', 'uid-rev']);
+    expect(sourceQuery[1]).toEqual([REVIEWER.id]);
   });
 });
 

@@ -45,7 +45,7 @@ function StackedBar({approved,rejected,pending,total}:{approved:number;rejected:
   const ap=pct(approved,total), rj=pct(rejected,total), pe=pct(pending,total);
   return (
     <div style={{display:'flex',height:10,borderRadius:4,overflow:'hidden',gap:1}}>
-      {ap>0&&<div style={{width:`${ap}%`,background:'#3a8c3f'}} title={`Approved: ${approved}`}/>}
+      {ap>0&&<div style={{width:`${ap}%`,background:'#3a8c3f'}} title={`Published: ${approved}`}/>}
       {rj>0&&<div style={{width:`${rj}%`,background:'#c0392b'}} title={`Rejected: ${rejected}`}/>}
       {pe>0&&<div style={{width:`${pe}%`,background:'#e0e0e0'}} title={`Pending: ${pending}`}/>}
     </div>
@@ -118,7 +118,7 @@ function GroupedBars({sources}:{sources:any[]}) {
         </g>;
       })}
       {/* legend */}
-      {[{c:'#e0e0e0',l:'Total'},{c:'#3a8c3f',l:'Approved'},{c:'#e67e22',l:'Pending'}].map(({c,l},i)=>(
+      {[{c:'#e0e0e0',l:'Total'},{c:'#3a8c3f',l:'Published'},{c:'#e67e22',l:'Pending'}].map(({c,l},i)=>(
         <g key={l} transform={`translate(${padL+i*72},${H-2})`}>
           <rect width={8} height={8} fill={c} rx={1}/>
           <text x={11} y={7} fontSize={9} fill="#888">{l}</text>
@@ -285,10 +285,10 @@ export default function AgentAnalyticsPage() {
               <KPI label="Hit rate" value={hitRate!==null?`${hitRate}%`:'—'} icon={<Target size={14}/>}
                 color={hitRate===null?'#bbb':hitRate>=60?'#3a8c3f':hitRate>=30?'#c05e00':'#c0392b'}
                 sub="runs that found new events"/>
-              <KPI label="Approval rate" value={overallApprovalRate!==null?`${overallApprovalRate}%`:'—'}
+              <KPI label="Publication rate" value={overallApprovalRate!==null?`${overallApprovalRate}%`:'—'}
                 icon={<CheckCircle size={14}/>}
                 color={overallApprovalRate===null?'#bbb':overallApprovalRate>=70?'#3a8c3f':overallApprovalRate>=50?'#c05e00':'#c0392b'}
-                sub="of reviewed events approved"/>
+                sub="externally verified as published"/>
             </div>
 
             <div className="responsive-grid" style={{display:'grid',gridTemplateColumns:'1.4fr 1fr',gap:'1.25rem',marginBottom:'1.25rem'}}>
@@ -302,13 +302,13 @@ export default function AgentAnalyticsPage() {
               <div className="card" style={{padding:'1.25rem',display:'flex',flexDirection:'column',alignItems:'center',gap:'1rem'}}>
                 <h3 style={{fontSize:13,fontWeight:700,color:'#444',alignSelf:'flex-start'}}>Review status</h3>
                 <Donut slices={[
-                  {value:totals.approved,color:'#3a8c3f',label:'Approved'},
+                  {value:totals.approved,color:'#3a8c3f',label:'Published'},
                   {value:totals.rejected,color:'#c0392b',label:'Rejected'},
                   {value:totals.pending, color:'#e0e0e0',label:'Pending'},
                 ]} r={52} stroke={18}/>
                 <div style={{display:'flex',flexDirection:'column',gap:6,width:'100%'}}>
                   {[
-                    {label:'Approved',val:totals.approved,color:'#3a8c3f'},
+                    {label:'Published',val:totals.approved,color:'#3a8c3f'},
                     {label:'Rejected',val:totals.rejected,color:'#c0392b'},
                     {label:'Pending', val:totals.pending, color:'#e0e0e0'},
                   ].map(({label,val,color})=>(
@@ -353,7 +353,7 @@ export default function AgentAnalyticsPage() {
                   if (s.edit_rate>40) insights.push(`High edit rate (${s.edit_rate}%) — reviewers are frequently correcting extracted fields. The agent may need prompt tuning.`);
                   if (s.avg_sec&&s.avg_sec>300) insights.push(`Slow runs averaging ${fmtSec(Math.round(s.avg_sec))} — may indicate the source API is slow or the agent is doing excess work.`);
                   if (s.failed_runs>0) insights.push(`${s.failed_runs} failed run${s.failed_runs>1?'s':''} detected — check agent logs.`);
-                  if (s.pending>0&&s.approved===0) insights.push(`${s.pending} events pending — none reviewed yet.`);
+                  if (s.pending>0&&s.approved===0) insights.push(`${s.pending} events pending — none published yet.`);
                   if (!insights.length) return null;
                   return (
                     <div key={s.id} style={{background:'#fffbf0',borderLeft:'3px solid #e67e22',borderRadius:'0 6px 6px 0',padding:'0.6rem 0.75rem'}}>
@@ -365,7 +365,7 @@ export default function AgentAnalyticsPage() {
                   );
                 })}
                 {sources.every(s=>!s.total_runs||(s.hit_rate>=30&&s.edit_rate<=40&&!s.failed_runs))&&(
-                  <div style={{fontSize:13,color:'#3a8c3f',fontWeight:600}}>All agents look healthy. Keep reviewing to build approval signals.</div>
+                  <div style={{fontSize:13,color:'#3a8c3f',fontWeight:600}}>All agents look healthy. Keep reviewing to build publication evidence.</div>
                 )}
               </div>
             </div>
@@ -402,7 +402,7 @@ export default function AgentAnalyticsPage() {
                     {label:'Total runs',    val:s.total_runs,  sub:`${s.productive_runs} productive`,  color:'#1565c0'},
                     {label:'Hit rate',      val:s.hit_rate!==null?`${s.hit_rate}%`:'—', sub:`${s.empty_runs} empty runs`, color:s.hit_rate===null?'#bbb':s.hit_rate>=60?'#3a8c3f':s.hit_rate>=30?'#c05e00':'#c0392b'},
                     {label:'Avg run time',  val:fmtSec(s.avg_sec?Math.round(s.avg_sec):null), sub:`max ${fmtSec(s.max_sec)}`, color:'#555'},
-                    {label:'Approval rate', val:s.approval_rate!==null?`${s.approval_rate}%`:'—', sub:`${s.approved} approved`,  color:s.approval_rate===null?'#bbb':s.approval_rate>=70?'#3a8c3f':s.approval_rate>=50?'#c05e00':'#c0392b'},
+                    {label:'Publication rate', val:s.approval_rate!==null?`${s.approval_rate}%`:'—', sub:`${s.approved} published`,  color:s.approval_rate===null?'#bbb':s.approval_rate>=70?'#3a8c3f':s.approval_rate>=50?'#c05e00':'#c0392b'},
                   ].map(({label,val,sub,color})=>(
                     <div key={label} style={{background:'#f8f9fa',borderRadius:8,padding:'0.75rem'}}>
                       <div style={{fontSize:20,fontWeight:800,color}}>{val}</div>
@@ -420,7 +420,7 @@ export default function AgentAnalyticsPage() {
                   </div>
                   <StackedBar approved={s.approved} rejected={s.rejected} pending={s.pending} total={s.total}/>
                   <div style={{display:'flex',gap:'1rem',marginTop:6}}>
-                    {[{l:'Approved',v:s.approved,c:'#3a8c3f'},{l:'Rejected',v:s.rejected,c:'#c0392b'},{l:'Pending',v:s.pending,c:'#bbb'}].map(({l,v,c})=>(
+                    {[{l:'Published',v:s.approved,c:'#3a8c3f'},{l:'Rejected',v:s.rejected,c:'#c0392b'},{l:'Pending',v:s.pending,c:'#bbb'}].map(({l,v,c})=>(
                       <span key={l} style={{fontSize:10,color:c,fontWeight:600}}>{v} {l}</span>
                     ))}
                   </div>
@@ -443,7 +443,7 @@ export default function AgentAnalyticsPage() {
 
                 {s.approved>0&&(
                   <div style={{marginTop:'0.75rem',fontSize:11,color:'#888'}}>
-                    <span style={{color:'#3a8c3f',fontWeight:700}}>{s.clean_approved}</span> of {s.approved} approved events needed zero edits
+                    <span style={{color:'#3a8c3f',fontWeight:700}}>{s.clean_approved}</span> of {s.approved} published events needed zero edits
                     {' '}({pct(s.clean_approved,s.approved)}% clean)
                   </div>
                 )}
@@ -543,7 +543,7 @@ export default function AgentAnalyticsPage() {
                   );
                 })}
                 <p style={{fontSize:11,color:'#bbb',marginTop:'0.75rem'}}>
-                  % of approved events that required zero field corrections.
+                  % of published events that required zero field corrections.
                 </p>
               </div>
             </div>

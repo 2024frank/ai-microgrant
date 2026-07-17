@@ -16,10 +16,11 @@ const STATUS_STYLES: Record<string, { bg: string; color: string }> = {
   approved:    { bg: '#e8f5e9', color: '#2a6b2e' },
   rejected:    { bg: '#fdecea', color: '#c0392b' },
   resubmitted: { bg: '#e3f2fd', color: '#1565c0' },
+  submitted:   { bg: '#eef2f6', color: '#425466' },
 };
 
 interface EventsListPageProps {
-  status:     'approved' | 'rejected' | 'pending' | 'all';
+  status:     'approved' | 'rejected' | 'submitted' | 'pending' | 'all';
   title:      string;
   emptyMsg:   string;
 }
@@ -114,7 +115,7 @@ export default function EventsListPage({ status, title, emptyMsg }: EventsListPa
         ) : events.length === 0 ? (
           <div className="card" style={{ textAlign: 'center', padding: '4rem', color: '#aaa' }}>
             <div style={{ fontSize: 32, marginBottom: 12 }}>
-              {status === 'approved' ? '✅' : status === 'rejected' ? '❌' : '📋'}
+              {status === 'approved' ? '✅' : status === 'rejected' ? '❌' : status === 'submitted' ? '⏳' : '📋'}
             </div>
             <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>{emptyMsg}</div>
             {q && <div style={{ fontSize: 13 }}>Try clearing your search</div>}
@@ -140,6 +141,12 @@ export default function EventsListPage({ status, title, emptyMsg }: EventsListPa
                   const st = STATUS_STYLES[ev.status] || STATUS_STYLES.pending;
                   const statusLabel = ev.status === 'rejected' && Number(ev.sent_for_correction) === 1
                     ? 'Correction running'
+                    : ev.status === 'submitted'
+                    ? ev.communityhub_moderation_status === 'missing'
+                      ? 'CommunityHub post missing'
+                      : ev.communityhub_moderation_status === 'unknown'
+                      ? 'Reconciliation needed'
+                      : 'Awaiting CommunityHub review'
                     : ev.status;
                   return (
                     <tr key={ev.id}
