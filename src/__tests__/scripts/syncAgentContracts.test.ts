@@ -56,12 +56,13 @@ locationType: "ph2" physical
 display: "all" all public screens
 integer Unix seconds
 Return only one raw JSON array
-https://oberlin.communityhub.cloud/api/legacy/calendar/posts?limit=10000&page=0&filter=future&tab=main-feed&isJobs=false&order=ASC&postType=All&allPosts=
-Compare actual content, never IDs or tokens
-CommunityHub IDs and Event Intake IDs are different namespaces
-continue pagination until lastPage is true
-Read every remote session and the complete post copy
-For generic announcement titles, require the announcement copy
+Extract and return EVERY eligible event
+Do not fetch the CommunityHub inventory
+compares every candidate against the complete approved-and-pending CommunityHub inventory server-side
+Register for
+registrationUrl
+Registration required.
+never ambiguously as "here" or "there"
 ${process.env.INGEST_SECRET}
     `)).toThrow('configured ingest secret');
   });

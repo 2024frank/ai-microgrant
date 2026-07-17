@@ -6,6 +6,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { signOut as firebaseSignOut } from 'firebase/auth';
 import {
+  ArrowLeftRight,
   BarChart3,
   Bell,
   CheckCircle2,
@@ -160,6 +161,7 @@ export default function Sidebar({
 
   const adminItems: NavItem[] = [
     { href: '/admin/sources', label: 'Sources & runs', icon: <Database size={18} aria-hidden="true" /> },
+    { href: '/admin/comparisons', label: 'Calendar comparison', icon: <ArrowLeftRight size={18} aria-hidden="true" /> },
     { href: '/admin/analytics', label: 'Quality signals', icon: <BarChart3 size={18} aria-hidden="true" /> },
     { href: '/admin/controls', label: 'Team & access', icon: <Users size={18} aria-hidden="true" /> },
   ];

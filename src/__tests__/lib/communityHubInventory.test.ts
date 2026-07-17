@@ -1,4 +1,5 @@
 import {
+  COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS,
   compareEventContent,
   fetchCommunityHubInventory,
   findBestContentMatch,
@@ -179,6 +180,53 @@ describe('CommunityHub content inventory', () => {
     expect(requested).toHaveLength(2);
     expect(requested.every(url => url.searchParams.has('allPosts'))).toBe(true);
     expect(requested.map(url => url.searchParams.get('page'))).toEqual(['0', '1']);
+  });
+
+  it('retains raw evidence fields on every inventory post', async () => {
+    const fetcher = jest.fn(async () => new Response(JSON.stringify({
+      count: 2,
+      unapprovedRecordsCount: 0,
+      lastPage: true,
+      posts: [
+        {
+          name: 'Sponsored Concert', approved: true, eventType: 'ot',
+          description: 'A concert with named sponsors.',
+          calendarSourceName: 'Riverdog Music',
+          sponsors: ['Riverdog Music', { name: ' City Parks ' }],
+          ingestedPostUrl: 'https://app.example/reviewer/events/158',
+          image: 'https://cdn.example/poster.jpg',
+          sessions: [{ start: 1_800_000_000, end: 1_800_000_100 }],
+        },
+        {
+          name: 'Bare Event', approved: true, eventType: 'ot',
+          description: 'An event with no attribution extras.',
+          sessions: [{ start: 1_800_000_200, end: 1_800_000_300 }],
+        },
+      ],
+    }), { status: 200 })) as unknown as typeof fetch;
+
+    const inventory = await fetchCommunityHubInventory(fetcher);
+    const [sponsored, bare] = inventory.posts;
+
+    expect(sponsored.raw).toMatchObject({
+      calendarSourceName: 'Riverdog Music',
+      sponsors: ['Riverdog Music', 'City Parks'],
+      ingestedPostUrl: 'https://app.example/reviewer/events/158',
+      hasImage: true,
+    });
+    expect(bare.raw).toMatchObject({
+      calendarSourceName: '',
+      sponsors: [],
+      ingestedPostUrl: '',
+      hasImage: false,
+    });
+  });
+
+  it('instructs the agent to return every eligible event and leave deduplication to the server', () => {
+    expect(COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS).toContain('EVERY eligible event');
+    expect(COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS).toContain('server-side');
+    expect(COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS).toContain('Do not fetch the CommunityHub inventory');
+    expect(COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS).not.toContain('Skip a source event');
   });
 
   it('refuses to treat a truncated response as deletion evidence', async () => {

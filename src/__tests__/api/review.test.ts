@@ -5,6 +5,9 @@ import { adminAuth } from '@/lib/firebase-admin';
 
 jest.mock('@/lib/safeRemoteImage', () => ({
   normalizeEmbeddedImageData: jest.fn().mockResolvedValue('data:image/jpeg;base64,bm9ybWFsaXplZA=='),
+  // Approve-time materialization downloads a remote poster once and stores
+  // normalized bytes so CommunityHub never depends on the third-party host.
+  loadImageAsJpeg: jest.fn().mockResolvedValue(Buffer.from('materialized')),
 }));
 
 // Mock global fetch for CommunityHub API calls
@@ -454,14 +457,44 @@ describe('POST /api/review/events/:id/action — approve path', () => {
     );
 
     expect(response.status).toBe(200);
+    // The remote URL is materialized to stored bytes at approval so a later
+    // CommunityHub download can never fail on the third-party host.
     expect(db.mockConn.query).toHaveBeenCalledWith(
       expect.stringContaining('UPDATE raw_events SET image_cdn_url=?, image_data=?'),
-      ['https://images.example.com/new.jpg', null, '10'],
+      [
+        'https://images.example.com/new.jpg',
+        `data:image/jpeg;base64,${Buffer.from('materialized').toString('base64')}`,
+        '10',
+      ],
     );
     const payload = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(payload.image_cdn_url).toContain('/api/events/10/poster.jpg?media_token=');
     expect(payload.image_cdn_url).not.toBe('https://images.example.com/new.jpg');
     delete process.env.APP_URL;
+  });
+
+  it('rejects the approval with a distinct image code when the poster cannot be downloaded', async () => {
+    const { loadImageAsJpeg } = jest.requireMock('@/lib/safeRemoteImage');
+    (loadImageAsJpeg as jest.Mock).mockRejectedValueOnce(
+      Object.assign(new Error('Image host returned HTTP 403'), { code: 'UPSTREAM_STATUS' }),
+    );
+    lockedEvent = { ...PENDING, image_cdn_url: 'https://images.example.com/gone.jpg', image_data: null };
+    db.default.query
+      .mockResolvedValueOnce([[ADMIN]])
+      .mockResolvedValueOnce([[lockedEvent]])
+      .mockResolvedValueOnce([[{ id: 1 }]]);
+
+    const response = await POST(
+      makeReq('/api/review/events/10/action', { action: 'approve' }),
+      ctx('10'),
+    );
+    const data = await response.json();
+
+    expect(response.status).toBe(422);
+    expect(data.error_code).toBe('image_download_failed');
+    expect(data.image_error).toBe('UPSTREAM_STATUS');
+    // The failure is detected before any CommunityHub call.
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it('stores a validated embedded poster only in image_data before submission', async () => {

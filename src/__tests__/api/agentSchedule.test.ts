@@ -61,7 +61,15 @@ describe('GET /api/agent/schedule', () => {
     expect(response.status).toBe(502);
     expect(data).toMatchObject({ checked: 3, due: 2, dispatched: 2, failed: 0 });
     expect(data.invalid_schedules).toHaveLength(1);
-    expect(global.fetch).toHaveBeenCalledTimes(2);
+    // Two source triggers plus the system-corrections dispatch.
+    expect(global.fetch).toHaveBeenCalledTimes(3);
+    expect(global.fetch).toHaveBeenCalledWith(
+      new URL('http://localhost/api/agent/system-corrections'),
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'x-cron-secret': 'test-cron-secret' }),
+      }),
+    );
     expect(global.fetch).toHaveBeenCalledWith(
       new URL('http://localhost/api/agent/trigger/1'),
       expect.objectContaining({
@@ -213,7 +221,12 @@ describe('GET /api/agent/schedule', () => {
     expect(db.default.query.mock.calls[2][0]).toContain('ar.correction_event_id=re.id');
     expect(db.default.query.mock.calls[2][0]).not.toContain('JOIN needs_fix');
     expect(db.default.query.mock.calls[3][0]).toContain('DELETE nf FROM needs_fix');
-    expect(global.fetch).not.toHaveBeenCalled();
+    // No source triggers; only the system-corrections dispatch fires.
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch).toHaveBeenCalledWith(
+      new URL('http://localhost/api/agent/system-corrections'),
+      expect.objectContaining({ method: 'POST' }),
+    );
   });
 
   it('fails visibly when scheduler maintenance cannot recover stale state', async () => {
@@ -227,6 +240,12 @@ describe('GET /api/agent/schedule', () => {
 
     expect(response.status).toBe(500);
     expect(data.maintenance_errors).toEqual(['stale_run_recovery_failed']);
-    expect(global.fetch).not.toHaveBeenCalled();
+    // Source dispatching stops on maintenance failure, but the bounded
+    // system-corrections sweep still runs.
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch).toHaveBeenCalledWith(
+      new URL('http://localhost/api/agent/system-corrections'),
+      expect.objectContaining({ method: 'POST' }),
+    );
   });
 });

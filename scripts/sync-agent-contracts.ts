@@ -17,7 +17,6 @@ import {
 } from '../src/lib/communityHubPayload';
 import {
   COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS,
-  COMMUNITY_HUB_INVENTORY_URL,
 } from '../src/lib/communityHubInventory';
 
 dotenv.config({ path: '.env.local' });
@@ -48,9 +47,11 @@ Return only one raw JSON array. Do not call, authenticate to, or submit data to 
 Every object must follow this exact contract:
 - eventType: only "ot" for Event, "an" for Announcement, or "jp" for Job. Never use a category code here.
 - title: 1-60 characters.
+- Announcement titles must state the action the reader can take when the source announces an opportunity: start with the action, for example "Register for...", "Participate in...", "Apply for...", "Recycle...". A bare noun title like "Summer Symphony" is wrong when the source is announcing registration for a summer symphony day camp. Never invent an action the source does not support.
 - description: one complete factual sentence, 10-200 characters.
 - Punctuation: never use em dashes or en dashes in any text field; write a plain hyphen (-) or restructure the sentence.
-- extendedDescription: optional factual detail, at most 1000 characters.
+- extendedDescription: optional factual detail, at most 1000 characters. Never include URLs, the street address, or facts already carried by the dedicated location, date, time, registration, sponsor, or contact fields; never pad it with filler or invented content. When the entire source description fits within 200 characters, put it in description and omit extendedDescription entirely. Refer to the venue by its actual name (for example "at Common Ground"), never ambiguously as "here" or "there"; if such a sentence is unnecessary, omit it.
+- registrationUrl: when the source says registration is required, set this to the exact registration link. The platform places it in the registration button and ends the short description with "Registration required." Never put a registration URL inside description or extendedDescription.
 - sponsors: non-empty string array containing only organizers or sponsors supported by the current source.
 - postTypeId: non-empty number array using only these categories: ${CATEGORY_CONTRACT}.
 - sessions: non-empty array of { "startTime": integer Unix seconds, "endTime": integer Unix seconds }. Interpret local times in America/New_York. Never return ISO strings or 13-digit milliseconds. endTime must not precede startTime. If the source states a start but no end, use the start timestamp for both values; never estimate a duration.
@@ -138,12 +139,13 @@ export function assertSafePrompt(prompt: string) {
     'display: "all" all public screens',
     'integer Unix seconds',
     'Return only one raw JSON array',
-    COMMUNITY_HUB_INVENTORY_URL,
-    'Compare actual content, never IDs or tokens',
-    'CommunityHub IDs and Event Intake IDs are different namespaces',
-    'continue pagination until lastPage is true',
-    'Read every remote session and the complete post copy',
-    'For generic announcement titles, require the announcement copy',
+    'Extract and return EVERY eligible event',
+    'Do not fetch the CommunityHub inventory',
+    'compares every candidate against the complete approved-and-pending CommunityHub inventory server-side',
+    'Register for',
+    'registrationUrl',
+    'Registration required.',
+    'never ambiguously as "here" or "there"',
   ];
   for (const text of required) {
     if (!prompt.includes(text)) throw new Error(`new prompt is missing required contract text: ${text}`);

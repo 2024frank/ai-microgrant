@@ -217,6 +217,25 @@ describe('CommunityHub payload contract', () => {
     expect(payload.extendedDescription?.length).toBeLessThanOrEqual(1000);
   });
 
+  it.each([
+    ['undefined', undefined],
+    ['null', null],
+    ['an empty string', ''],
+  ])('omits extendedDescription from the payload when the input value is %s', (_name, value) => {
+    const payload = buildCommunityHubPayload({ ...BASE, extendedDescription: value });
+    // The key must be absent entirely, not present with an empty value.
+    expect(Object.hasOwn(payload, 'extendedDescription')).toBe(false);
+    expect(Object.keys(payload)).not.toContain('extendedDescription');
+  });
+
+  it('keeps a non-empty extendedDescription in the normalized payload', () => {
+    const payload = buildCommunityHubPayload({
+      ...BASE,
+      extendedDescription: 'Doors open thirty minutes before the workshop begins.',
+    });
+    expect(payload.extendedDescription).toBe('Doors open thirty minutes before the workshop begins.');
+  });
+
   it('rejects descriptions below the documented minimum length', () => {
     expect(errorPaths({ ...BASE, description: 'Too short' })).toContain('description');
   });

@@ -57,6 +57,8 @@ export type ReconciliationItem = {
   communityhub_post_id: string;
   moderation: CommunityHubModeration | 'missing';
   repaired_event_type?: boolean;
+  /** Set when the live post displays categories other than the ones submitted. */
+  category_drift?: string;
   error?: string;
 };
 
@@ -68,6 +70,7 @@ export type ReconciliationSummary = {
   missing: number;
   unknown: number;
   repaired: number;
+  category_drift: number;
   submissions_recovered: number;
   prepared_released: number;
   unchecked: number;
@@ -119,6 +122,45 @@ async function markState(
       candidate.status,
     ],
   );
+}
+
+function parseIdArray(value: unknown): number[] | null {
+  let parsed = value;
+  if (typeof parsed === 'string') {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return null;
+    }
+  }
+  if (!Array.isArray(parsed)) return null;
+  return [...new Set(parsed
+    .map(item => {
+      if (typeof item === 'number') return item;
+      if (typeof item === 'string' && /^\d+$/.test(item)) return Number(item);
+      if (item !== null && typeof item === 'object' && !Array.isArray(item)) {
+        const id = Number((item as Record<string, unknown>).id);
+        return Number.isSafeInteger(id) ? id : NaN;
+      }
+      return NaN;
+    })
+    .filter(id => Number.isSafeInteger(id) && id > 0))]
+    .sort((a, b) => a - b);
+}
+
+/**
+ * The live post's displayed categories must be the ones this application
+ * submitted (2026-07-16 meeting, item 2). Drift is recorded as evidence, not
+ * auto-repaired: a CommunityHub admin may have changed categories on purpose.
+ */
+function categoryDrift(candidate: Candidate, post: Record<string, any>): string | null {
+  const remote = parseIdArray(post.postType ?? post.postTypeId);
+  const local = parseIdArray(candidate.post_type_ids);
+  if (!remote || !local || local.length === 0) return null;
+  const same = remote.length === local.length
+    && remote.every((id, index) => id === local[index]);
+  if (same) return null;
+  return `CommunityHub displays categories [${remote.join(', ')}] but this application submitted [${local.join(', ')}]`;
 }
 
 function rejectionDetails(post: Record<string, any>, postId: string) {
@@ -250,9 +292,15 @@ async function reconcileOne(candidate: Candidate): Promise<ReconciliationItem> {
   }
 
   const moderation = moderationFromCommunityHubPost(post);
+  const drift = categoryDrift(candidate, post);
   if (moderation === 'approved') {
-    await markState(candidate, 'approved');
-    return { event_id: candidate.id, communityhub_post_id: postId, moderation };
+    await markState(candidate, 'approved', drift);
+    return {
+      event_id: candidate.id,
+      communityhub_post_id: postId,
+      moderation,
+      ...(drift ? { category_drift: drift } : {}),
+    };
   }
   if (moderation === 'rejected') {
     await markRejected(candidate, post);
@@ -262,12 +310,13 @@ async function reconcileOne(candidate: Candidate): Promise<ReconciliationItem> {
     let repaired = false;
     try {
       repaired = await repairLegacyEventType(candidate, post);
-      await markState(candidate, 'pending');
+      await markState(candidate, 'pending', drift);
       return {
         event_id: candidate.id,
         communityhub_post_id: postId,
         moderation,
         ...(repaired ? { repaired_event_type: true } : {}),
+        ...(drift ? { category_drift: drift } : {}),
       };
     } catch (error) {
       const message = safeError(error);
@@ -294,7 +343,7 @@ export async function reconcileCommunityHub(options: { limit?: number; force?: b
     if (!locked) {
       return {
         checked: 0, approved: 0, pending: 0, rejected: 0, missing: 0,
-        unknown: 0, repaired: 0, submissions_recovered: 0,
+        unknown: 0, repaired: 0, category_drift: 0, submissions_recovered: 0,
         prepared_released: 0, unchecked: 0,
         updates_checked: 0, updates_succeeded: 0,
         updates_ambiguous: 0, updates_failed: 0, failed: 0,
@@ -400,6 +449,7 @@ export async function reconcileCommunityHub(options: { limit?: number; force?: b
       missing: results.filter(item => item.moderation === 'missing').length,
       unknown: results.filter(item => item.moderation === 'unknown').length,
       repaired: results.filter(item => item.repaired_event_type).length,
+      category_drift: results.filter(item => item.category_drift).length,
       submissions_recovered: submissionsRecovered,
       prepared_released: preparedReleased,
       unchecked: Number(backlog?.unchecked || 0),

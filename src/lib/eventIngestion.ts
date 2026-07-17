@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import pool from './db';
 import { fieldAuditValue } from './fieldAuditValue';
 import { boundedEventSnapshot } from './eventImagePrivacy';
@@ -10,6 +11,23 @@ import {
 } from './communityHubPayload';
 import { computeDedupKey } from './eventDedup';
 import { validatePublicHttpUrl } from './publicHttpUrl';
+import { applyContentPolicy } from './contentPolicy';
+import {
+  fetchCommunityHubInventory,
+  findBestContentMatch,
+  type CommunityHubInventory,
+  type ContentMatch,
+} from './communityHubInventory';
+import {
+  buildRunComparisonReport,
+  diffCandidateAgainstRemote,
+  loadRetainedLocalRows,
+  organizationNamesForSource,
+  recordRunComparison,
+  remotePostSnapshot,
+  type CandidatePayloadSnapshot,
+  type ComparisonCandidate,
+} from './runComparison';
 
 const MAX_POSTER_IMAGES = 4;
 
@@ -18,6 +36,11 @@ export interface IngestionSource {
   name: string;
   slug?: string;
   calendar_source_name?: string | null;
+  source_kind?: 'original_org' | 'aggregator' | null;
+  org_sponsor_name?: string | null;
+  org_website?: string | null;
+  org_phone?: string | null;
+  org_contact_email?: string | null;
 }
 
 export interface IngestionIssueReport {
@@ -38,9 +61,14 @@ export interface PersistedEventsResult {
   inserted: PersistedEvent[];
   skipped: number;
   duplicates: number;
+  /** Duplicates preserved as raw_events rows (status='duplicate') for quality review. */
+  duplicates_preserved: number;
+  /** Contract-invalid drafts automatically rejected as "Required fields are missing." */
+  auto_rejected: number;
   invalid: number;
   failed: number;
   errors: IngestionIssueReport[];
+  comparison: ComparisonCandidate[];
 }
 
 export interface PersistExtractedEventsOptions {
@@ -117,14 +145,66 @@ function mergeIssues(...groups: CommunityHubPayloadIssue[][]): CommunityHubPaylo
   });
 }
 
+function parseJsonArray(value: unknown): unknown[] {
+  let parsed = value;
+  if (typeof parsed === 'string') {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return [];
+    }
+  }
+  return Array.isArray(parsed) ? parsed : [];
+}
+
+/**
+ * Stamp stable organization facts from the integration configuration instead
+ * of relying on the agent to rediscover them each run (2026-07-16 meeting,
+ * item 9). Only explicitly configured values are used: an aggregator or a
+ * shared email inbox is not the organizer of the events it relays, so nothing
+ * is stamped for a source without configured metadata. Contact details only
+ * fill gaps so a per-event contact from the source still wins.
+ */
+function applySourceOrganizationMetadata(
+  candidate: Record<string, unknown>,
+  source: IngestionSource,
+): void {
+  if (source.source_kind === 'aggregator') return;
+  const sponsorOfRecord = readString(source.org_sponsor_name);
+  if (sponsorOfRecord) {
+    const sponsors = parseJsonArray(candidate.sponsors)
+      .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      .map(item => item.trim());
+    const present = sponsors.some(
+      item => item.toLocaleLowerCase('en-US') === sponsorOfRecord.toLocaleLowerCase('en-US'),
+    );
+    candidate.sponsors = present ? sponsors : [sponsorOfRecord, ...sponsors];
+  }
+  if (!readString(candidate.website) && readString(source.org_website)) {
+    candidate.website = readString(source.org_website);
+  }
+  if (!readString(candidate.phone) && readString(source.org_phone)) {
+    candidate.phone = readString(source.org_phone);
+  }
+  if (!readString(candidate.contactEmail) && !readString(candidate.contact_email)
+    && readString(source.org_contact_email)) {
+    candidate.contactEmail = readString(source.org_contact_email);
+  }
+}
+
 function buildCandidate(
   raw: Record<string, unknown>,
   source: IngestionSource,
   submitterEmail: string,
-): { payload: CommunityHubPayload; issues: CommunityHubPayloadIssue[] } {
+): {
+  payload: CommunityHubPayload;
+  issues: CommunityHubPayloadIssue[];
+  adjustments: string[];
+} {
   const rawImage = readString(raw.image_cdn_url);
+  const policy = applyContentPolicy(raw);
   const candidate = {
-    ...raw,
+    ...policy.record,
     email: submitterEmail,
     calendarSourceName:
       readString(raw.calendarSourceName)
@@ -133,6 +213,7 @@ function buildCandidate(
     // A data URI is retained as image_data below; it is not an outbound URL.
     image_cdn_url: rawImage.startsWith('data:') ? undefined : rawImage || undefined,
   };
+  applySourceOrganizationMetadata(candidate, source);
   let result = validateCommunityHubPayload(candidate);
   // Venue calendars rarely name an organizer, so extractors legitimately omit
   // sponsors; the source itself is the organizer of record.
@@ -147,8 +228,136 @@ function buildCandidate(
   }
 
   return result.success
-    ? { payload: result.data, issues: [] }
-    : { payload: result.normalized, issues: result.errors };
+    ? { payload: result.data, issues: policy.issues, adjustments: policy.adjustments }
+    : {
+        payload: result.normalized,
+        issues: mergeIssues(policy.issues, result.errors),
+        adjustments: policy.adjustments,
+      };
+}
+
+const INVENTORY_CACHE_TTL_MS = 5 * 60 * 1000;
+let inventoryCache: { fetchedAt: number; inventory: CommunityHubInventory } | null = null;
+
+/** Test hook: clear the shared inventory cache between cases. */
+export function resetInventoryCacheForTests(): void {
+  inventoryCache = null;
+}
+
+async function loadInventoryForComparison(): Promise<{
+  inventory: CommunityHubInventory | null;
+  inventoryError: string | null;
+}> {
+  if (inventoryCache && Date.now() - inventoryCache.fetchedAt < INVENTORY_CACHE_TTL_MS) {
+    return { inventory: inventoryCache.inventory, inventoryError: null };
+  }
+  try {
+    const inventory = await fetchCommunityHubInventory();
+    inventoryCache = { fetchedAt: Date.now(), inventory };
+    return { inventory, inventoryError: null };
+  } catch (error) {
+    return {
+      inventory: null,
+      inventoryError: error instanceof Error ? error.message : 'CommunityHub inventory fetch failed',
+    };
+  }
+}
+
+function comparisonInventoryDigest(inventory: CommunityHubInventory): string {
+  const canonical = inventory.posts
+    .map(post => ({
+      title: post.title,
+      eventType: post.eventType,
+      sessions: post.sessions,
+      description: post.description,
+      moderation: post.moderation,
+    }))
+    .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+  return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
+}
+
+function candidatePayloadSnapshot(payload: CommunityHubPayload): CandidatePayloadSnapshot {
+  return {
+    event_type: payload.eventType,
+    title: payload.title,
+    description: payload.description,
+    extended_description: payload.extendedDescription ?? null,
+    sessions: payload.sessions,
+    sponsors: payload.sponsors,
+    post_type_ids: payload.postTypeId,
+    location: payload.location ?? null,
+    calendar_source_url: payload.calendarSourceUrl ?? null,
+    buttons: payload.buttons,
+  };
+}
+
+function communityHubMatchEvidence(
+  payload: CommunityHubPayload,
+  match: ContentMatch,
+): ComparisonCandidate['communityhub_match'] {
+  if (match.kind === 'none' || !match.remote) return null;
+  return {
+    kind: match.kind,
+    reasons: match.reasons,
+    field_diffs: diffCandidateAgainstRemote(candidatePayloadSnapshot(payload), match.remote),
+    remote: remotePostSnapshot(match.remote),
+  };
+}
+
+/**
+ * Persist one run's two-way comparison. Email runs persist per message, so a
+ * later call merges the earlier candidates before recomputing both directions.
+ */
+async function persistRunComparison(
+  runId: number,
+  source: IngestionSource,
+  candidates: ComparisonCandidate[],
+  inventory: CommunityHubInventory | null,
+  inventoryError: string | null,
+): Promise<void> {
+  try {
+    const [[existing]] = await pool.query(
+      'SELECT report FROM integration_run_comparisons WHERE agent_run_id=? LIMIT 1',
+      [runId],
+    ) as any;
+    let merged = candidates;
+    if (existing?.report) {
+      try {
+        const prior = typeof existing.report === 'string'
+          ? JSON.parse(existing.report)
+          : existing.report;
+        if (Array.isArray(prior?.candidates)) {
+          const offset = prior.candidates.length;
+          merged = [
+            ...prior.candidates,
+            ...candidates.map(candidate => ({ ...candidate, index: candidate.index + offset })),
+          ];
+        }
+      } catch {
+        // An unreadable prior report is replaced by this call's candidates.
+      }
+    }
+    const report = buildRunComparisonReport({
+      organizationNames: organizationNamesForSource(source),
+      candidates: merged,
+      inventory,
+      inventoryError,
+      retainedLocalRows: await loadRetainedLocalRows(source.id),
+    });
+    await recordRunComparison({
+      runId,
+      sourceId: source.id,
+      report,
+      inventory,
+      inventorySha256: inventory ? comparisonInventoryDigest(inventory) : null,
+    });
+  } catch (error) {
+    // The comparison is an observability artifact; never fail the run for it.
+    console.error(
+      `[ingestion] run=${runId} could not record the run comparison:`,
+      error instanceof Error ? error.message : error,
+    );
+  }
 }
 
 /**
@@ -171,6 +380,8 @@ export async function persistExtractedEvents(
       inserted: [],
       skipped: count,
       duplicates: 0,
+      duplicates_preserved: 0,
+      auto_rejected: 0,
       invalid: count,
       failed: count,
       errors: [{
@@ -183,6 +394,7 @@ export async function persistExtractedEvents(
           'a correction run must return exactly one event',
         )],
       }],
+      comparison: [],
     };
   }
 
@@ -200,10 +412,21 @@ export async function persistExtractedEvents(
 
   const inserted: PersistedEvent[] = [];
   const errors: IngestionIssueReport[] = [];
+  const comparison: ComparisonCandidate[] = [];
   let skipped = 0;
   let duplicates = 0;
+  let duplicatesPreserved = 0;
+  let autoRejected = 0;
   let invalid = 0;
   let failed = 0;
+
+  // Correction runs replace one known local event; comparing them against the
+  // remote calendar would only re-flag the original they are fixing.
+  const isCorrectionRun = expectedCorrectionEventId !== undefined;
+  const { inventory, inventoryError } = isCorrectionRun
+    ? { inventory: null, inventoryError: null }
+    : await loadInventoryForComparison();
+
   const conn = await pool.getConnection();
 
   try {
@@ -222,8 +445,29 @@ export async function persistExtractedEvents(
         continue;
       }
 
-      const { payload, issues } = buildCandidate(raw, source, submitterEmail);
+      const { payload, issues, adjustments } = buildCandidate(raw, source, submitterEmail);
       const title = payload.title || cleanText(raw.title, 60) || 'Untitled item';
+      const comparisonEntry: ComparisonCandidate = {
+        index,
+        title,
+        outcome: 'invalid',
+        event_id: null,
+        duplicate_of_event_id: null,
+        payload: candidatePayloadSnapshot(payload),
+        communityhub_match: inventory
+          ? communityHubMatchEvidence(payload, findBestContentMatch({
+              title: payload.title,
+              eventType: payload.eventType,
+              description: payload.description,
+              extendedDescription: payload.extendedDescription,
+              calendarSourceUrl: payload.calendarSourceUrl,
+              sessions: payload.sessions,
+            }, inventory.posts))
+          : null,
+        issues: [],
+        adjustments,
+      };
+      comparison.push(comparisonEntry);
 
       // Do not invent the two core content fields. Other missing required
       // fields can be corrected in the review studio.
@@ -236,6 +480,7 @@ export async function persistExtractedEvents(
         skipped++;
         invalid++;
         failed++;
+        comparisonEntry.issues = mergeIssues(issues, fatalIssues);
         errors.push({
           index,
           title,
@@ -250,6 +495,7 @@ export async function persistExtractedEvents(
         skipped++;
         invalid++;
         failed++;
+        comparisonEntry.issues = mergeIssues(issues, [expirationIssue]);
         errors.push({
           index,
           title,
@@ -381,6 +627,7 @@ export async function persistExtractedEvents(
 
       const validationErrors = mergeIssues(issues, imageIssues);
       const hadValidationErrors = validationErrors.length > 0;
+      comparisonEntry.issues = validationErrors;
       if (fixedFromId && hadValidationErrors) {
         skipped++;
         invalid++;
@@ -389,6 +636,15 @@ export async function persistExtractedEvents(
         continue;
       }
       if (hadValidationErrors) invalid++;
+
+      // Required-field policy (meeting item 12): a draft that cannot satisfy
+      // the documented contract is rejected as "Required fields are missing"
+      // and preserved with its reason so the correction workflow can requeue
+      // it — instead of sitting silently blocked in the review queue.
+      const missingRequiredIssues = validationErrors.filter(current => (
+        current.code === 'required' || current.code === 'too_short'
+      ));
+      const autoRejectForMissingFields = !fixedFromId && missingRequiredIssues.length > 0;
 
       try {
         await (conn as any).beginTransaction();
@@ -442,11 +698,16 @@ export async function persistExtractedEvents(
 
         // The indexed equality lookup with FOR UPDATE takes an InnoDB next-key
         // lock. Concurrent ingests for the same source+signature therefore
-        // cannot both pass the check and insert an active duplicate.
+        // cannot both pass the check and insert an active duplicate. Preserved
+        // 'duplicate' rows participate so quality evidence is captured once,
+        // not on every re-scrape, and 'rejected' rows participate so a
+        // re-scrape of identical content can never re-enter review or trigger
+        // the auto-reject/requeue loop again. A corrected version with real
+        // changes gets a different signature and still comes back.
         const [duplicateRows] = await conn.query(
           `SELECT id FROM raw_events
            WHERE source_id=? AND dedup_key=?
-             AND status IN ('pending','submitted','approved','pending_fix','publishing','resubmitted')
+             AND status IN ('pending','submitted','approved','pending_fix','publishing','resubmitted','duplicate','rejected')
              ${fixedFromId ? 'AND id<>?' : ''}
            LIMIT 1 FOR UPDATE`,
           fixedFromId ? [source.id, dedupKey, fixedFromId] : [source.id, dedupKey],
@@ -455,8 +716,58 @@ export async function persistExtractedEvents(
           await (conn as any).rollback();
           skipped++;
           duplicates++;
+          comparisonEntry.outcome = 'duplicate_local';
+          comparisonEntry.duplicate_of_event_id = Number(duplicateRows[0].id) || null;
           continue;
         }
+
+        // Deterministic source priority (meeting item 11): an aggregator's
+        // candidate that a more direct source already produced is preserved as
+        // a duplicate of that event instead of entering review again.
+        let crossSourceDuplicateOfId: number | null = null;
+        if (!fixedFromId && source.source_kind === 'aggregator') {
+          const [crossRows] = await conn.query(
+            `SELECT re.id FROM raw_events re
+             JOIN sources s ON s.id=re.source_id
+             WHERE re.dedup_key=? AND re.source_id<>?
+               AND s.source_kind='original_org'
+               AND re.status IN ('pending','submitted','approved','pending_fix','publishing','resubmitted')
+             ORDER BY re.id ASC LIMIT 1`,
+            [dedupKey, source.id],
+          ) as any;
+          if (Array.isArray(crossRows) && crossRows.length > 0) {
+            crossSourceDuplicateOfId = Number(crossRows[0].id) || null;
+          }
+        }
+
+        // A candidate whose content already exists on the CommunityHub
+        // calendar (approved or pending) is preserved for quality evaluation
+        // instead of being discarded or re-reviewed (meeting item 1). A
+        // heuristic 'probable' match may only suppress a candidate when it
+        // has temporal evidence; a recurring event sharing a title and a
+        // generic calendar URL with an OLDER post is a new occurrence, not a
+        // duplicate, and must reach review (the match evidence still appears
+        // in the run comparison for the reviewer).
+        const chMatch = comparisonEntry.communityhub_match;
+        const probableHasTemporalEvidence = chMatch !== null
+          && chMatch.kind === 'probable'
+          && chMatch.reasons.some(reason => (
+            reason === 'shared session start'
+            || reason === 'shared session date'
+            || reason === 'session date in post content'
+          ));
+        const isCommunityHubDuplicate = !fixedFromId
+          && crossSourceDuplicateOfId === null
+          && chMatch !== null
+          && (chMatch.kind === 'exact' || probableHasTemporalEvidence);
+
+        const rowStatus = fixedFromId
+          ? 'pending'
+          : crossSourceDuplicateOfId !== null || isCommunityHubDuplicate
+            ? 'duplicate'
+            : autoRejectForMissingFields
+              ? 'rejected'
+              : 'pending';
 
         const [result] = await conn.query(
           `INSERT INTO raw_events (
@@ -466,8 +777,9 @@ export async function persistExtractedEvents(
             url_link, display, screen_ids, buttons, contact_email, email,
             phone, website, image_cdn_url, image_data, calendar_source_name,
             calendar_source_url, geo_scope, geo_json, corrected_from_id,
-            sent_for_fix_by, dedup_key, validation_errors, status
-          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending')`,
+            sent_for_fix_by, dedup_key, validation_errors, duplicate_of_id,
+            communityhub_match, status
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
           [
             source.id,
             runId,
@@ -501,6 +813,11 @@ export async function persistExtractedEvents(
             cleanText(fixEntry?.sent_by_email, 150),
             dedupKey,
             validationErrors.length ? JSON.stringify(validationErrors) : null,
+            crossSourceDuplicateOfId,
+            isCommunityHubDuplicate
+              ? JSON.stringify(comparisonEntry.communityhub_match)
+              : null,
+            rowStatus,
           ],
         ) as any;
 
@@ -512,6 +829,30 @@ export async function persistExtractedEvents(
            WHERE id = ?`,
           [ingestedPostUrl, eventId],
         );
+
+        if (rowStatus === 'rejected') {
+          const missingSummary = missingRequiredIssues
+            .map(current => `${current.path}: ${current.message}`)
+            .join(' · ')
+            .slice(0, 1900);
+          await conn.query(
+            `INSERT INTO rejection_log
+             (raw_event_id, source_id, reviewer_id, reason_codes, reviewer_note,
+              event_title, event_snapshot, rejection_origin)
+             VALUES (?,?,NULL,?,?,?,?, 'system')`,
+            [
+              eventId,
+              source.id,
+              JSON.stringify(['missing_fields']),
+              `Required fields are missing. ${missingSummary}`,
+              payload.title,
+              JSON.stringify(boundedEventSnapshot({
+                ...candidatePayloadSnapshot(payload),
+                validation_errors: validationErrors,
+              })),
+            ],
+          );
+        }
 
         if (fixedFromId && fixEntry) {
           const [supersede] = await conn.query(
@@ -606,6 +947,25 @@ export async function persistExtractedEvents(
         }
 
         await (conn as any).commit();
+        comparisonEntry.event_id = eventId;
+        if (rowStatus === 'duplicate') {
+          skipped++;
+          duplicates++;
+          duplicatesPreserved++;
+          comparisonEntry.outcome = crossSourceDuplicateOfId !== null
+            ? 'duplicate_cross_source'
+            : 'duplicate_communityhub';
+          comparisonEntry.duplicate_of_event_id = crossSourceDuplicateOfId;
+          continue;
+        }
+        if (rowStatus === 'rejected') {
+          skipped++;
+          autoRejected++;
+          comparisonEntry.outcome = 'auto_rejected';
+          errors.push({ index, title, inserted: true, issues: validationErrors });
+          continue;
+        }
+        comparisonEntry.outcome = 'inserted';
         inserted.push({
           id: eventId,
           title: payload.title,
@@ -632,5 +992,21 @@ export async function persistExtractedEvents(
     (conn as any).release();
   }
 
-  return { inserted, skipped, duplicates, invalid, failed, errors };
+  // Record the two-way comparison for human review (meeting item 1). This is
+  // observability, never a reason to fail a run that already persisted work.
+  if (!isCorrectionRun) {
+    await persistRunComparison(runId, source, comparison, inventory, inventoryError);
+  }
+
+  return {
+    inserted,
+    skipped,
+    duplicates,
+    duplicates_preserved: duplicatesPreserved,
+    auto_rejected: autoRejected,
+    invalid,
+    failed,
+    errors,
+    comparison,
+  };
 }

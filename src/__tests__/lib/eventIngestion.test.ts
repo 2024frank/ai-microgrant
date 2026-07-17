@@ -76,14 +76,17 @@ describe('persistExtractedEvents', () => {
     expect(db.mockConn.release).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps fixable malformed output reviewable with field-level errors', async () => {
+  it('auto-rejects drafts missing required fields and preserves the reason (meeting item 12)', async () => {
     const result = await persistExtractedEvents([{
       ...VALID_EVENT,
       postTypeId: [999],
       sessions: [{ startTime: 'tomorrow', endTime: 1_800_003_600 }],
     }], SOURCE, 12);
 
-    expect(result.inserted).toHaveLength(1);
+    // Required categories/sessions cannot be satisfied, so the draft is
+    // rejected as "Required fields are missing" instead of blocking review.
+    expect(result.inserted).toHaveLength(0);
+    expect(result.auto_rejected).toBe(1);
     expect(result.invalid).toBe(1);
     expect(result.errors[0]).toEqual(expect.objectContaining({ inserted: true }));
     expect(result.errors[0].issues).toEqual(expect.arrayContaining([
@@ -91,11 +94,25 @@ describe('persistExtractedEvents', () => {
       expect.objectContaining({ path: 'sessions[0].startTime' }),
     ]));
 
+    const rejectionInsert = db.mockConn.query.mock.calls.find(
+      ([sql]: [string]) => sql.includes('INSERT INTO rejection_log'),
+    );
+    expect(rejectionInsert).toBeDefined();
+    expect(rejectionInsert![0]).toContain("'system'");
+    expect(rejectionInsert![1]).toEqual(expect.arrayContaining([
+      JSON.stringify(['missing_fields']),
+      expect.stringContaining('Required fields are missing.'),
+    ]));
+
     const insert = db.mockConn.query.mock.calls.find(
       ([sql]: [string]) => sql.includes('INSERT INTO raw_events'),
     );
     expect(insert).toBeDefined();
-    const storedIssues = JSON.parse(insert![1].at(-1));
+    // Parameter layout: [..., validation_errors, duplicate_of_id,
+    // communityhub_match, status]. The candidate is preserved with its
+    // field-level evidence and a 'rejected' status.
+    expect(insert![1].at(-1)).toBe('rejected');
+    const storedIssues = JSON.parse(insert![1].at(-4));
     expect(storedIssues).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: 'postTypeId[0]' }),
     ]));

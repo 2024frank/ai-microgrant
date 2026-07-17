@@ -350,6 +350,18 @@ export default function ReviewEventPage() {
   );
   const rejectionReasonCodes = normalizeStringArray(event?.rejection_reason_codes);
   const rejectionReviewerNote = String(event?.rejection_reviewer_note ?? '').trim();
+  const isPreservedDuplicate = event?.status === 'duplicate';
+  const duplicateMatch = parseJson<{
+    kind?: string;
+    reasons?: string[];
+    remote?: { name?: string; moderation?: string; submission_origin?: string };
+    field_diffs?: Array<{ field: string; local: string; remote: string; equal: boolean }>;
+  } | null>(event?.communityhub_match, null);
+  const collectionOrigin = event?.source_type === 'email'
+    ? 'Collected from the organization by email'
+    : event?.source_kind === 'aggregator'
+      ? 'Collected from an aggregator source'
+      : 'Collected from the original organization';
   const unsupportedCategoryIds = postTypeIds.filter(id => !DOCUMENTED_CATEGORY_IDS.has(id));
   const usesPhysicalLocation = ['ph2', 'bo'].includes(locationType);
   const placeIdNeedsClear = Boolean(placeId) && (
@@ -418,8 +430,10 @@ export default function ReviewEventPage() {
       {
         id: 'categories',
         label: 'Categories',
+        // Name every selected category: a wrong-but-valid ID (e.g. 11 =
+        // Spectator Sport) must be visible as words, not a bare number.
         detail: postTypeIds.length && !unsupportedCategoryIds.length
-          ? `${postTypeIds.length} documented categor${postTypeIds.length === 1 ? 'y' : 'ies'} selected.`
+          ? `Publishing as: ${postTypeIds.map(id => (OBERLIN_POST_TYPE_LABELS as Record<number, string>)[id] ?? `Unknown ${id}`).join(', ')}.`
           : unsupportedCategoryIds.length ? `Unsupported category IDs: ${unsupportedCategoryIds.join(', ')}.` : 'Select at least one CommunityHub category.',
         pass: postTypeIds.length > 0 && unsupportedCategoryIds.length === 0,
       },
@@ -678,6 +692,38 @@ export default function ReviewEventPage() {
                 </span>
               </div>
             </header>
+
+            {isPreservedDuplicate && (
+              <section className="alert alert--warning" aria-label="Preserved duplicate details" style={{ marginBottom: 16, alignItems: 'flex-start' }}>
+                <AlertTriangle size={17} aria-hidden="true" />
+                <div style={{ minWidth: 0 }}>
+                  <strong>Preserved duplicate (not published)</strong>
+                  <p style={{ margin: '6px 0 0' }}>
+                    {duplicateMatch
+                      ? `This imported candidate matched a ${duplicateMatch.remote?.submission_origin === 'direct_submission' ? 'direct calendar submission' : 'calendar post from this application'} (“${duplicateMatch.remote?.name || 'unknown post'}”, ${duplicateMatch.remote?.moderation || 'unknown'} on CommunityHub; ${duplicateMatch.kind || 'match'} match${duplicateMatch.reasons?.length ? ` on ${duplicateMatch.reasons.join(', ')}` : ''}).`
+                      : 'This imported candidate duplicated an event already obtained from a more direct source.'}
+                    {' '}It is preserved so the imported version can be compared with the version on the calendar.
+                  </p>
+                  {Boolean(duplicateMatch?.field_diffs?.length) && (
+                    <details style={{ marginTop: 8 }}>
+                      <summary>Field differences vs the calendar post</summary>
+                      <div style={{ display: 'grid', gap: 6, marginTop: 8 }}>
+                        {duplicateMatch!.field_diffs!.filter(diff => !diff.equal).map(diff => (
+                          <div key={diff.field} style={{ fontSize: 13 }}>
+                            <strong>{diff.field}</strong><br />
+                            imported: {diff.local || '(empty)'}<br />
+                            calendar: {diff.remote || '(empty)'}
+                          </div>
+                        ))}
+                        {duplicateMatch!.field_diffs!.every(diff => diff.equal) && (
+                          <span>Every compared field matches the calendar post.</span>
+                        )}
+                      </div>
+                    </details>
+                  )}
+                </div>
+              </section>
+            )}
 
             {isRejectedRecord && (
               <section className="alert alert--warning" aria-label="Latest rejection feedback" style={{ marginBottom: 16, alignItems: 'flex-start' }}>
@@ -1033,14 +1079,22 @@ export default function ReviewEventPage() {
                     </div>
                   </div>
                   <div className="source-evidence__meta">
-                    <div><ShieldCheck size={14} aria-hidden="true" /><span><strong>{event.source_name}</strong><br />Received {new Date(event.created_at).toLocaleString()}</span></div>
+                    <div><ShieldCheck size={14} aria-hidden="true" /><span><strong>{event.source_name}</strong><br />{collectionOrigin}<br />Received {new Date(event.created_at).toLocaleString()}</span></div>
                     {event.calendar_source_url && <div><ExternalLink size={14} /><a href={event.calendar_source_url} target="_blank" rel="noreferrer">Open calendar source</a></div>}
                     {event.ingested_post_url && <div><ExternalLink size={14} /><a href={event.ingested_post_url} target="_blank" rel="noreferrer">Open ingested post</a></div>}
                     {event.location && <div><MapPin size={14} /><span>{event.location}</span></div>}
                   </div>
                   <details className="payload-preview" style={{ marginTop: 16 }}>
                     <summary>Original extracted values</summary>
-                    <pre>{JSON.stringify({ eventType: event.event_type, title: event.title, description: event.description, sessions: parseJson(event.sessions, []), sponsors: parseJson(event.sponsors, []), postTypeId: parseJson(event.post_type_ids, []) }, null, 2)}</pre>
+                    <pre>{JSON.stringify({
+                      eventType: event.event_type,
+                      title: event.title,
+                      description: event.description,
+                      sessions: parseJson(event.sessions, []),
+                      sponsors: parseJson(event.sponsors, []),
+                      postTypeId: normalizeNumberArray(event.post_type_ids)
+                        .map(id => `${id} · ${(OBERLIN_POST_TYPE_LABELS as Record<number, string>)[id] ?? 'Unknown category'}`),
+                    }, null, 2)}</pre>
                   </details>
                 </section>
 

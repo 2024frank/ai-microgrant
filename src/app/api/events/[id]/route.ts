@@ -32,7 +32,8 @@ export async function GET(
             re.communityhub_post_id, re.communityhub_moderation_status,
             re.communityhub_checked_at, re.communityhub_moderation_error,
             re.superseded_by_id, re.created_at, re.source_id,
-            s.name AS source_name, s.calendar_source_name AS source_calendar_name
+            s.name AS source_name, s.calendar_source_name AS source_calendar_name,
+            s.source_kind AS source_kind, s.source_type AS source_type
      FROM raw_events re LEFT JOIN sources s ON re.source_id = s.id WHERE re.id = ?`, [id]
   ) as any;
   if (!event) return Response.json({ error: 'Not found' }, { status: 404 });
@@ -58,6 +59,14 @@ export async function GET(
     sessions:      pj(event.sessions,      []),
     buttons:       pj(event.buttons,       []),
     geo_json:      pj(event.geo_json,      null),
+    // Where this record came from (2026-07-16 meeting, item 10): a direct
+    // human calendar submission never exists in this table, so every row is
+    // either an original-organization integration or an aggregator.
+    collected_via: event.source_type === 'email'
+      ? 'organization_email'
+      : event.source_kind === 'aggregator'
+        ? 'aggregator'
+        : 'original_organization',
   };
 
   return Response.json(parsed, {

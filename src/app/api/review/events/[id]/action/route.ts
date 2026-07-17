@@ -163,6 +163,37 @@ function permanentClientFailure(status: number): boolean {
   return status >= 400 && status < 500 && ![408, 409, 425, 429].includes(status);
 }
 
+export type CommunityHubFailureCode =
+  | 'communityhub_image_download'
+  | 'communityhub_validation'
+  | 'communityhub_error';
+
+/**
+ * Classify a CommunityHub rejection so an image-download failure is never
+ * mistaken for a missing-field or long-description validation problem
+ * (2026-07-16 meeting, item 8).
+ */
+export function classifyCommunityHubFailure(body: unknown): CommunityHubFailureCode {
+  let text = '';
+  try {
+    text = (typeof (body as any)?.raw === 'string'
+      ? (body as any).raw
+      : JSON.stringify(body ?? {})).toLowerCase();
+  } catch {
+    return 'communityhub_error';
+  }
+  // "failed to download image from URL" is a fetch failure; a validation
+  // message that merely mentions an image URL field ("imageCdnUrl must be a
+  // valid image URL") is not.
+  if (text.includes('image') && /(download|fetch)/.test(text)) {
+    return 'communityhub_image_download';
+  }
+  if (/(required|invalid|missing|must be|too long|too short)/.test(text)) {
+    return 'communityhub_validation';
+  }
+  return 'communityhub_error';
+}
+
 export async function POST(
   req: NextRequest,
   context: { params: Promise<{ id: string }> },
@@ -352,7 +383,44 @@ export async function POST(
         : currentEvent.image_cdn_url || currentEvent.image_data || null;
       normalizedImageEdit = await normalizeEventImageEdit(effectiveImage);
       merged.image_cdn_url = normalizedImageEdit.imageCdnUrl;
-      merged.image_data = normalizedImageEdit.imageData;
+      merged.image_data = normalizedImageEdit.imageData
+        // A remote poster URL may already have been materialized to stored
+        // bytes by an earlier attempt; keep serving those bytes.
+        || (!explicitImageEdit && currentEvent.image_data) || null;
+
+      // Materialize a remote poster into stored bytes BEFORE contacting
+      // CommunityHub. CommunityHub downloads the poster through our proxy
+      // after the submission response; if the proxy still had to re-fetch a
+      // third-party URL at that moment, an expired or hotlink-protected image
+      // would surface later as CommunityHub's opaque "failed to download
+      // image from URL". Materializing now turns that class of failure into
+      // an immediate, field-specific reviewer error instead.
+      if (merged.image_cdn_url && !merged.image_data) {
+        try {
+          const { loadImageAsJpeg } = await import('@/lib/safeRemoteImage');
+          const jpeg = await loadImageAsJpeg(String(merged.image_cdn_url));
+          merged.image_data = `data:image/jpeg;base64,${jpeg.toString('base64')}`;
+        } catch (imageError) {
+          await (conn as any).rollback();
+          const imageCode = imageError !== null && typeof imageError === 'object' && 'code' in imageError
+            ? String((imageError as { code?: unknown }).code || 'FETCH_FAILED')
+            : 'FETCH_FAILED';
+          return Response.json({
+            error: 'The event image could not be downloaded from its source URL. Fix or remove the image before publishing.',
+            error_code: 'image_download_failed',
+            image_error: imageCode,
+          }, { status: 422 });
+        }
+      }
+      // Keep the persisted columns and the signed media token in lockstep
+      // with the bytes the proxy will actually serve.
+      if (merged.image_data && normalizedImageEdit.imageData !== merged.image_data) {
+        normalizedImageEdit = {
+          ...normalizedImageEdit,
+          imageData: String(merged.image_data),
+          mediaValue: String(merged.image_data),
+        };
+      }
       payload = buildPayload(eventId, merged);
     } catch (error) {
       if (
@@ -530,7 +598,8 @@ export async function POST(
 
   const communityHub = await readCommunityHubResponse(response);
   if (!response.ok) {
-    const message = `CommunityHub ${response.status}: ${communityHub.raw ?? JSON.stringify(communityHub)}`;
+    const failureCode = classifyCommunityHubFailure(communityHub);
+    const message = `CommunityHub ${response.status} [${failureCode}]: ${communityHub.raw ?? JSON.stringify(communityHub)}`;
     if (!permanentClientFailure(response.status)) {
       // A timeout, conflict, rate limit, or server error can arrive after the
       // remote service committed the POST. Preserve the unresolved lease and
@@ -542,6 +611,7 @@ export async function POST(
       );
       return Response.json({
         error: message,
+        error_code: failureCode,
         submission_state: 'unknown',
         retry_safe: false,
         response_status: response.status,
@@ -558,7 +628,7 @@ export async function POST(
        WHERE id=? AND status='publishing'`,
       [originalStatus, eventId],
     );
-    return Response.json({ error: message }, { status: 502 });
+    return Response.json({ error: message, error_code: failureCode }, { status: 502 });
   }
 
   const communityHubPostId = extractCommunityHubPostId(communityHub);

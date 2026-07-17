@@ -119,7 +119,7 @@ async function runCleanup() {
              OR image_cdn_url LIKE CONCAT('%/api/events/', id, '/image%')
            THEN NULL ELSE image_cdn_url END
      WHERE image_data IS NOT NULL
-       AND status IN ('approved','rejected','superseded','submitted')
+       AND status IN ('approved','rejected','superseded','submitted','duplicate')
        AND updated_at < DATE_SUB(NOW(), INTERVAL 30 DAY)
        AND (
          (JSON_LENGTH(sessions) > 0 AND (
@@ -128,6 +128,23 @@ async function runCleanup() {
          ) < ?)
          OR sessions IS NULL
          OR JSON_LENGTH(sessions) = 0
+       )`,
+    [nowUnix],
+  ) as any;
+
+  // Preserved duplicates are quality-evaluation evidence, not drafts; keep
+  // them for six months after their last session, then let them expire. The
+  // run-comparison report row retains the full payload snapshot regardless.
+  const [duplicatesResult] = await conn.query(
+    `DELETE re FROM raw_events re
+     WHERE re.status = 'duplicate'
+       AND re.created_at < DATE_SUB(NOW(), INTERVAL 180 DAY)
+       AND (
+         (JSON_LENGTH(re.sessions) > 0 AND (
+           SELECT MAX(CAST(jt.endTime AS UNSIGNED))
+           FROM JSON_TABLE(re.sessions, '$[*]' COLUMNS (endTime VARCHAR(20) PATH '$.endTime')) jt
+         ) < ?)
+         OR re.sessions IS NULL OR JSON_LENGTH(re.sessions) = 0
        )`,
     [nowUnix],
   ) as any;
@@ -151,7 +168,7 @@ async function runCleanup() {
 
   const deleted = eventsResult.affectedRows;
   await (conn as any).commit();
-  console.log(`[cleanup] deleted ${deleted} abandoned drafts, purged ${postersResult.affectedRows} poster blobs and ${outboxPostersResult.affectedRows} settled outbox blobs, deleted ${runsResult.affectedRows} unreferenced runs`);
+  console.log(`[cleanup] deleted ${deleted} abandoned drafts, ${duplicatesResult.affectedRows} expired preserved duplicates, purged ${postersResult.affectedRows} poster blobs and ${outboxPostersResult.affectedRows} settled outbox blobs, deleted ${runsResult.affectedRows} unreferenced runs`);
 
   return Response.json({
     ok: true,
@@ -159,6 +176,7 @@ async function runCleanup() {
     archived_event_counts:  deleted,
     deleted_past_events:    eventsResult.affectedRows,
     deleted_sessionless:    0,
+    deleted_expired_duplicates: duplicatesResult.affectedRows,
     purged_poster_blobs:     postersResult.affectedRows,
     purged_outbox_blobs:     outboxPostersResult.affectedRows,
     deleted_old_runs:       runsResult.affectedRows,

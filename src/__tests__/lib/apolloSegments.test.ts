@@ -42,6 +42,17 @@ describe('buildApolloAnnouncements — today\'s real lineup', () => {
     expect(soon[soon.length - 1].description).toBe('Spider-Man: Brand New Day — opens Jul 30');
     expect(out.every(a => !/(\w+ \d+)\s*[–-]\s*\1/.test(a.description))).toBe(true);
   });
+
+  it('uses the exact agreed announcement titles', () => {
+    // Requirement wording: "Now Playing", never "Now Showing";
+    // "Coming Soon to the Apollo", never "Apollo Coming Soon".
+    expect(showing.length).toBeGreaterThan(0);
+    expect(soon.length).toBeGreaterThan(0);
+    for (const a of showing) expect(a.title).toBe('Now Playing at the Apollo');
+    for (const a of soon) expect(a.title).toBe('Coming Soon to the Apollo');
+    expect(out.some(a => a.title.includes('Now Showing'))).toBe(false);
+    expect(out.some(a => a.title.includes('Apollo Coming Soon'))).toBe(false);
+  });
 });
 
 describe('buildApolloAnnouncements — the chained worked example', () => {
@@ -61,6 +72,11 @@ describe('buildApolloAnnouncements — the chained worked example', () => {
       'Moana — now playing',                                             // [Jul 10–11]
       'Ghostbusters (1984) — now playing · Moana — now playing',          // [Jul 12–20]
     ]);
+  });
+
+  it('titles every chained window exactly "Now Playing at the Apollo"', () => {
+    expect(showing.length).toBe(4);
+    expect(showing.map(a => a.title)).toEqual(Array(4).fill('Now Playing at the Apollo'));
   });
 
   it('window boundaries match the example (ends on a film\'s last day / day before an opening)', () => {

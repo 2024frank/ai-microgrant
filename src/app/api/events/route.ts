@@ -21,7 +21,7 @@ export async function GET(req: NextRequest) {
   const requestedStatus = searchParams.get('status') || 'all';
   const allowedStatuses = new Set([
     'all', 'pending', 'approved', 'rejected', 'resubmitted',
-    'pending_fix', 'publishing', 'superseded', 'submitted',
+    'pending_fix', 'publishing', 'superseded', 'submitted', 'duplicate',
   ]);
   if (!allowedStatuses.has(requestedStatus)) {
     return Response.json({ error: 'Invalid status' }, { status: 400, headers: CORS });
@@ -84,7 +84,8 @@ export async function GET(req: NextRequest) {
        re.communityhub_moderation_status, re.communityhub_checked_at,
        re.communityhub_moderation_error,
        re.created_at, re.updated_at,
-       s.id AS source_id, s.name AS source_name, s.slug AS source_slug
+       s.id AS source_id, s.name AS source_name, s.slug AS source_slug,
+       s.source_kind AS source_kind, s.source_type AS source_type
      FROM raw_events re
      JOIN sources s ON re.source_id = s.id
      ${where}

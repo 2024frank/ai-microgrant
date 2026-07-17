@@ -13,10 +13,41 @@ export async function PATCH(
   const { id } = await context.params;
 
   const body    = await req.json();
-  const allowed = ['name','agent_id','schedule_cron','active'];
+  const allowed = [
+    'name','agent_id','schedule_cron','active',
+    // Stable organization metadata (2026-07-16 meeting, item 9) and the
+    // original-organization vs aggregator classification (items 10-11).
+    'source_kind','org_sponsor_name','org_website','org_phone','org_contact_email',
+  ];
   const updates: Record<string, any> = {};
   for (const k of allowed) { if (body[k] !== undefined) updates[k] = body[k]; }
   if (!Object.keys(updates).length) return Response.json({ error: 'No valid fields' }, { status: 400 });
+
+  if (updates.source_kind !== undefined
+    && !['original_org', 'aggregator'].includes(updates.source_kind)) {
+    return Response.json({ error: 'source_kind must be original_org or aggregator' }, { status: 400 });
+  }
+  const orgTextFields: Array<[string, number]> = [
+    ['org_sponsor_name', 120], ['org_website', 500],
+    ['org_phone', 30], ['org_contact_email', 150],
+  ];
+  for (const [field, maxLength] of orgTextFields) {
+    if (updates[field] === undefined) continue;
+    if (updates[field] === null || updates[field] === '') {
+      updates[field] = null;
+      continue;
+    }
+    if (typeof updates[field] !== 'string' || updates[field].trim().length > maxLength) {
+      return Response.json({ error: `${field} must be a string of at most ${maxLength} characters` }, { status: 400 });
+    }
+    updates[field] = updates[field].trim();
+  }
+  if (updates.org_website && !/^https?:\/\//i.test(updates.org_website)) {
+    return Response.json({ error: 'org_website must be an absolute HTTP or HTTPS URL' }, { status: 400 });
+  }
+  if (updates.org_contact_email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(updates.org_contact_email)) {
+    return Response.json({ error: 'org_contact_email must be a valid email address' }, { status: 400 });
+  }
 
   if (updates.name !== undefined) {
     if (typeof updates.name !== 'string' || !updates.name.trim()) {

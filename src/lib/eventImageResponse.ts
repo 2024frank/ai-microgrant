@@ -51,8 +51,13 @@ export async function eventImageResponse(req: NextRequest, id: string): Promise<
     // its moderation state is still pending.
     const legacyPublishingToken = Boolean(publishingToken)
       && !publishingToken!.startsWith('v2.');
+    // CommunityHub may re-download the poster well after submission (its own
+    // moderation approval, edits, cache refresh). A v2 token proves the caller
+    // was handed this exact media value by us, so content binding — not the
+    // local workflow status — is the real capability; allow every state a
+    // linked CommunityHub post can be in.
     const signedPublishingAccess = Boolean(value)
-      && ['publishing', 'submitted'].includes(event.status)
+      && ['publishing', 'submitted', 'approved', 'resubmitted'].includes(event.status)
       // Legacy v1 tokens are event-only, so they are safe solely while the
       // initial request owns the immutable publishing lease. Submitted edits
       // must use a v2 token bound to the exact current poster.

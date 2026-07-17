@@ -4,9 +4,7 @@ const MAX_INVENTORY_PAGES = 20;
 
 export const COMMUNITY_HUB_INVENTORY_URL = `${INVENTORY_ENDPOINT}?limit=10000&page=0&filter=future&tab=main-feed&isJobs=false&order=ASC&postType=All&allPosts=`;
 
-export const COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS = `Before extracting source events, fetch the complete CommunityHub approved-and-pending inventory from ${COMMUNITY_HUB_INVENTORY_URL}
-Read every returned post and continue pagination until lastPage is true. Treat approved=true as approved and approved=null as pending. If the request fails, the payload is incomplete, or lastPage is not reached, do not pretend the inventory is empty.
-Compare actual content, never IDs or tokens: normalize the title; compare every session start/end timestamp; then use calendarSourceUrl, description, and eventType as supporting evidence. CommunityHub IDs and Event Intake IDs are different namespaces and must never be compared. CommunityHub may group several source occurrences into one post, may omit a session, or may state an occurrence date only in the description. Read every remote session and the complete post copy before deciding an occurrence is absent. For generic announcement titles, require the announcement copy and date window to match. Skip a source event only when its content is an exact or strong match to an approved or pending CommunityHub post. Keep extracting when the only similarity is a shared source URL or generic wording.`;
+export const COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS = `Extract and return EVERY eligible event from the source, including events that may already exist on the CommunityHub calendar. Do not fetch the CommunityHub inventory and do not skip an event because you believe it is a duplicate — the platform compares every candidate against the complete approved-and-pending CommunityHub inventory server-side, records the comparison for human review, and preserves duplicates instead of publishing them twice. Send a distinct calendarSourceUrl per item (the specific event page when one exists) so the server-side comparison stays accurate.`;
 
 export type ContentSession = {
   start: number;
@@ -26,6 +24,23 @@ export type ComparableEventContent = {
   sessions?: unknown;
 };
 
+/**
+ * Raw, human-readable values retained for attribution and field-level diffs in
+ * run comparisons. The sibling normalized fields exist only for matching.
+ */
+export type CommunityHubInventoryPostRaw = {
+  name: string;
+  description: string;
+  extendedDescription: string;
+  calendarSourceName: string;
+  calendarSourceUrl: string;
+  location: string;
+  sponsors: string[];
+  organizations: string[];
+  ingestedPostUrl: string;
+  hasImage: boolean;
+};
+
 export type CommunityHubInventoryPost = {
   title: string;
   eventType: string;
@@ -35,6 +50,7 @@ export type CommunityHubInventoryPost = {
   sessions: ContentSession[];
   timezone?: string;
   moderation: 'approved' | 'pending';
+  raw?: CommunityHubInventoryPostRaw;
 };
 
 export type CommunityHubInventory = {
@@ -338,6 +354,43 @@ export function findBestContentMatch(
   return probable ?? { kind: 'none', reasons: [] };
 }
 
+function nameList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(item => {
+      if (typeof item === 'string') return item.trim();
+      if (item !== null && typeof item === 'object' && !Array.isArray(item)) {
+        return text((item as Record<string, unknown>).name).trim();
+      }
+      return '';
+    })
+    .filter(Boolean);
+}
+
+function rawLocation(value: unknown): string {
+  if (typeof value === 'string') return value.trim();
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    return [text(record.name).trim(), text(record.address).trim()].filter(Boolean).join(' · ');
+  }
+  return '';
+}
+
+function rawPostEvidence(post: Record<string, unknown>): CommunityHubInventoryPostRaw {
+  return {
+    name: text(post.name).trim(),
+    description: text(post.description).trim(),
+    extendedDescription: text(post.extendedDescription).trim(),
+    calendarSourceName: text(post.calendarSourceName).trim(),
+    calendarSourceUrl: text(post.calendarSourceUrl).trim(),
+    location: rawLocation(post.location),
+    sponsors: nameList(post.sponsors),
+    organizations: nameList(post.organizations),
+    ingestedPostUrl: text(post.ingestedPostUrl).trim(),
+    hasImage: Boolean(text(post.image).trim() || text(post.galleryImage).trim()),
+  };
+}
+
 function moderation(value: unknown): 'approved' | 'pending' | 'rejected' | null {
   if (value === true || value === 1 || value === '1') return 'approved';
   if (value === null) return 'pending';
@@ -426,6 +479,7 @@ export async function fetchCommunityHubInventory(
       ...content,
       timezone: text(raw.timezone).trim() || 'America/New_York',
       moderation: state,
+      raw: rawPostEvidence(raw),
     });
   }
 

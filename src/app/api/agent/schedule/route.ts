@@ -125,8 +125,13 @@ export async function GET(req: NextRequest) {
 
   let sources: SourceRow[];
   try {
+    // Deterministic source priority (2026-07-16 meeting, item 11):
+    // original-organization integrations dispatch before aggregators such as
+    // Localist, so ingestion's cross-source dedup can prefer the direct
+    // version and only keep the aggregator copy when nothing better exists.
     const [rows] = await pool.query(
-      'SELECT id, name, schedule_cron FROM sources WHERE active = 1 ORDER BY id',
+      `SELECT id, name, schedule_cron FROM sources WHERE active = 1
+       ORDER BY (source_kind='aggregator') ASC, id ASC`,
     ) as any;
     sources = Array.isArray(rows) ? rows : [];
   } catch (error) {
@@ -227,6 +232,24 @@ export async function GET(req: NextRequest) {
     due.map(({ source, slot }) => dispatchSource(req, source, slot, cronSecret)),
   );
 
+  // Requeue system-rejected "Required fields are missing" drafts through the
+  // correction workflow (meeting item 12). Fire-and-report; a failure here
+  // never blocks source dispatching.
+  let systemCorrections: unknown = null;
+  try {
+    const response = await fetch(new URL('/api/agent/system-corrections', req.url), {
+      method: 'POST',
+      headers: { 'x-cron-secret': cronSecret },
+      cache: 'no-store',
+      signal: AbortSignal.timeout(15_000),
+    });
+    systemCorrections = await readJson(response);
+  } catch (error) {
+    systemCorrections = {
+      error: error instanceof Error ? error.message : 'system-corrections dispatch failed',
+    };
+  }
+
   const failed = results.filter(result => result.status === 'error').length;
   const hasErrors = maintenanceErrors.length > 0 || invalid.length > 0 || failed > 0;
   const responseStatus = maintenanceErrors.length > 0 ? 500 : hasErrors ? 502 : 200;
@@ -241,5 +264,6 @@ export async function GET(req: NextRequest) {
     failed,
     invalid_schedules: invalid,
     results,
+    system_corrections: systemCorrections,
   }, { status: responseStatus });
 }

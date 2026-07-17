@@ -255,9 +255,10 @@ describe('Scenario 1 – Agent run writes events with schema-correct structure',
     const insertCalls = db.mockConn.query.mock.calls.filter(
       (c: any[]) => typeof c[0] === 'string' && c[0].includes('INSERT INTO raw_events')
     );
-    // Both events should end in 'pending' in the INSERT
+    // The status is now a bound parameter (duplicates and system rejections
+    // reuse the same INSERT); a clean new event must bind 'pending'.
     insertCalls.forEach((call: any[]) => {
-      expect(call[0]).toContain("'pending'");
+      expect(call[1].at(-1)).toBe('pending');
     });
   });
 

@@ -227,6 +227,56 @@ it('preserves last-known approval through a transient CommunityHub outage', asyn
   );
 });
 
+it('records category drift when the live post displays other categories than submitted', async () => {
+  mockFetch.mockResolvedValue(response(200, {
+    post: {
+      id: 5101,
+      approved: null,
+      eventType: 'ot',
+      postType: [{ id: 11, name: 'Spectator Sport' }],
+      rejections: [],
+    },
+  }));
+
+  const result = await reconcileCommunityHub({ force: true });
+
+  expect(result).toMatchObject({ checked: 1, pending: 1, category_drift: 1, failed: 0 });
+  const item = result.results.find(r => r.event_id === CANDIDATE.id);
+  expect(item?.category_drift).toContain('[11]');
+  expect(item?.category_drift).toContain('[8]');
+
+  // The drift text is stored on the row via communityhub_moderation_error.
+  const stateUpdate = db.default.query.mock.calls.find(
+    ([sql]: [string]) => typeof sql === 'string' && sql.includes('communityhub_moderation_error'),
+  );
+  expect(stateUpdate).toBeDefined();
+  expect(stateUpdate[1]).toEqual([
+    'submitted', 'pending', item?.category_drift,
+    'submitted', 'submitted', CANDIDATE.id, 'submitted',
+  ]);
+});
+
+it('reports no category drift when the live post matches the submitted categories', async () => {
+  mockFetch.mockResolvedValue(response(200, {
+    post: {
+      id: 5101,
+      approved: null,
+      eventType: 'ot',
+      postType: [{ id: 8, name: 'Music Performance' }],
+      rejections: [],
+    },
+  }));
+
+  const result = await reconcileCommunityHub({ force: true });
+
+  expect(result).toMatchObject({ checked: 1, pending: 1, category_drift: 0 });
+  expect(result.results[0].category_drift).toBeUndefined();
+  expect(db.default.query).toHaveBeenCalledWith(
+    expect.stringContaining('communityhub_moderation_error'),
+    ['submitted', 'pending', null, 'submitted', 'submitted', CANDIDATE.id, 'submitted'],
+  );
+});
+
 it('skips duplicate cron invocations while another reconciliation owns the lock', async () => {
   db.mockConn.query.mockResolvedValueOnce([[{ acquired: 0 }]]);
 

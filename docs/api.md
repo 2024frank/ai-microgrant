@@ -34,7 +34,7 @@ Fetch events from the system. **No authentication required.** CORS enabled — c
 
 | Parameter    | Type   | Default  | Description |
 |-------------|--------|----------|-------------|
-| `status`    | string | `all`    | Filter by review status: `pending` \| `approved` \| `rejected` \| `resubmitted` \| `all` |
+| `status`    | string | `all`    | Filter by review status: `pending` \| `approved` \| `rejected` \| `resubmitted` \| `submitted` \| `publishing` \| `superseded` \| `pending_fix` \| `duplicate` \| `all` (non-approved statuses require auth) |
 | `source_id` | number | —        | Filter by source organisation ID |
 | `source_slug` | string | —      | Filter by source slug (e.g. `oberlin-college`) |
 | `event_type` | string | —       | Filter by type: `ot` (event) \| `an` (announcement) \| `jp` (job) |
@@ -282,7 +282,12 @@ Add a new source. Requires `admin`.
 On creation, the first fetch fires immediately in the background.
 
 #### `PATCH /api/sources/:id`
-Update a source. Requires `admin`. Accepts: `name`, `agent_id`, `schedule_cron`, `active`.
+Update a source. Requires `admin`. Accepts: `name`, `agent_id`, `schedule_cron`, `active`,
+plus stable organization metadata stamped onto every ingested event
+(`org_sponsor_name`, `org_website`, `org_phone`, `org_contact_email`) and the
+source classification `source_kind` (`original_org` | `aggregator`). Aggregators
+(e.g. Localist) dispatch after original-organization sources and their candidates
+defer to events already obtained from a more direct source.
 
 #### `DELETE /api/sources/:id`
 Soft-deactivate a source (sets `active = 0`). Requires `admin`.
@@ -303,6 +308,14 @@ Response includes `has_active: boolean` — poll every 2s while `true` for live 
 
 #### `GET /api/agent/schedule`
 Cron endpoint — triggered by Vercel Cron daily at 6am. Secured with `CRON_SECRET`.
+Dispatches original-organization sources before aggregators and then invokes
+`/api/agent/system-corrections`.
+
+#### `POST /api/agent/system-corrections`
+Cron/`CRON_SECRET` endpoint. Requeues events the platform auto-rejected as
+"Required fields are missing" (rejection origin `system`) through the existing
+correction workflow — one bounded attempt per event, never creating duplicates
+(corrections must reference the original via `fixedFromEventId`).
 
 ---
 
@@ -394,6 +407,15 @@ Query params:
 Recent reviewer actions, per-reviewer stats, recent agent runs, today's counts.
 
 Query params: `limit` (default 20).
+
+#### `GET /api/admin/comparisons`
+Two-way integration-vs-calendar comparisons recorded per agent run. Requires
+`admin`. Without params: recent runs with counts (`matched_both`,
+`integration_only`, `calendar_only`, `duplicates_preserved`). With `?run_id=`:
+the full report — every candidate with its outcome and preserved duplicate
+evidence (field-level differences vs the matched CommunityHub post, including
+direct human submissions), plus calendar posts attributed to the organization
+that the integration missed.
 
 ---
 

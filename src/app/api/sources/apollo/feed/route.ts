@@ -18,7 +18,6 @@ import { buildApolloAnnouncements, filmRunsForTracking } from '@/lib/sources/apo
  */
 const APP_URL = process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL || 'https://ai-microgrant-research-oberlin.vercel.app';
 const APOLLO_PAGE = 'https://www.clevelandcinemas.com/our-locations/x03gq-apollo-theatre/';
-const ADDRESS = 'Apollo Theatre · 19 East College Street, Oberlin OH';
 
 export async function GET(req: NextRequest) {
   if (!process.env.INGEST_SECRET || req.headers.get('x-ingest-secret') !== process.env.INGEST_SECRET) {
@@ -66,17 +65,27 @@ export async function GET(req: NextRequest) {
     }
   } catch { /* table not migrated yet — ends fall back to the per-run horizon */ }
 
-  const extendedDescription = `${ADDRESS}\n\nGet tickets: ${ticketsUrl}\nMore info: ${APOLLO_PAGE}`;
+  // Long-description policy (2026-07-16): no URLs, no street address, no
+  // filler. The film list is the announcement's whole content — it lives in
+  // description, overflowing into extendedDescription only when it cannot fit.
+  // The address stays in the dedicated location fields, the ticket link in the
+  // button, and the venue page in website.
   const events = buildApolloAnnouncements(films, now).map(a => ({
     eventType: 'an',
     email: process.env.ADMIN_EMAIL || 'fkusiapp@oberlin.edu',
     title: a.title,
+    // Ingestion normalization trims description to 200 chars on a boundary;
+    // the complete lineup is preserved in extendedDescription only when the
+    // short field cannot hold it (no duplicated content otherwise).
     description: a.description,
     sessions: [{ startTime: a.startTime, endTime: a.endTime }],
-    extendedDescription,
+    ...(a.description.length > 200 ? { extendedDescription: a.description.slice(0, 1000) } : {}),
+    website: APOLLO_PAGE,
     sponsors: ['Apollo Theatre'],
     postTypeId: [5],
     locationType: 'ne',
+    // Announcements carry no address, but the venue should still be named.
+    placeName: 'Apollo Theatre',
     buttons: [{ title: 'Buy Tickets', link: ticketsUrl }],
     display: 'all',
     screensIds: [],

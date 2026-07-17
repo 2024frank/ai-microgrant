@@ -30,7 +30,7 @@ import type { VeeziFilm } from './veezi';
 
 export interface ApolloAnnouncement {
   kind: 'showing_now' | 'coming_soon';
-  title: string;                 // "Apollo - Showing Now" | "Apollo - Coming Soon"
+  title: string;                 // "Now Playing at the Apollo" | "Coming Soon to the Apollo"
   description: string;           // " · "-joined per-film lines
   startTime: number;             // unix seconds, 00:00:00 America/New_York of window start
   endTime: number;               // unix seconds, 23:59:59 America/New_York of window end
@@ -132,7 +132,10 @@ export function buildApolloAnnouncements(films: VeeziFilm[], now: Date = new Dat
         .map(r => dayNum(r.end) >= horizon ? `${r.title} — now playing` : `${r.title} — through ${fmt(r.end)}`)
         .join(' · ');
       out.push({
-        kind: 'showing_now', title: 'Apollo - Showing Now', description,
+        // Exact title wording agreed 2026-07-16: "Now Playing at the Apollo"
+        // (not "Now Showing"). The upcoming/current decision above is the
+        // existing segmenter and is intentionally unchanged.
+        kind: 'showing_now', title: 'Now Playing at the Apollo', description,
         startTime: etEpoch(fromNum(ws), false), endTime: etEpoch(fromNum(we), true),
         movies: lineup.map(r => ({ title: r.title, rating: r.rating })),
       });
@@ -155,7 +158,7 @@ export function buildApolloAnnouncements(films: VeeziFilm[], now: Date = new Dat
         .sort((a, b) => dayNum(a.start) - dayNum(b.start) || a.title.localeCompare(b.title));
       if (!lineup.length) continue;
       out.push({
-        kind: 'coming_soon', title: 'Apollo - Coming Soon',
+        kind: 'coming_soon', title: 'Coming Soon to the Apollo',
         description: lineup.map(r => `${r.title} — opens ${fmt(r.start)}`).join(' · '),
         startTime: etEpoch(fromNum(ws), false), endTime: etEpoch(fromNum(we), true),
         movies: lineup.map(r => ({ title: r.title, rating: r.rating })),

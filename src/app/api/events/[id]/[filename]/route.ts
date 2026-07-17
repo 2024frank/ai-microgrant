@@ -1,6 +1,10 @@
 import { NextRequest } from 'next/server';
 import { eventImageResponse } from '@/lib/eventImageResponse';
 
+// A slow third-party origin plus a sharp transcode can exceed the default
+// serverless budget while CommunityHub is downloading the poster.
+export const maxDuration = 60;
+
 // Serves event images at any filename (e.g. poster.jpg) so CommunityHub
 // accepts the URL — it validates the URL extension AND sniffs actual image
 // bytes. We always output JPEG regardless of source format.
