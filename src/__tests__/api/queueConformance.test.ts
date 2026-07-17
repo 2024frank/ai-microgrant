@@ -148,7 +148,7 @@ describe('POST /api/agent/queue-conformance', () => {
     expect(update![0]).toContain('image_data=?');
   });
 
-  it('leaves an event without a poster when the source page names none', async () => {
+  it('records a no-source-image outcome and timestamps the attempt', async () => {
     mockQueue([pendingRow({
       image_cdn_url: null,
       image_data: null,
@@ -157,9 +157,27 @@ describe('POST /api/agent/queue-conformance', () => {
 
     const data = await (await POST(makeReq())).json();
 
-    expect(data.items[0].image_action).toBeUndefined();
+    expect(data.items[0].image_action).toBe('no_source_image');
     expect(data.ok).toBe(true);
     expect(loadImageAsJpeg).not.toHaveBeenCalled();
+    const update = db.mockConn.query.mock.calls.find(
+      ([sql]: [string]) => typeof sql === 'string' && sql.includes('image_discovery_at=NOW()'),
+    );
+    expect(update).toBeDefined();
+  });
+
+  it('does not retry discovery for a recently attempted event', async () => {
+    mockQueue([pendingRow({
+      image_cdn_url: null,
+      image_data: null,
+      calendar_source_url: 'https://library.example.org/event/storytime',
+      image_discovery_at: new Date().toISOString(),
+    })]);
+
+    const data = await (await POST(makeReq())).json();
+
+    expect(data.items[0].image_action).toBeUndefined();
+    expect(discoverSourcePageImage).not.toHaveBeenCalled();
   });
 
   it('removes a permanently unfetchable poster and flags a transient failure', async () => {

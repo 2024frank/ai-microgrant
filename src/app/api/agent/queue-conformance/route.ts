@@ -31,13 +31,16 @@ export const maxDuration = 300;
  * Every field change lands in field_edit_log with a NULL reviewer (system).
  */
 const EVENTS_PER_SWEEP = 40;
-const IMAGE_FETCHES_PER_SWEEP = 6;
+const IMAGE_FETCHES_PER_SWEEP = 8;
+const DISCOVERY_RETRY_DAYS = 7;
 
 type SweepItem = {
   event_id: number;
   decision: string;
   changed_fields: string[];
-  image_action?: 'materialized' | 'removed' | 'flagged' | 'discovered';
+  image_action?: 'materialized' | 'removed' | 'flagged' | 'discovered'
+    | 'no_source_image' | 'image_unusable';
+  image_note?: string;
   error?: string;
 };
 
@@ -90,25 +93,50 @@ async function handle(req: NextRequest) {
 
       // Events extracted without any poster: the source page's own share
       // metadata (og:image) names the image the source uses for this event.
+      // Attempts are timestamped so the bounded budget rotates through the
+      // backlog instead of retrying the same events forever.
       const hasAnyImage = Boolean((row as any).image_data)
         || Boolean(typeof row.image_cdn_url === 'string' && row.image_cdn_url);
       const sourcePage = typeof (row as any).calendar_source_url === 'string'
         ? String((row as any).calendar_source_url)
         : '';
-      if (staysInQueue && !hasAnyImage && /^https?:\/\//i.test(sourcePage) && imageBudget > 0) {
+      const lastDiscovery = (row as any).image_discovery_at
+        ? new Date(String((row as any).image_discovery_at)).getTime()
+        : 0;
+      const discoveryDue = !Number.isFinite(lastDiscovery) || lastDiscovery === 0
+        || Date.now() - lastDiscovery > DISCOVERY_RETRY_DAYS * 24 * 3600 * 1000;
+      let markDiscoveryAttempt = false;
+      if (staysInQueue && !hasAnyImage && discoveryDue
+        && /^https?:\/\//i.test(sourcePage) && imageBudget > 0) {
         imageBudget -= 1;
+        markDiscoveryAttempt = true;
         try {
           const { discoverSourcePageImage } = await import('@/lib/sourcePageImage');
           const discovered = await discoverSourcePageImage(sourcePage);
-          if (discovered) {
-            const { loadImageAsJpeg } = await import('@/lib/safeRemoteImage');
-            const jpeg = await loadImageAsJpeg(discovered);
-            imageDataUpdate = `data:image/jpeg;base64,${jpeg.toString('base64')}`;
-            imageUrlUpdate = discovered;
-            item.image_action = 'discovered';
+          if (!discovered) {
+            item.image_action = 'no_source_image';
+            item.image_note = 'the source page names no usable share image';
+          } else {
+            try {
+              const { loadImageAsJpeg } = await import('@/lib/safeRemoteImage');
+              const jpeg = await loadImageAsJpeg(discovered);
+              imageDataUpdate = `data:image/jpeg;base64,${jpeg.toString('base64')}`;
+              imageUrlUpdate = discovered;
+              item.image_action = 'discovered';
+              item.image_note = discovered;
+            } catch (imageError) {
+              const code = imageError !== null && typeof imageError === 'object' && 'code' in imageError
+                ? String((imageError as { code?: unknown }).code || 'FETCH_FAILED')
+                : 'FETCH_FAILED';
+              item.image_action = 'image_unusable';
+              item.image_note = `${discovered} (${code})`;
+            }
           }
-        } catch {
-          // A page without a usable share image is normal; never a blocker.
+        } catch (discoveryError) {
+          item.image_action = 'no_source_image';
+          item.image_note = discoveryError instanceof Error
+            ? discoveryError.message
+            : 'source page fetch failed';
         }
       }
 
@@ -167,6 +195,7 @@ async function handle(req: NextRequest) {
 
         for (const [field, value] of Object.entries(updates)) {
           if (field === 'dedup_key' || field === 'image_data') continue;
+          if (field === 'image_discovery_at') continue;
           await conn.query(
             `INSERT INTO field_edit_log
              (raw_event_id, source_id, reviewer_id, field_name, old_value, new_value)
@@ -188,6 +217,7 @@ async function handle(req: NextRequest) {
         const setClauses = [
           ...fields.map(field => `${field}=?`),
           'validation_errors=?',
+          ...(markDiscoveryAttempt ? ['image_discovery_at=NOW()'] : []),
         ];
         const values = [
           ...fields.map(field => databaseValue(updates[field])),
