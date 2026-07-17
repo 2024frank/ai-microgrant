@@ -87,6 +87,13 @@ function integer(value: unknown): number | null {
 }
 
 export function normalizeContentSessions(value: unknown): ContentSession[] {
+  if (typeof value === 'string') {
+    try {
+      return normalizeContentSessions(JSON.parse(value));
+    } catch {
+      return [];
+    }
+  }
   if (!Array.isArray(value)) return [];
   const sessions = value.flatMap(item => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
@@ -157,32 +164,71 @@ export function compareEventContent(
     && local.calendarSourceUrl === remoteContent.calendarSourceUrl,
   );
   const sameEventType = Boolean(local.eventType && local.eventType === remoteContent.eventType);
+  const compatibleEventType = !local.eventType || !remoteContent.eventType || sameEventType;
+  const exactDescription = Boolean(
+    local.description
+    && local.description === remoteContent.description,
+  );
+  const exactExtendedDescription = local.extendedDescription === remoteContent.extendedDescription;
+  const isAnnouncement = local.eventType === 'an' || remoteContent.eventType === 'an';
+  const descriptionTokenSimilarity = tokenSimilarity(
+    local.description,
+    remoteContent.description,
+  );
+  const extendedDescriptionSimilarity = tokenSimilarity(
+    local.extendedDescription,
+    remoteContent.extendedDescription,
+  );
   const descriptionSimilarity = Math.max(
-    tokenSimilarity(local.description, remoteContent.description),
-    tokenSimilarity(local.extendedDescription, remoteContent.extendedDescription),
+    descriptionTokenSimilarity,
+    extendedDescriptionSimilarity,
   );
 
-  if (exactTitle && exactWindows) {
+  // Announcement titles are often generic (for example, "Coming Soon") and
+  // can reuse one broad display window. Their actual copy is therefore part
+  // of the identity, matching the ingestion deduplication contract.
+  const exactAnnouncementCopy = exactDescription && exactExtendedDescription;
+  if (
+    exactTitle
+    && exactWindows
+    && compatibleEventType
+    && (!isAnnouncement || exactAnnouncementCopy)
+  ) {
     return {
       kind: 'exact',
-      reasons: ['normalized title', 'complete session windows'],
+      reasons: [
+        'normalized title',
+        'complete session windows',
+        ...(sameEventType ? ['event type'] : []),
+        ...(isAnnouncement ? ['announcement copy'] : []),
+      ],
       remote,
     };
   }
 
+  const probableAnnouncementCopy = descriptionTokenSimilarity >= 0.8
+    && (
+      !local.extendedDescription
+      || !remoteContent.extendedDescription
+      || extendedDescriptionSimilarity >= 0.7
+    );
+  const contentSupportsProbableMatch = !isAnnouncement || probableAnnouncementCopy;
   const strongTitleAndTime = sharedStarts > 0
     && (
       exactTitle
       || titleSimilarity >= 0.72
       || (titleSimilarity >= 0.55 && sameSourceUrl && sameEventType)
     )
-    && (sameEventType || sameSourceUrl || descriptionSimilarity >= 0.45);
+    && (sameEventType || sameSourceUrl || descriptionSimilarity >= 0.45)
+    && contentSupportsProbableMatch;
   const editedSessionsButSameListing = exactTitle
     && sameSourceUrl
-    && (sameEventType || descriptionSimilarity >= 0.55);
+    && (sameEventType || descriptionSimilarity >= 0.55)
+    && contentSupportsProbableMatch;
   const strongDescriptionAndTime = sharedStarts > 0
     && sameEventType
-    && descriptionSimilarity >= 0.8;
+    && descriptionSimilarity >= 0.8
+    && contentSupportsProbableMatch;
 
   if (strongTitleAndTime || editedSessionsButSameListing || strongDescriptionAndTime) {
     const reasons = [

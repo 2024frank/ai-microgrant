@@ -26,6 +26,33 @@ describe('CommunityHub content inventory', () => {
       { start: 10, end: 15 },
       { start: 20, end: 30 },
     ]);
+    expect(normalizeContentSessions(JSON.stringify([
+      { startTime: 40, endTime: 50 },
+    ]))).toEqual([{ start: 40, end: 50 }]);
+  });
+
+  it('uses announcement copy to distinguish generic titles with reused windows', () => {
+    const announcement = {
+      ...REMOTE,
+      title: 'Apollo - Coming Soon',
+      eventType: 'an',
+      description: 'Film A opens Friday.',
+      sessions: [{ start: 1_800_000_000, end: 1_900_000_000 }],
+    };
+
+    expect(compareEventContent({
+      title: 'Apollo - Coming Soon',
+      event_type: 'an',
+      description: 'Film B opens next month.',
+      sessions: JSON.stringify([{ startTime: 1_800_000_000, endTime: 1_900_000_000 }]),
+    }, announcement).kind).toBe('none');
+
+    expect(compareEventContent({
+      title: 'Apollo - Coming Soon',
+      event_type: 'an',
+      description: 'Film A opens Friday.',
+      sessions: JSON.stringify([{ startTime: 1_800_000_000, endTime: 1_900_000_000 }]),
+    }, announcement).kind).toBe('exact');
   });
 
   it('matches exact content even when the systems use unrelated IDs', () => {
