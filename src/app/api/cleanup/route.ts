@@ -166,6 +166,13 @@ async function runCleanup() {
        AND NOT EXISTS (SELECT 1 FROM raw_events re WHERE re.agent_run_id = ar.id)`
   ) as any;
 
+  // Run comparisons are FK-free (production id-type drift); remove rows whose
+  // agent run has been deleted.
+  await conn.query(
+    `DELETE c FROM integration_run_comparisons c
+     WHERE NOT EXISTS (SELECT 1 FROM agent_runs ar WHERE ar.id = c.agent_run_id)`
+  ).catch(() => undefined);
+
   const deleted = eventsResult.affectedRows;
   await (conn as any).commit();
   console.log(`[cleanup] deleted ${deleted} abandoned drafts, ${duplicatesResult.affectedRows} expired preserved duplicates, purged ${postersResult.affectedRows} poster blobs and ${outboxPostersResult.affectedRows} settled outbox blobs, deleted ${runsResult.affectedRows} unreferenced runs`);

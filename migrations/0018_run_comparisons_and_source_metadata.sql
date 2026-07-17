@@ -119,6 +119,10 @@ UPDATE sources SET source_kind = 'aggregator'
 WHERE (slug LIKE '%localist%' OR name LIKE '%localist%' OR slug LIKE '%aggregat%')
   AND source_kind = 'original_org';
 
+-- Intentionally FK-free (the needs_fix/notifications pattern): production id
+-- column types have drifted from the baseline, and a comparison row is an
+-- observability artifact that must never block a run insert. The cleanup cron
+-- removes rows whose agent run no longer exists.
 CREATE TABLE IF NOT EXISTS integration_run_comparisons (
   id                BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   agent_run_id      INT UNSIGNED NOT NULL,
@@ -134,7 +138,27 @@ CREATE TABLE IF NOT EXISTS integration_run_comparisons (
   report            JSON NOT NULL,
   created_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uq_comparison_run (agent_run_id),
-  KEY idx_comparison_source (source_id, created_at),
-  CONSTRAINT fk_cmp_run    FOREIGN KEY (agent_run_id) REFERENCES agent_runs(id) ON DELETE CASCADE,
-  CONSTRAINT fk_cmp_source FOREIGN KEY (source_id)    REFERENCES sources(id)    ON DELETE CASCADE
+  KEY idx_comparison_source (source_id, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Stable organization metadata for the four organizations named in the
+-- meeting (only values already verified in this repository or production
+-- data; anything unverified stays NULL for an admin to fill in). Guarded so
+-- an admin's later edits are never overwritten on redeploy.
+UPDATE sources SET
+  org_sponsor_name='Apollo Theatre',
+  org_website=COALESCE(org_website, 'https://www.clevelandcinemas.com/our-locations/x03gq-apollo-theatre/'),
+  org_phone=COALESCE(org_phone, '440-774-3920'),
+  org_contact_email=COALESCE(org_contact_email, 'apollo@clevelandcinemas.com')
+WHERE (slug LIKE '%apollo%' OR name LIKE '%Apollo%') AND org_sponsor_name IS NULL;
+
+UPDATE sources SET
+  org_sponsor_name='Common Ground Center',
+  org_website=COALESCE(org_website, 'https://commongroundcenter.org')
+WHERE (slug LIKE '%common%ground%' OR name LIKE '%Common Ground%') AND org_sponsor_name IS NULL;
+
+UPDATE sources SET org_sponsor_name='Oberlin Public Library'
+WHERE (slug LIKE '%library%' OR name LIKE '%Library%') AND org_sponsor_name IS NULL;
+
+UPDATE sources SET org_sponsor_name='Oberlin Heritage Center'
+WHERE (slug LIKE '%heritage%' OR name LIKE '%Heritage%') AND org_sponsor_name IS NULL;
