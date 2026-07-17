@@ -30,8 +30,11 @@ export const maxDuration = 300;
  * (with an audit entry), and transient failures are flagged for the reviewer.
  * Every field change lands in field_edit_log with a NULL reviewer (system).
  */
-const EVENTS_PER_SWEEP = 40;
-const IMAGE_FETCHES_PER_SWEEP = 8;
+// The sweep must cover the WHOLE queue each run: it selects pending events
+// ordered by id, and conforming events stay pending, so a cap smaller than
+// the queue would freeze the window on the first N events forever.
+const EVENTS_PER_SWEEP = 200;
+const IMAGE_FETCHES_PER_SWEEP = 20;
 const DISCOVERY_RETRY_DAYS = 7;
 
 type SweepItem = {
