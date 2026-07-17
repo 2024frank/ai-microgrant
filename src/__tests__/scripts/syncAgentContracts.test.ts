@@ -43,6 +43,35 @@ Return only current public events.`);
     )).toBe(source);
   });
 
+  it('scrubs stale conflicting guidance from a preserved source section', () => {
+    const cleaned = sanitizeSourceInstructions([
+      '## Current extraction and handoff contract — highest priority',
+      '',
+      '## Source-specific instructions for FAVA',
+      '',
+      'Scrape https://www.favagallery.org/calendar and https://exhibitions.favagallery.org/.',
+      'Before extracting, fetch the complete CommunityHub approved-and-pending inventory.',
+      'Continue pagination until lastPage is true.',
+      'Classes require registration; add "Register now!" to the description.',
+      'Put the registration URL in the website field.',
+      'State the date and time in the description so readers see the schedule.',
+      'Use the title Apollo - Showing Now for current films.',
+      'Announcements run from two weeks before the program start.',
+      '',
+      'Return only the JSON array.',
+    ].join('\n'));
+
+    expect(cleaned).toContain('https://www.favagallery.org/calendar');
+    expect(cleaned).toContain('Announcements run from two weeks before the program start.');
+    expect(cleaned).toContain('Now Playing at the Apollo');
+    expect(cleaned).not.toContain('approved-and-pending inventory');
+    expect(cleaned).not.toContain('lastPage');
+    expect(cleaned).not.toContain('Register now!');
+    expect(cleaned).not.toContain('registration URL in the website');
+    expect(cleaned).not.toContain('State the date and time in the description');
+    expect(cleaned).not.toContain('Apollo - Showing Now');
+  });
+
   it('rejects the configured ingest secret even when it has no header label', () => {
     process.env.INGEST_SECRET = 'configured-secret-value';
     expect(() => assertSafePrompt(`

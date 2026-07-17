@@ -85,26 +85,69 @@ const DROP_LINE_PATTERNS = [
   /estimate(?:d|s|ing)?\b/i,
 ];
 
+// Stale per-source guidance that contradicts the canonical contract. These
+// are removed from PRESERVED source sections too: leftover instructions to
+// fetch the CommunityHub inventory, put dates or registration text in
+// descriptions, use the website field for registration links, or use retired
+// title wording were still steering extractions after the contract changed.
+const SOURCE_CONFLICT_DROP_PATTERNS = [
+  /communityhub\.cloud\/api\/legacy\/calendar\/posts/i,
+  /fetch the complete CommunityHub/i,
+  /approved-and-pending inventory/i,
+  /\blastPage\b/i,
+  /CommunityHub IDs and Event Intake IDs/i,
+  /Compare actual content, never IDs/i,
+  /Skip a source event only when/i,
+  /Keep extracting when the only similarity/i,
+  /["']?Register now!?["']?\s+(?:to|in)\s+the\s+description/i,
+  /add\s+["']?Register now/i,
+  /registration[^\n]{0,60}\burl\b[^\n]{0,60}\bwebsite\b/i,
+  /\bwebsite\b[^\n]{0,60}\bregistration\b[^\n]{0,60}\b(?:url|link)\b/i,
+  /(?:state|include|put|mention|repeat|write)[^\n]{0,60}\b(?:date|time)s?\b[^\n]{0,60}\bdescription/i,
+  /\bdescription\b[^\n]{0,60}(?:state|include|put|mention|repeat)[^\n]{0,60}\b(?:date|time)s?\b/i,
+  /\[\d+\]\s*(?:Arts\b|Music\b|Fundraiser\b|Family\b|Community Event\b|Sports\b)/,
+];
+
+// Retired title wording is corrected in place rather than dropped, because
+// the surrounding sentences describe mechanics worth keeping.
+const TITLE_REPLACEMENTS: Array<[RegExp, string]> = [
+  [/Apollo - Showing Now/g, 'Now Playing at the Apollo'],
+  [/Apollo - Coming Soon/g, 'Coming Soon to the Apollo'],
+  [/Apollo Now Playing/g, 'Now Playing at the Apollo'],
+  [/Apollo Coming Soon/g, 'Coming Soon to the Apollo'],
+  [/Now Showing at the Apollo/g, 'Now Playing at the Apollo'],
+];
+
+function cleanSourceSection(section: string): string {
+  let cleaned = section
+    .split('\n')
+    .filter(line => !SOURCE_CONFLICT_DROP_PATTERNS.some(pattern => pattern.test(line)))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  for (const [pattern, replacement] of TITLE_REPLACEMENTS) {
+    cleaned = cleaned.replace(pattern, replacement);
+  }
+  return cleaned;
+}
+
 export function sanitizeSourceInstructions(system: unknown): string {
   const source = String(system ?? '').replaceAll('\r\n', '\n');
   const existingSourceHeading = source.match(/^## Source-specific instructions for .+$/m);
   if (existingSourceHeading?.index !== undefined) {
-    const preserved = source
+    const preserved = cleanSourceSection(source
       .slice(existingSourceHeading.index + existingSourceHeading[0].length)
-      .replace(/\n+Return only the JSON array\.\s*$/, '')
-      .trim();
+      .replace(/\n+Return only the JSON array\.\s*$/, ''));
     if (preserved.length < 80) {
       throw new Error('source-specific instructions became unexpectedly short');
     }
     return preserved;
   }
-  const kept = source
+  const kept = cleanSourceSection(source
     .split('\n')
     .filter(line => !DROP_LINE_PATTERNS.some(pattern => pattern.test(line)))
     .join('\n')
-    .replace(/```(?:bash|json|sh)?\s*```/gi, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+    .replace(/```(?:bash|json|sh)?\s*```/gi, ''));
 
   if (kept.length < 80) {
     throw new Error('source-specific instructions became unexpectedly short');
