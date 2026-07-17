@@ -102,6 +102,20 @@ describe('planQueueConformance', () => {
   });
 });
 
+describe('idempotence', () => {
+  it('leaves an already corrected event alone even with MySQL-sorted JSON keys', () => {
+    // A row the sweep itself corrected earlier: marker present, Register
+    // button stored by MySQL with alphabetized object keys.
+    const plan = planQueueConformance(pendingRow({
+      description: 'A hands-on pottery class. Register now to reserve a wheel. Registration required.',
+      website: 'https://studio.example.org/classes',
+      buttons: JSON.stringify([{ link: 'https://studio.example.org/classes', title: 'Register' }]),
+    }));
+    expect(plan.decision).toBe('leave');
+    expect(plan.updates).toEqual({});
+  });
+});
+
 describe('announcementTitleNeedsAction', () => {
   it('accepts action-led and agreed Apollo titles', () => {
     for (const title of [

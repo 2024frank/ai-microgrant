@@ -73,13 +73,28 @@ function text(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
+/** Deterministic JSON with sorted object keys at every depth. */
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    return `{${Object.keys(value as Record<string, unknown>)
+      .sort()
+      .map(key => `${JSON.stringify(key)}:${stableJson((value as Record<string, unknown>)[key])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
+// MySQL JSON columns store object keys sorted, while the policy emits
+// {title, link} order; comparisons must ignore key order or every sweep
+// rewrites identical content forever.
 function canonical(value: unknown): string {
   if (value === null || value === undefined) return '';
-  if (typeof value === 'object') return JSON.stringify(value);
+  if (typeof value === 'object') return stableJson(value);
   if (typeof value === 'string') {
     try {
       const parsed = JSON.parse(value);
-      if (parsed !== null && typeof parsed === 'object') return JSON.stringify(parsed);
+      if (parsed !== null && typeof parsed === 'object') return stableJson(parsed);
     } catch {
       // Plain string.
     }
