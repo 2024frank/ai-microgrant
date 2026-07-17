@@ -23,7 +23,10 @@ export const maxDuration = 300;
  * One automatic attempt per event; a failed correction returns the event to
  * its prior queue state for a human.
  */
-const MAX_DISPATCH_PER_INVOCATION = 2;
+// One correction per source runs at a time (agent_runs enforces it), so the
+// real throttle is one dispatch per source per tick; the cap lets every
+// source get covered in a single tick rather than draining two at a time.
+const MAX_DISPATCH_PER_INVOCATION = 12;
 const MAX_EVENT_AGE_DAYS = 7;
 
 type CorrectionKind = 'missing_fields' | 'missing_image';
@@ -120,6 +123,10 @@ async function selectImagelessCandidates(): Promise<CandidateRow[]> {
        AND re.corrected_from_id IS NULL
        AND re.image_data IS NULL
        AND (re.image_cdn_url IS NULL OR re.image_cdn_url='')
+       -- "If there is none": no image AND no explanation yet. An event whose
+       -- agent already recorded why the image is missing needs no further
+       -- hunt; this is also what stops a note-only correction from looping.
+       AND JSON_EXTRACT(re.field_notes, '$.image_cdn_url') IS NULL
        -- The deterministic page scan already tried and found nothing.
        AND re.image_discovery_at IS NOT NULL
        AND re.created_at > DATE_SUB(NOW(), INTERVAL ${MAX_EVENT_AGE_DAYS} DAY)

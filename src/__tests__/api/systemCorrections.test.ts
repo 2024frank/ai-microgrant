@@ -184,6 +184,12 @@ describe('POST /api/agent/system-corrections', () => {
       results: [{ event_id: 223, kind: 'missing_image', status: 'dispatched', run_id: 77 }],
     });
 
+    // Only events with no image AND no image explanation are hunted.
+    const imagelessQuery = db.default.query.mock.calls.find(
+      ([sql]: [string]) => typeof sql === 'string' && sql.includes('image_discovery_at IS NOT NULL'),
+    );
+    expect(imagelessQuery![0]).toContain("JSON_EXTRACT(re.field_notes, '$.image_cdn_url') IS NULL");
+
     // The draft leaves the review queue as pending_fix while the agent works.
     const claimUpdate = db.mockConn.query.mock.calls.find(
       ([sql]: [string]) => typeof sql === 'string' && sql.includes("status='pending_fix'"),
