@@ -278,8 +278,24 @@ async function handle(req: NextRequest) {
     }
   }
 
+  // Operational visibility: where every event stands, per source.
+  let statusBreakdown: unknown = null;
+  try {
+    const [rows2] = await pool.query(
+      `SELECT s.name AS source, re.status, COUNT(*) AS total,
+              MIN(re.id) AS min_id, MAX(re.id) AS max_id
+       FROM raw_events re JOIN sources s ON s.id=re.source_id
+       GROUP BY s.name, re.status
+       ORDER BY s.name, re.status`,
+    ) as any;
+    statusBreakdown = rows2;
+  } catch {
+    statusBreakdown = null;
+  }
+
   const count = (decision: string) => items.filter(item => item.decision === decision).length;
   return Response.json({
+    status_breakdown: statusBreakdown,
     ok: items.every(item => !item.error),
     checked: items.length,
     corrected: count('correct'),
