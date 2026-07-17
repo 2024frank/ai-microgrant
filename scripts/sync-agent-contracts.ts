@@ -142,6 +142,8 @@ export function assertSafePrompt(prompt: string) {
     'Compare actual content, never IDs or tokens',
     'CommunityHub IDs and Event Intake IDs are different namespaces',
     'continue pagination until lastPage is true',
+    'Read every remote session and the complete post copy',
+    'For generic announcement titles, require the announcement copy',
   ];
   for (const text of required) {
     if (!prompt.includes(text)) throw new Error(`new prompt is missing required contract text: ${text}`);

@@ -87,6 +87,60 @@ describe('CommunityHub content inventory', () => {
     }, [REMOTE]).kind).toBe('none');
   });
 
+  it('retains grouped sessions and dates that CommunityHub stores in post copy', () => {
+    const grouped: CommunityHubInventoryPost = {
+      title: 'Architecture History Walk',
+      eventType: 'ot',
+      description: 'Find out how the town developed over more than 180 years.',
+      extendedDescription: 'Offered Saturday August 15 and Saturdays August 22 and 29.',
+      calendarSourceUrl: '',
+      timezone: 'America/New_York',
+      sessions: [
+        { start: 1_786_806_000, end: 1_786_811_400 },
+        { start: 1_787_410_800, end: 1_787_416_200 },
+      ],
+      moderation: 'approved',
+    };
+
+    expect(compareEventContent({
+      title: 'Architecture History Walk – August Offerings',
+      event_type: 'ot',
+      description: 'Find out how the town developed over more than 180 years.',
+      sessions: [{ startTime: 1_786_806_000, endTime: 1_786_810_500 }],
+    }, grouped)).toMatchObject({ kind: 'probable' });
+
+    expect(compareEventContent({
+      title: 'Architecture History Walk – August Offerings',
+      event_type: 'ot',
+      description: 'Find out how the town developed over more than 180 years.',
+      sessions: [{ startTime: 1_787_410_800, endTime: 1_787_415_300 }],
+    }, { ...grouped, sessions: [grouped.sessions[0]] })).toMatchObject({
+      kind: 'probable',
+      reasons: expect.arrayContaining(['session date in post content']),
+    });
+  });
+
+  it('uses a shared local calendar date when remote time data is wrong', () => {
+    expect(compareEventContent({
+      title: 'Civil War to Civil Rights History Walk – July Offerings',
+      event_type: 'ot',
+      description: 'A history walk about progress and setbacks in race relations.',
+      sessions: [{ startTime: 1_784_386_800, endTime: 1_784_392_200 }],
+    }, {
+      title: 'Civil War to Civil Rights History Walk',
+      eventType: 'ot',
+      description: 'A history walk about progress and setbacks in race relations.',
+      extendedDescription: '',
+      calendarSourceUrl: '',
+      timezone: 'America/New_York',
+      sessions: [{ start: 1_784_401_200, end: 1_784_406_600 }],
+      moderation: 'approved',
+    })).toMatchObject({
+      kind: 'probable',
+      reasons: expect.arrayContaining(['shared session date']),
+    });
+  });
+
   it('reads every page and keeps only approved and pending records', async () => {
     const requested: URL[] = [];
     const fetcher = jest.fn(async (input: URL | RequestInfo) => {

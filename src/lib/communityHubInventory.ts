@@ -6,7 +6,7 @@ export const COMMUNITY_HUB_INVENTORY_URL = `${INVENTORY_ENDPOINT}?limit=10000&pa
 
 export const COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS = `Before extracting source events, fetch the complete CommunityHub approved-and-pending inventory from ${COMMUNITY_HUB_INVENTORY_URL}
 Read every returned post and continue pagination until lastPage is true. Treat approved=true as approved and approved=null as pending. If the request fails, the payload is incomplete, or lastPage is not reached, do not pretend the inventory is empty.
-Compare actual content, never IDs or tokens: normalize the title; compare every session start/end timestamp; then use calendarSourceUrl, description, and eventType as supporting evidence. CommunityHub IDs and Event Intake IDs are different namespaces and must never be compared. Skip a source event only when its content is an exact or strong match to an approved or pending CommunityHub post. Keep extracting when the only similarity is a shared source URL or generic wording.`;
+Compare actual content, never IDs or tokens: normalize the title; compare every session start/end timestamp; then use calendarSourceUrl, description, and eventType as supporting evidence. CommunityHub IDs and Event Intake IDs are different namespaces and must never be compared. CommunityHub may group several source occurrences into one post, may omit a session, or may state an occurrence date only in the description. Read every remote session and the complete post copy before deciding an occurrence is absent. For generic announcement titles, require the announcement copy and date window to match. Skip a source event only when its content is an exact or strong match to an approved or pending CommunityHub post. Keep extracting when the only similarity is a shared source URL or generic wording.`;
 
 export type ContentSession = {
   start: number;
@@ -33,6 +33,7 @@ export type CommunityHubInventoryPost = {
   extendedDescription: string;
   calendarSourceUrl: string;
   sessions: ContentSession[];
+  timezone?: string;
   moderation: 'approved' | 'pending';
 };
 
@@ -144,6 +145,60 @@ function tokenSimilarity(left: string, right: string): number {
   return union > 0 ? intersection / union : 0;
 }
 
+function tokenCoverage(left: string, right: string): number {
+  if (!left || !right) return 0;
+  const leftTokens = new Set(left.split(' ').filter(token => token.length > 1));
+  const rightTokens = new Set(right.split(' ').filter(token => token.length > 1));
+  if (leftTokens.size === 0 || rightTokens.size === 0) return 0;
+  const intersection = [...leftTokens].filter(token => rightTokens.has(token)).length;
+  return intersection / Math.min(leftTokens.size, rightTokens.size);
+}
+
+function sessionDateKey(timestamp: number, timezone: string): string {
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date(timestamp * 1000));
+  } catch {
+    return new Date(timestamp * 1000).toISOString().slice(0, 10);
+  }
+}
+
+function postCopyMentionsSessionDate(
+  sessions: ContentSession[],
+  remoteText: string,
+  timezone: string,
+): boolean {
+  if (!remoteText) return false;
+  return sessions.some(session => {
+    let parts: Intl.DateTimeFormatPart[];
+    try {
+      parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: timezone,
+        month: 'long',
+        day: 'numeric',
+      }).formatToParts(new Date(session.start * 1000));
+    } catch {
+      parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'UTC',
+        month: 'long',
+        day: 'numeric',
+      }).formatToParts(new Date(session.start * 1000));
+    }
+    const month = parts.find(part => part.type === 'month')?.value.toLowerCase();
+    const day = parts.find(part => part.type === 'day')?.value;
+    if (!month || !day) return false;
+    const shortMonth = month.slice(0, 3);
+    const pattern = new RegExp(
+      `\\b(?:${month}|${shortMonth})\\s+${day}(?:st|nd|rd|th)?\\b`,
+    );
+    return pattern.test(remoteText);
+  });
+}
+
 export function compareEventContent(
   localInput: ComparableEventContent,
   remote: CommunityHubInventoryPost,
@@ -159,6 +214,7 @@ export function compareEventContent(
     && setsEqual(localWindows, remoteWindows);
   const exactTitle = Boolean(local.title && local.title === remoteContent.title);
   const titleSimilarity = tokenSimilarity(local.title, remoteContent.title);
+  const titleCoverage = tokenCoverage(local.title, remoteContent.title);
   const sameSourceUrl = Boolean(
     local.calendarSourceUrl
     && local.calendarSourceUrl === remoteContent.calendarSourceUrl,
@@ -182,6 +238,19 @@ export function compareEventContent(
   const descriptionSimilarity = Math.max(
     descriptionTokenSimilarity,
     extendedDescriptionSimilarity,
+  );
+  const localCopy = `${local.description} ${local.extendedDescription}`.trim();
+  const remoteCopy = `${remoteContent.description} ${remoteContent.extendedDescription}`.trim();
+  const combinedCopyCoverage = tokenCoverage(localCopy, remoteCopy);
+  const timezone = remote.timezone || 'America/New_York';
+  const localDays = new Set(local.sessions.map(session => sessionDateKey(session.start, timezone)));
+  const sharedSessionDays = remoteContent.sessions.filter(
+    session => localDays.has(sessionDateKey(session.start, timezone)),
+  ).length;
+  const sessionDateInPostCopy = postCopyMentionsSessionDate(
+    local.sessions,
+    remoteCopy,
+    timezone,
   );
 
   // Announcement titles are often generic (for example, "Coming Soon") and
@@ -213,13 +282,18 @@ export function compareEventContent(
       || extendedDescriptionSimilarity >= 0.7
     );
   const contentSupportsProbableMatch = !isAnnouncement || probableAnnouncementCopy;
-  const strongTitleAndTime = sharedStarts > 0
+  const strongTitle = exactTitle || titleSimilarity >= 0.72 || titleCoverage >= 0.85;
+  const temporalEvidence = sharedStarts > 0
+    || sharedSessionDays > 0
+    || sessionDateInPostCopy;
+  const strongTitleAndTime = temporalEvidence
+    && strongTitle
     && (
-      exactTitle
-      || titleSimilarity >= 0.72
-      || (titleSimilarity >= 0.55 && sameSourceUrl && sameEventType)
+      sameEventType
+      || sameSourceUrl
+      || descriptionSimilarity >= 0.45
+      || combinedCopyCoverage >= 0.7
     )
-    && (sameEventType || sameSourceUrl || descriptionSimilarity >= 0.45)
     && contentSupportsProbableMatch;
   const editedSessionsButSameListing = exactTitle
     && sameSourceUrl
@@ -234,9 +308,16 @@ export function compareEventContent(
     const reasons = [
       exactTitle ? 'normalized title' : titleSimilarity >= 0.72 ? 'similar title' : '',
       sharedStarts > 0 ? 'shared session start' : '',
+      sharedStarts === 0 && sharedSessionDays > 0 ? 'shared session date' : '',
+      sharedStarts === 0 && sharedSessionDays === 0 && sessionDateInPostCopy
+        ? 'session date in post content'
+        : '',
+      !exactTitle && titleSimilarity < 0.72 && titleCoverage >= 0.85 ? 'title content' : '',
       sameSourceUrl ? 'source URL' : '',
       sameEventType ? 'event type' : '',
-      descriptionSimilarity >= 0.45 ? 'description content' : '',
+      descriptionSimilarity >= 0.45 || combinedCopyCoverage >= 0.7
+        ? 'description content'
+        : '',
     ].filter(Boolean);
     return { kind: 'probable', reasons, remote };
   }
@@ -341,7 +422,11 @@ export async function fetchCommunityHubInventory(
     if (!content.title || content.sessions.length === 0) {
       throw new Error('CommunityHub inventory contains a post without comparable content');
     }
-    posts.push({ ...content, moderation: state });
+    posts.push({
+      ...content,
+      timezone: text(raw.timezone).trim() || 'America/New_York',
+      moderation: state,
+    });
   }
 
   return {

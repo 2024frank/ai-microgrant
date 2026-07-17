@@ -92,6 +92,7 @@ function inventoryDigest(inventory: CommunityHubInventory): string {
       description: post.description,
       extendedDescription: post.extendedDescription,
       calendarSourceUrl: post.calendarSourceUrl,
+      timezone: post.timezone,
       moderation: post.moderation,
     }))
     .sort((left, right) => json(left).localeCompare(json(right)));

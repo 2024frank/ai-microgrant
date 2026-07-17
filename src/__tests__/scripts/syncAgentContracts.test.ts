@@ -60,6 +60,8 @@ https://oberlin.communityhub.cloud/api/legacy/calendar/posts?limit=10000&page=0&
 Compare actual content, never IDs or tokens
 CommunityHub IDs and Event Intake IDs are different namespaces
 continue pagination until lastPage is true
+Read every remote session and the complete post copy
+For generic announcement titles, require the announcement copy
 ${process.env.INGEST_SECRET}
     `)).toThrow('configured ingest secret');
   });
