@@ -13,6 +13,20 @@ import {
 const DEFAULT_EMAILS_PER_RUN = 5;
 const MAX_EMAILS_PER_RUN = 25;
 const DEFAULT_EMAIL_RUN_TIMEOUT_MS = 4 * 60 * 1000;
+const DEFAULT_JSON_REPAIR_ATTEMPTS = 1;
+const MAX_JSON_REPAIR_ATTEMPTS = 2;
+
+type AgentOutputIssue = 'missing_array' | 'malformed_json' | 'wrong_shape';
+
+type AgentOutputParseResult =
+  | { ok: true; events: any[] }
+  | { ok: false; issue: AgentOutputIssue };
+
+type SessionTurnResult = {
+  outputText: string;
+  afterCreatedAt?: string;
+  stopped: boolean;
+};
 
 type RunEvidence = {
   status?: string;
@@ -64,6 +78,237 @@ function emailRunTimeoutMs(): number {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Unknown ingestion error';
+}
+
+function jsonRepairAttempts(): number {
+  const configured = Number.parseInt(process.env.AGENT_JSON_REPAIR_ATTEMPTS || '', 10);
+  if (!Number.isFinite(configured)) return DEFAULT_JSON_REPAIR_ATTEMPTS;
+  return Math.min(Math.max(configured, 0), MAX_JSON_REPAIR_ATTEMPTS);
+}
+
+function balancedArrayCandidates(text: string): string[] {
+  const candidates: string[] = [];
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index];
+
+    if (start < 0) {
+      if (char === '[') {
+        start = index;
+        depth = 1;
+        inString = false;
+        escaped = false;
+      }
+      continue;
+    }
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+    } else if (char === '[') {
+      depth++;
+    } else if (char === ']') {
+      depth--;
+      if (depth === 0) {
+        candidates.push(text.slice(start, index + 1));
+        start = -1;
+      }
+    }
+  }
+
+  return candidates;
+}
+
+function isPlausibleEventArray(value: unknown): value is any[] {
+  if (!Array.isArray(value)) return false;
+  if (value.length === 0) return true;
+
+  const eventKeys = ['eventType', 'title', 'description', 'sessions', 'postTypeId', 'locationType'];
+  return value.every(item => (
+    item !== null
+    && typeof item === 'object'
+    && !Array.isArray(item)
+    && eventKeys.some(key => Object.prototype.hasOwnProperty.call(item, key))
+  ));
+}
+
+function parseAgentOutput(outputText: string): AgentOutputParseResult {
+  const trimmed = outputText.trim();
+  if (!trimmed) return { ok: false, issue: 'missing_array' };
+
+  // Prefer a response that is already pure JSON. This preserves the existing
+  // contract while allowing a fenced response as a tolerant fallback.
+  try {
+    const parsed = JSON.parse(trimmed);
+    return isPlausibleEventArray(parsed)
+      ? { ok: true, events: parsed }
+      : { ok: false, issue: 'wrong_shape' };
+  } catch {
+    // Continue with bounded, deterministic extraction below.
+  }
+
+  const fencedCandidates = [...trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)]
+    .map(match => match[1].trim())
+    .filter(Boolean)
+    .sort((left, right) => right.length - left.length);
+  let sawWrongShape = false;
+  for (const candidate of fencedCandidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (isPlausibleEventArray(parsed)) return { ok: true, events: parsed };
+      sawWrongShape = true;
+    } catch {
+      // A later fence may contain the actual array.
+    }
+  }
+
+  // The old greedy /\[[\s\S]*\]/ match merged separate arrays into invalid
+  // JSON. Parse complete balanced arrays independently and prefer the largest
+  // event-shaped candidate. Brackets inside JSON strings are ignored.
+  const candidates = balancedArrayCandidates(trimmed)
+    .sort((left, right) => right.length - left.length);
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (isPlausibleEventArray(parsed)) return { ok: true, events: parsed };
+      if (Array.isArray(parsed)) sawWrongShape = true;
+    } catch {
+      // Keep looking; model prose can contain non-JSON bracketed text.
+    }
+  }
+
+  if (sawWrongShape) return { ok: false, issue: 'wrong_shape' };
+  return {
+    ok: false,
+    issue: trimmed.includes('[') ? 'malformed_json' : 'missing_array',
+  };
+}
+
+function outputIssueMessage(issue: AgentOutputIssue, repairAttempts: number): string {
+  const suffix = repairAttempts > 0
+    ? ` after ${repairAttempts} bounded repair attempt${repairAttempts === 1 ? '' : 's'}`
+    : '';
+  if (issue === 'missing_array') {
+    return `Agent returned no JSON array and no direct-post output was recorded for this run${suffix}`;
+  }
+  if (issue === 'wrong_shape') {
+    return `Agent output JSON must be an event array${suffix}`;
+  }
+  return `Agent returned malformed JSON and no direct-post output was recorded for this run${suffix}`;
+}
+
+function repairPrompt(issue: AgentOutputIssue): string {
+  const reason = issue === 'missing_array'
+    ? 'no JSON array was present'
+    : issue === 'wrong_shape'
+      ? 'the top-level JSON value was not an event array'
+      : 'the JSON array was syntactically invalid';
+  return [
+    `Your previous extraction response could not be accepted because ${reason}.`,
+    'Do not browse again, invoke tools, or POST to the ingest endpoint. Correct only the event data already gathered in this session.',
+    'Return exactly one raw JSON array that follows the payload contract from the prior instruction.',
+    'If there are no eligible events, return []. Do not include Markdown fences, commentary, ellipses, or trailing commas.',
+  ].join('\n');
+}
+
+async function pollSessionTurn(
+  client: any,
+  sessionId: string,
+  runId: number,
+  deadline: number,
+  timeoutMs: number,
+  initialCursor?: string,
+): Promise<SessionTurnResult> {
+  const outputChunks: string[] = [];
+  let afterCreatedAt = initialCursor;
+
+  while (true) {
+    if (Date.now() >= deadline) {
+      throw new Error(`Agent run timed out after ${Math.round(timeoutMs / 1000)} seconds (session ${sessionId})`);
+    }
+
+    const statusResult = await pool.query(
+      'SELECT status FROM agent_runs WHERE id = ?', [runId]
+    ) as any;
+    const currentRun = Array.isArray(statusResult?.[0]) ? statusResult[0][0] : null;
+    if (currentRun?.status !== 'running') {
+      if (currentRun?.status === 'stopped') {
+        console.log(`[agentRunner] run=${runId} stopped externally — aborting`);
+        return { outputText: '', afterCreatedAt, stopped: true };
+      }
+      throw new Error('Agent run lease is no longer active');
+    }
+
+    const page = await client.beta.sessions.events.list(sessionId, {
+      ...(afterCreatedAt ? { 'created_at[gt]': afterCreatedAt } : {}),
+      limit: 100,
+      order: 'asc',
+    } as any) as any;
+
+    const events: any[] = page.data ?? [];
+    let turnComplete = false;
+    for (const event of events) {
+      if (event.created_at) afterCreatedAt = event.created_at;
+
+      if (event.type === 'agent.message') {
+        for (const block of (event.content ?? []) as any[]) {
+          if (block.type === 'text' && block.text) {
+            outputChunks.push(block.text);
+          }
+        }
+      }
+
+      if (event.type === 'session.status_idle') {
+        const stopReason = event.stop_reason;
+        if (stopReason?.type !== 'requires_action') {
+          turnComplete = true;
+          break;
+        }
+      }
+    }
+
+    if (turnComplete) {
+      return {
+        outputText: outputChunks.join(''),
+        afterCreatedAt,
+        stopped: false,
+      };
+    }
+
+    const remainingMs = deadline - Date.now();
+    if (remainingMs > 0) {
+      await new Promise(resolve => setTimeout(resolve, Math.min(3000, remainingMs)));
+    }
+  }
+}
+
+async function completeFromDirectPost(runId: number, evidence: RunEvidence) {
+  await pool.query(
+    `UPDATE agent_runs SET status='completed', finished_at=NOW()
+     WHERE id=? AND status='running'`,
+    [runId]
+  );
+  return {
+    run_id: runId,
+    inserted: nonNegativeCount(evidence.events_extracted),
+    skipped: nonNegativeCount(evidence.events_skipped_dup),
+    invalid: nonNegativeCount(evidence.events_errored),
+    events: [],
+  };
 }
 
 const POST_TYPE_CONTRACT = OBERLIN_POST_TYPE_IDS
@@ -148,124 +393,83 @@ export async function triggerAgentRun(
     // Keep the deadline below the route's five-minute serverless limit so the
     // catch block can persist a useful failure instead of leaving a stale run.
     console.log(`[agentRunner] run=${runId} session=${session.id} polling start`);
-    const outputChunks: string[] = [];
-    let afterCreatedAt: string | undefined;
-    let done = false;
     const configuredTimeout = Number(process.env.AGENT_RUN_TIMEOUT_MS);
     const TIMEOUT_MS = Number.isFinite(configuredTimeout) && configuredTimeout > 0
       ? Math.min(configuredTimeout, 4 * 60 * 1000)
       : 4 * 60 * 1000;
     const deadline = Date.now() + TIMEOUT_MS;
-
-    while (!done) {
-      if (Date.now() > deadline) {
-        throw new Error(`Agent run timed out after ${Math.round(TIMEOUT_MS / 1000)} seconds (session ${session.id})`);
-      }
-
-      // Check if this run was stopped externally before each poll
-      const statusResult = await pool.query(
-        'SELECT status FROM agent_runs WHERE id = ?', [runId]
-      ) as any;
-      const currentRun = Array.isArray(statusResult?.[0]) ? statusResult[0][0] : null;
-      if (currentRun?.status !== 'running') {
-        if (currentRun?.status === 'stopped') {
-          console.log(`[agentRunner] run=${runId} stopped externally — aborting`);
-          return { run_id: runId, inserted: 0, events: [] };
-        }
-        throw new Error('Agent run lease is no longer active');
-      }
-
-      const page = await client.beta.sessions.events.list(session.id, {
-        ...(afterCreatedAt ? { 'created_at[gt]': afterCreatedAt } : {}),
-        limit: 100,
-        order: 'asc',
-      } as any) as any;
-
-      const events: any[] = page.data ?? [];
-
-      for (const event of events) {
-        if (event.created_at) afterCreatedAt = event.created_at;
-
-        if (event.type === 'agent.message') {
-          for (const block of (event.content ?? []) as any[]) {
-            if (block.type === 'text' && block.text) {
-              outputChunks.push(block.text);
-            }
-          }
-        }
-
-        if (event.type === 'session.status_idle') {
-          const stopReason = event.stop_reason;
-          if (stopReason?.type !== 'requires_action') {
-            console.log(`[agentRunner] run=${runId} session idle — extraction complete`);
-            done = true;
-            break;
-          }
-        }
-      }
-
-      // Brief delay between every poll to avoid hammering the Sessions API
-      if (!done) {
-        await new Promise(r => setTimeout(r, 3000));
-      }
+    let turn = await pollSessionTurn(
+      client,
+      session.id,
+      runId,
+      deadline,
+      TIMEOUT_MS,
+    );
+    if (turn.stopped) {
+      return { run_id: runId, inserted: 0, skipped: 0, invalid: 0, events: [] };
     }
+    console.log(`[agentRunner] run=${runId} session idle — extraction turn complete`);
 
-    const outputText = outputChunks.join('');
-
-    const jsonMatch = outputText.match(/\[[\s\S]*\]/);
-
-    // Some agents submit through the ingest endpoint rather than returning a
-    // JSON array. Only accept that path when this exact run has durable output
-    // or counters; otherwise prose/no output is an extraction failure.
-    if (!jsonMatch) {
-      const evidence = await readRunEvidence(runId);
-      if (evidence?.status === 'stopped') {
-        return { run_id: runId, inserted: 0, skipped: 0, invalid: 0, events: [] };
-      }
-      if (!hasDirectPostEvidence(evidence)) {
-        throw new Error('Agent returned no JSON array and no direct-post output was recorded for this run');
-      }
-      await pool.query(
-        `UPDATE agent_runs SET status='completed', finished_at=NOW()
-         WHERE id=? AND status='running'`,
-        [runId]
-      );
-      return {
-        run_id: runId,
-        inserted: nonNegativeCount(evidence.events_extracted),
-        skipped: nonNegativeCount(evidence.events_skipped_dup),
-        invalid: nonNegativeCount(evidence.events_errored),
-        events: [],
-      };
-    }
-
+    let repairAttempts = 0;
+    const maxRepairAttempts = jsonRepairAttempts();
     let events: any[];
-    try {
-      events = JSON.parse(jsonMatch[0]);
-    } catch {
+
+    while (true) {
+      const parsed = parseAgentOutput(turn.outputText);
+      if (parsed.ok) {
+        // A repair prompt explicitly forbids direct posting, but check anyway
+        // before persisting its response so a disobedient repair turn cannot
+        // duplicate an event it already submitted.
+        if (repairAttempts > 0) {
+          const repairEvidence = await readRunEvidence(runId);
+          if (repairEvidence?.status === 'stopped') {
+            return { run_id: runId, inserted: 0, skipped: 0, invalid: 0, events: [] };
+          }
+          if (hasDirectPostEvidence(repairEvidence)) {
+            return completeFromDirectPost(runId, repairEvidence);
+          }
+        }
+        events = parsed.events;
+        break;
+      }
+
+      // Preserve the existing direct-post path: prose or malformed output is
+      // successful only when this exact run has durable counters or rows.
       const evidence = await readRunEvidence(runId);
       if (evidence?.status === 'stopped') {
         return { run_id: runId, inserted: 0, skipped: 0, invalid: 0, events: [] };
       }
-      if (!hasDirectPostEvidence(evidence)) {
-        throw new Error('Agent returned malformed JSON and no direct-post output was recorded for this run');
+      if (hasDirectPostEvidence(evidence)) {
+        return completeFromDirectPost(runId, evidence);
       }
-      await pool.query(
-        `UPDATE agent_runs SET status='completed', finished_at=NOW()
-         WHERE id=? AND status='running'`,
-        [runId]
-      );
-      return {
-        run_id: runId,
-        inserted: nonNegativeCount(evidence.events_extracted),
-        skipped: nonNegativeCount(evidence.events_skipped_dup),
-        invalid: nonNegativeCount(evidence.events_errored),
-        events: [],
-      };
-    }
 
-    if (!Array.isArray(events)) {
-      throw new Error('Agent output JSON must be an array');
+      if (repairAttempts >= maxRepairAttempts) {
+        throw new Error(outputIssueMessage(parsed.issue, repairAttempts));
+      }
+
+      repairAttempts++;
+      console.warn(
+        `[agentRunner] run=${runId} invalid agent output (${parsed.issue}); requesting bounded repair ${repairAttempts}/${maxRepairAttempts}`,
+      );
+      await client.beta.sessions.events.send(session.id, {
+        events: [{
+          type: 'user.message',
+          content: [{ type: 'text', text: repairPrompt(parsed.issue) }],
+        }],
+      } as any);
+
+      turn = await pollSessionTurn(
+        client,
+        session.id,
+        runId,
+        deadline,
+        TIMEOUT_MS,
+        turn.afterCreatedAt,
+      );
+      if (turn.stopped) {
+        return { run_id: runId, inserted: 0, skipped: 0, invalid: 0, events: [] };
+      }
+      console.log(`[agentRunner] run=${runId} repair turn ${repairAttempts} complete`);
     }
 
     const preWriteStatusResult = await pool.query(

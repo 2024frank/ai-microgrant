@@ -67,10 +67,28 @@ function makeSessionEvents(events: object[] = [AGENT_EVENT]) {
   };
 }
 
+function makeSessionText(text: string, sequence = 1) {
+  return {
+    data: [
+      {
+        type: 'agent.message',
+        created_at: `2026-01-01T00:00:${String(sequence).padStart(2, '0')}Z`,
+        content: [{ type: 'text', text }],
+      },
+      {
+        type: 'session.status_idle',
+        created_at: `2026-01-01T00:00:${String(sequence + 1).padStart(2, '0')}Z`,
+        stop_reason: { type: 'end_turn' },
+      },
+    ],
+  };
+}
+
 // ── Setup ─────────────────────────────────────────────────────────────────────
 beforeEach(() => {
   jest.clearAllMocks();
   process.env.NEXT_PUBLIC_APP_URL = 'http://localhost:3000';
+  delete process.env.AGENT_JSON_REPAIR_ATTEMPTS;
 
   mockGetHistory.mockResolvedValue({ count: 0, prompt_block: '' });
 
@@ -166,7 +184,9 @@ describe('triggerAgentRun — happy path', () => {
   it('updates agent_run completed with events_found and events_extracted', async () => {
     await triggerAgentRun(1, 99, 'test-key', 'test-env');
     const updateCall = db.default.query.mock.calls.find(
-      (c: any[]) => typeof c[0] === 'string' && c[0].includes('events_found')
+      (c: any[]) => typeof c[0] === 'string'
+        && c[0].includes("status='completed'")
+        && c[0].includes('events_found=?')
     );
     expect(updateCall).toBeDefined();
     expect(updateCall[1]).toEqual(expect.arrayContaining([1, 1, 99]));
@@ -320,6 +340,7 @@ describe('triggerAgentRun — agent failures', () => {
       (c: any[]) => typeof c[0] === 'string' && c[0].includes("status='completed'")
     );
     expect(completedUpdate?.[0]).toContain("status='running'");
+    expect(mockSessionsEventsSend).toHaveBeenCalledTimes(1);
   });
 
   it('does not treat a direct-post error counter by itself as successful output', async () => {
@@ -358,6 +379,78 @@ describe('triggerAgentRun — agent failures', () => {
 
     await expect(triggerAgentRun(1, 99, 'test-key', 'test-env'))
       .rejects.toThrow('malformed JSON');
+    expect(mockSessionsEventsSend).toHaveBeenCalledTimes(2);
+  });
+
+  it('repairs malformed JSON once in the same session without re-running tools', async () => {
+    mockSessionsEventsList
+      .mockResolvedValueOnce(makeSessionText('[{"eventType":"ot",}]', 1))
+      .mockResolvedValueOnce(makeSessionText(JSON.stringify([AGENT_EVENT]), 3));
+
+    const result = await triggerAgentRun(1, 99, 'test-key', 'test-env');
+
+    expect(result).toMatchObject({ inserted: 1, invalid: 0 });
+    expect(mockSessionsEventsSend).toHaveBeenCalledTimes(2);
+    expect(mockSessionsEventsSend.mock.calls[1][0]).toBe('sess_xyz');
+    const repairMessage = mockSessionsEventsSend.mock.calls[1][1]
+      .events[0].content[0].text;
+    expect(repairMessage).toContain('Do not browse again, invoke tools, or POST');
+    expect(repairMessage).toContain('Correct only the event data already gathered');
+    expect(repairMessage).toContain('exactly one raw JSON array');
+  });
+
+  it('caps configurable repair attempts at the hard maximum', async () => {
+    process.env.AGENT_JSON_REPAIR_ATTEMPTS = '99';
+    mockSessionsEventsList.mockResolvedValue(makeSessionText('[{"eventType":"ot",}]', 1));
+
+    await expect(triggerAgentRun(1, 99, 'test-key', 'test-env'))
+      .rejects.toThrow('after 2 bounded repair attempts');
+
+    expect(mockSessionsEventsSend).toHaveBeenCalledTimes(3);
+    expect(mockSessionsEventsList).toHaveBeenCalledTimes(3);
+  });
+
+  it('parses separate balanced arrays without greedily merging them', async () => {
+    mockSessionsEventsList.mockResolvedValue(makeSessionText(
+      `Allowed values: [ot, an, jp]\n${JSON.stringify([AGENT_EVENT])}`,
+      1,
+    ));
+
+    const result = await triggerAgentRun(1, 99, 'test-key', 'test-env');
+
+    expect(result.inserted).toBe(1);
+    expect(mockSessionsEventsSend).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not duplicate a direct post made during a repair turn', async () => {
+    mockSessionsEventsList
+      .mockResolvedValueOnce(makeSessionText('[{"eventType":"ot",}]', 1))
+      .mockResolvedValueOnce(makeSessionText(JSON.stringify([AGENT_EVENT]), 3));
+    let evidenceReads = 0;
+    db.default.query.mockImplementation((sql: unknown) =>
+      typeof sql === 'string' && /SELECT status FROM agent_runs/i.test(sql)
+        ? Promise.resolve([[{ status: 'running' }]])
+        : typeof sql === 'string' && /SELECT ar\.status, ar\.events_found/i.test(sql)
+        ? Promise.resolve([[++evidenceReads === 1
+            ? {
+                status: 'running', events_found: 0, events_extracted: 0,
+                events_skipped_dup: 0, events_errored: 0, persisted_events: 0,
+              }
+            : {
+                status: 'completed', events_found: 1, events_extracted: 1,
+                events_skipped_dup: 0, events_errored: 0, persisted_events: 1,
+              },
+          ]])
+        : typeof sql === 'string' && /FROM sources/i.test(sql)
+        ? Promise.resolve([[SOURCE]])
+        : Promise.resolve([{ affectedRows: 1 }]),
+    );
+
+    const result = await triggerAgentRun(1, 99, 'test-key', 'test-env');
+
+    expect(result).toMatchObject({ inserted: 1, skipped: 0, events: [] });
+    expect(db.mockConn.beginTransaction).not.toHaveBeenCalled();
+    expect(mockSessionsEventsSend).toHaveBeenCalledTimes(2);
   });
 
   it('does not persist output after the run lease has been recovered as failed', async () => {
@@ -371,6 +464,14 @@ describe('triggerAgentRun — agent failures', () => {
       }
       if (typeof sql === 'string' && /FROM sources/i.test(sql)) {
         return Promise.resolve([[SOURCE]]);
+      }
+      if (typeof sql === 'string' && /SELECT ar\.status, ar\.events_found/i.test(sql)) {
+        return Promise.resolve([[
+          {
+            status: 'running', events_found: 0, events_extracted: 0,
+            events_skipped_dup: 0, events_errored: 0, persisted_events: 0,
+          },
+        ]]);
       }
       return Promise.resolve([{ affectedRows: 1 }]);
     });
@@ -423,7 +524,8 @@ describe('triggerAgentRun — DB write failure', () => {
     const result = await triggerAgentRun(1, 99, 'test-key', 'test-env');
     expect(result.inserted).toBe(0);
     expect(result.invalid).toBe(1);
-    expect(result.errors?.[0].issues).toContainEqual(expect.objectContaining({
+    const issues = 'errors' in result ? result.errors?.[0].issues : undefined;
+    expect(issues).toContainEqual(expect.objectContaining({
       code: 'database_error',
     }));
     const completedUpdate = db.default.query.mock.calls.find(
