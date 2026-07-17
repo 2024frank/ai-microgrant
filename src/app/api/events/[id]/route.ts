@@ -27,6 +27,8 @@ export async function GET(
             re.event_type, re.sponsors, re.post_type_ids, re.sessions,
             re.location_type, re.location, re.place_name, re.room_num, re.url_link,
             re.display, re.buttons, re.website, re.image_cdn_url,
+            ((re.image_data IS NOT NULL AND re.image_data <> '')
+              OR (re.image_cdn_url IS NOT NULL AND re.image_cdn_url <> '')) AS has_image,
             re.calendar_source_name, re.calendar_source_url, re.ingested_post_url,
             re.geo_scope, re.geo_json, re.status, re.sent_for_correction,
             re.communityhub_post_id, re.communityhub_moderation_status,
@@ -54,6 +56,7 @@ export async function GET(
 
   const parsed = {
     ...event,
+    has_image:     Boolean(event.has_image),
     sponsors:      pj(event.sponsors,      []),
     post_type_ids: pj(event.post_type_ids, []),
     sessions:      pj(event.sessions,      []),

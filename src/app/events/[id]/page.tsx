@@ -49,6 +49,32 @@ export default function EventDeepLinkPage() {
   const [sendingBack,     setSendingBack]     = useState(false);
   const [sendBackMsg,     setSendBackMsg]     = useState('');
 
+  // Poster served through the app's image endpoint so stored-bytes posters
+  // (and posters whose third-party URL has since died) still display.
+  const [posterUrl, setPosterUrl] = useState('');
+  useEffect(() => {
+    if (!event?.has_image) { setPosterUrl(''); return; }
+    const controller = new AbortController();
+    let objectUrl = '';
+    fetch(`/api/events/${id}/image`, {
+      headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+      signal: controller.signal,
+    })
+      .then(response => (response.ok ? response.blob() : Promise.reject(response.status)))
+      .then(blob => {
+        objectUrl = URL.createObjectURL(blob);
+        setPosterUrl(objectUrl);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setPosterUrl('');
+      });
+    return () => {
+      controller.abort();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- event identity is captured by has_image + updated_at
+  }, [id, authToken, event?.has_image, event?.updated_at]);
+
   useEffect(() => {
     const auth = getAuth(firebaseApp);
     return onAuthStateChanged(auth, async (u) => {
@@ -207,9 +233,9 @@ export default function EventDeepLinkPage() {
         </div>
 
         <div style={{ background:'white', borderRadius:12, overflow:'hidden', boxShadow:'0 2px 16px rgba(0,0,0,0.08)' }}>
-          {event.image_cdn_url && (
-            // eslint-disable-next-line @next/next/no-img-element -- event images can come from unconfigured third-party hosts
-            <img src={event.image_cdn_url} alt={event.title}
+          {posterUrl && (
+            // eslint-disable-next-line @next/next/no-img-element -- authenticated same-origin blob URL from the app's poster endpoint
+            <img src={posterUrl} alt={event.title}
               style={{ width:'100%', height:200, objectFit:'cover', display:'block' }}/>
           )}
 

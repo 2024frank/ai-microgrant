@@ -37,7 +37,7 @@ type SweepItem = {
   event_id: number;
   decision: string;
   changed_fields: string[];
-  image_action?: 'materialized' | 'removed' | 'flagged';
+  image_action?: 'materialized' | 'removed' | 'flagged' | 'discovered';
   error?: string;
 };
 
@@ -87,6 +87,31 @@ async function handle(req: NextRequest) {
       let imageDataUpdate: string | null | undefined;
       let imageUrlUpdate: string | null | undefined;
       const staysInQueue = plan.decision === 'leave' || plan.decision === 'correct';
+
+      // Events extracted without any poster: the source page's own share
+      // metadata (og:image) names the image the source uses for this event.
+      const hasAnyImage = Boolean((row as any).image_data)
+        || Boolean(typeof row.image_cdn_url === 'string' && row.image_cdn_url);
+      const sourcePage = typeof (row as any).calendar_source_url === 'string'
+        ? String((row as any).calendar_source_url)
+        : '';
+      if (staysInQueue && !hasAnyImage && /^https?:\/\//i.test(sourcePage) && imageBudget > 0) {
+        imageBudget -= 1;
+        try {
+          const { discoverSourcePageImage } = await import('@/lib/sourcePageImage');
+          const discovered = await discoverSourcePageImage(sourcePage);
+          if (discovered) {
+            const { loadImageAsJpeg } = await import('@/lib/safeRemoteImage');
+            const jpeg = await loadImageAsJpeg(discovered);
+            imageDataUpdate = `data:image/jpeg;base64,${jpeg.toString('base64')}`;
+            imageUrlUpdate = discovered;
+            item.image_action = 'discovered';
+          }
+        } catch {
+          // A page without a usable share image is normal; never a blocker.
+        }
+      }
+
       const externalImage = typeof row.image_cdn_url === 'string'
         && /^https?:\/\//i.test(row.image_cdn_url)
         && !(row as any).image_data;

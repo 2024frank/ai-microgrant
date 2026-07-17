@@ -7,9 +7,13 @@ jest.mock('@/lib/safeRemoteImage', () => ({
 jest.mock('@/lib/adminContact', () => ({
   getAdminContact: jest.fn().mockResolvedValue('admin@oberlin.edu'),
 }));
+jest.mock('@/lib/sourcePageImage', () => ({
+  discoverSourcePageImage: jest.fn().mockResolvedValue(null),
+}));
 
 const db = require('@/lib/db');
 const { loadImageAsJpeg } = jest.requireMock('@/lib/safeRemoteImage');
+const { discoverSourcePageImage } = jest.requireMock('@/lib/sourcePageImage');
 
 function makeReq(secret = 'test-cron-secret') {
   return new NextRequest('http://localhost/api/agent/queue-conformance', {
@@ -71,6 +75,7 @@ beforeEach(() => {
   db.mockConn.release = jest.fn();
   (loadImageAsJpeg as jest.Mock).mockClear()
     .mockResolvedValue(Buffer.from('poster-bytes'));
+  (discoverSourcePageImage as jest.Mock).mockClear().mockResolvedValue(null);
 });
 
 describe('POST /api/agent/queue-conformance', () => {
@@ -118,6 +123,43 @@ describe('POST /api/agent/queue-conformance', () => {
     expect(String(update![1][0])).toBe(
       `data:image/jpeg;base64,${Buffer.from('poster-bytes').toString('base64')}`,
     );
+  });
+
+  it('discovers a missing poster from the source page share metadata', async () => {
+    (discoverSourcePageImage as jest.Mock).mockResolvedValueOnce(
+      'https://cdn.example.org/storytime.jpg',
+    );
+    mockQueue([pendingRow({
+      image_cdn_url: null,
+      image_data: null,
+      calendar_source_url: 'https://library.example.org/event/storytime',
+    })]);
+
+    const data = await (await POST(makeReq())).json();
+
+    expect(data.items[0].image_action).toBe('discovered');
+    expect(discoverSourcePageImage).toHaveBeenCalledWith('https://library.example.org/event/storytime');
+    expect(loadImageAsJpeg).toHaveBeenCalledWith('https://cdn.example.org/storytime.jpg');
+    const update = db.mockConn.query.mock.calls.find(
+      ([sql]: [string]) => typeof sql === 'string' && sql.includes('UPDATE raw_events SET'),
+    );
+    // The discovered URL is stored for provenance and the bytes for serving.
+    expect(update![0]).toContain('image_cdn_url=?');
+    expect(update![0]).toContain('image_data=?');
+  });
+
+  it('leaves an event without a poster when the source page names none', async () => {
+    mockQueue([pendingRow({
+      image_cdn_url: null,
+      image_data: null,
+      calendar_source_url: 'https://library.example.org/event/storytime',
+    })]);
+
+    const data = await (await POST(makeReq())).json();
+
+    expect(data.items[0].image_action).toBeUndefined();
+    expect(data.ok).toBe(true);
+    expect(loadImageAsJpeg).not.toHaveBeenCalled();
   });
 
   it('removes a permanently unfetchable poster and flags a transient failure', async () => {

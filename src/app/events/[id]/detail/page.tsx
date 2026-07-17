@@ -48,6 +48,31 @@ export default function EventDetailPage() {
       .then(r => r.ok ? r.json() : null).then(d => { if (d) setRejection(d); }).catch(() => {});
   }, [ready, token, id]);
 
+  // Stored poster preview through the app endpoint (works for stored-bytes
+  // posters and posters whose remote URL has died).
+  const [storedPosterUrl, setStoredPosterUrl] = useState('');
+  useEffect(() => {
+    if (!token || !event?.has_image) { setStoredPosterUrl(''); return; }
+    const controller = new AbortController();
+    let objectUrl = '';
+    fetch(`/api/events/${id}/image`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    })
+      .then(response => (response.ok ? response.blob() : Promise.reject(response.status)))
+      .then(blob => {
+        objectUrl = URL.createObjectURL(blob);
+        setStoredPosterUrl(objectUrl);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setStoredPosterUrl('');
+      });
+    return () => {
+      controller.abort();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [token, id, event?.has_image, event?.updated_at]);
+
   const save = useCallback(async (changes: Record<string, any>) => {
     if (!Object.keys(changes).length) return;
     setSaveState('saving');
@@ -330,10 +355,16 @@ export default function EventDetailPage() {
             <Field label="Image URL">
               <input value={field('image_cdn_url') || ''} onChange={e => set('image_cdn_url', e.target.value)}
                 disabled={!canEdit} style={{ ...inputStyle, marginBottom: 6 }} placeholder="https://…"/>
-              {(field('image_cdn_url') || event.image_cdn_url) && (
+              {edits.image_cdn_url ? (
+                // A freshly typed URL previews directly from its host.
                 // eslint-disable-next-line @next/next/no-img-element -- reviewer preview accepts arbitrary source hosts
-                <img src={field('image_cdn_url') || event.image_cdn_url} alt="" style={{ maxHeight: 100, borderRadius: 6, objectFit: 'cover', marginTop: 4 }}/>
-              )}
+                <img src={edits.image_cdn_url} alt="" style={{ maxHeight: 100, borderRadius: 6, objectFit: 'cover', marginTop: 4 }}/>
+              ) : storedPosterUrl ? (
+                // The stored poster serves through the app endpoint so
+                // stored-bytes posters display even without a live remote URL.
+                // eslint-disable-next-line @next/next/no-img-element -- authenticated same-origin blob URL
+                <img src={storedPosterUrl} alt="" style={{ maxHeight: 100, borderRadius: 6, objectFit: 'cover', marginTop: 4 }}/>
+              ) : null}
             </Field>
 
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', paddingTop: 4 }}>
