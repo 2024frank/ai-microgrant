@@ -27,6 +27,7 @@ const VALID_EVENT = {
   postTypeId: [8],
   sessions: [{ startTime: 1_800_000_000, endTime: 1_800_003_600 }],
   locationType: 'ne',
+  image_cdn_url: 'https://images.example.org/poster.jpg',
   display: 'all',
 };
 

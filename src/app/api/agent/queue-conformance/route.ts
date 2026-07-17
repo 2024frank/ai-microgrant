@@ -173,6 +173,21 @@ async function handle(req: NextRequest) {
         }
       }
 
+      // The image requirement holds through resweeps: an event that still
+      // has no poster after materialization and discovery stays blocked. An
+      // explicit removal (imageUrlUpdate === null) discounts the stored URL.
+      const hasImageNow = Boolean((row as any).image_data)
+        || (typeof imageDataUpdate === 'string' && imageDataUpdate.length > 0)
+        || (imageUrlUpdate === undefined
+          && Boolean(typeof row.image_cdn_url === 'string' && row.image_cdn_url));
+      if (staysInQueue && !hasImageNow) {
+        imageIssues.push(issue(
+          'image_cdn_url',
+          'image_missing',
+          'the agent supplied no event image; add the image from the source page before publishing',
+        ));
+      }
+
       const validationErrors = [...plan.validation_errors, ...imageIssues];
       const conn = await pool.getConnection();
       try {

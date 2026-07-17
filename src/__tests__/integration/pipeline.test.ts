@@ -73,6 +73,7 @@ const SOURCE = {
 const AGENT_OUTPUT_EVENTS = [
   {
     eventType:            'ot',
+    image_cdn_url:        'https://images.example.org/poster.jpg',
     title:                'Jazz Ensemble Concert',
     description:          'The Oberlin Jazz Ensemble performs original compositions and jazz standards.',
     extendedDescription:  'Free admission. Seating is first come, first served. Doors open 30 min before.',
@@ -92,6 +93,7 @@ const AGENT_OUTPUT_EVENTS = [
   },
   {
     eventType:            'ot',
+    image_cdn_url:        'https://images.example.org/poster.jpg',
     title:                'Documentary Film Night',
     description:          'Screening of an award-winning environmental documentary followed by discussion.',
     sponsors:             ['Apollo Theatre'],

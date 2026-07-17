@@ -344,10 +344,16 @@ export default function ReviewEventPage() {
   const calendarSourceName = String(field('calendar_source_name', ''));
   const calendarSourceUrl = String(field('calendar_source_url', ''));
   const ingestedPostUrl = String(field('ingested_post_url', ''));
-  const ingestionValidationIssues = parseJson<Array<{ path?: string; message?: string }>>(
+  // Issues with a dedicated readiness item below are filtered out of the
+  // generic ingestion dump so reviewers see one clear instruction, not a
+  // raw validation path.
+  const allIngestionIssues = parseJson<Array<{ path?: string; code?: string; message?: string }>>(
     event?.validation_errors,
     [],
   );
+  const ingestionValidationIssues = allIngestionIssues.filter(item => (
+    item.code !== 'end_equals_start' && item.code !== 'image_missing'
+  ));
   const rejectionReasonCodes = normalizeStringArray(event?.rejection_reason_codes);
   const rejectionReviewerNote = String(event?.rejection_reviewer_note ?? '').trim();
   const isPreservedDuplicate = event?.status === 'duplicate';
@@ -446,6 +452,26 @@ export default function ReviewEventPage() {
             ? `${sessions.length} valid session${sessions.length === 1 ? '' : 's'}; at least one is ongoing or upcoming.`
             : 'Every session has ended. Reject or correct this draft before publishing.',
         pass: validSessions && hasCurrentSession,
+      },
+      {
+        id: 'session-end',
+        label: 'End time',
+        detail: postKind !== 'an' && sessions.some(session => (
+          Number(session.startTime) > 0 && Number(session.endTime) === Number(session.startTime)
+        ))
+          ? 'The source stated no end time. Set when each session ends; the calendar cannot publish an event that ends the moment it starts.'
+          : 'Every session ends after it starts.',
+        pass: postKind === 'an' || !sessions.some(session => (
+          Number(session.startTime) > 0 && Number(session.endTime) === Number(session.startTime)
+        )),
+      },
+      {
+        id: 'poster',
+        label: 'Event image',
+        detail: (imageUrl || event?.has_image_data)
+          ? 'A poster is attached.'
+          : 'No image came from the source. Paste the image URL from the event page; events publish with their source image.',
+        pass: Boolean(imageUrl || event?.has_image_data),
       },
       {
         id: 'location',
@@ -994,6 +1020,9 @@ export default function ReviewEventPage() {
                       <label className="field__label" htmlFor="record-image">Image URL</label>
                         <input id="record-image" className="input" type="url" aria-invalid={Boolean(imageUrl && !validHttpUrl(imageUrl))} value={imageUrl} onChange={event => setField('image_cdn_url', event.target.value)} placeholder="https://…" />
                       <span className="field__hint">CommunityHub receives a stable application-served poster URL, not the third-party URL directly.</span>
+                      {!imageUrl && !event?.has_image_data && (
+                        <div className="field__error">No poster is attached. Paste the image URL from the event's source page.</div>
+                      )}
                     </div>
                   </StudioSection>
 

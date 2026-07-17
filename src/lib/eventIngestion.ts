@@ -625,6 +625,17 @@ export async function persistExtractedEvents(
         ? payload.image_cdn_url ?? null
         : null;
 
+      // The contract requires the source's event image; an event that
+      // arrives without one is held from publishing until a reviewer adds
+      // it (corrections are exempt so a fix for another field can land).
+      if (!imageData && !storedImageUrl && !fixedFromId) {
+        imageIssues.push(issue(
+          'image_cdn_url',
+          'image_missing',
+          'the agent supplied no event image; add the image from the source page before publishing',
+        ));
+      }
+
       const validationErrors = mergeIssues(issues, imageIssues);
       const hadValidationErrors = validationErrors.length > 0;
       comparisonEntry.issues = validationErrors;

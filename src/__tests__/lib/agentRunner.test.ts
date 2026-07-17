@@ -43,6 +43,7 @@ const SOURCE = {
 
 const AGENT_EVENT = {
   eventType: 'ot', title: 'Jazz Night', description: 'Live jazz at Apollo.',
+  image_cdn_url: 'https://images.example.org/poster.jpg',
   sponsors: ['Apollo Theatre'], postTypeId: [8],
   sessions: [{ startTime: 2000000000, endTime: 2000003600 }],
   locationType: 'ph2', location: '19 E College St, Oberlin, OH 44074',

@@ -46,7 +46,7 @@ Every object must follow this exact contract:
 - description: one complete factual sentence, 10-200 characters.
 - Punctuation: never use em dashes or en dashes in any text field; write a plain hyphen (-) or restructure the sentence.
 - extendedDescription: optional factual detail, at most 1000 characters. Never include URLs, the street address, or facts already carried by the dedicated location, date, time, registration, sponsor, or contact fields; never state the event's date or time in description or extendedDescription because the sessions field carries the schedule and the calendar displays it. Never pad it with filler or invented content. When the entire source description fits within 200 characters, put it in description and omit extendedDescription entirely. Refer to the venue by its actual name (for example "at Common Ground"), never ambiguously as "here" or "there"; if such a sentence is unnecessary, omit it.
-- image_cdn_url: when the source page displays an image for the event, set this to that image's public HTTPS URL. An event without its source image is incomplete for review.
+- image_cdn_url: REQUIRED. Before returning any event, find its image on the source page (the event photo, flyer, or the page's share image / og:image all count) and set image_cdn_url to that image's public HTTPS URL. An event without its source image is incomplete for review and will be held from publishing. Omit the field only when you actually checked the event's page, including its share metadata, and it displays no image at all.
 - registrationUrl: when the source says registration is required, set this to the exact registration link. The platform places it in the registration button and ends the short description with "Registration required." Never put a registration URL inside description or extendedDescription.
 - sponsors: non-empty string array containing only organizers or sponsors supported by the current source.
 - postTypeId: non-empty number array using only these categories: ${CATEGORY_CONTRACT}.
@@ -192,7 +192,7 @@ export function assertSafePrompt(prompt: string) {
     'Registration required.',
     'never ambiguously as "here" or "there"',
     'never state the event\'s date or time in description',
-    'An event without its source image is incomplete for review.',
+    'An event without its source image is incomplete for review',
   ];
   for (const text of required) {
     if (!prompt.includes(text)) throw new Error(`new prompt is missing required contract text: ${text}`);
