@@ -44,6 +44,9 @@ type SweepItem = {
   image_action?: 'materialized' | 'removed' | 'flagged' | 'discovered'
     | 'no_source_image' | 'image_unusable';
   image_note?: string;
+  /** Diagnostics: the row's current source URL and whether it has any image. */
+  source_url?: string;
+  has_image?: boolean;
   error?: string;
 };
 
@@ -82,7 +85,15 @@ async function handle(req: NextRequest) {
   const items: SweepItem[] = [];
 
   for (const row of pending) {
-    const item: SweepItem = { event_id: Number(row.id), decision: 'leave', changed_fields: [] };
+    const item: SweepItem = {
+      event_id: Number(row.id),
+      decision: 'leave',
+      changed_fields: [],
+      source_url: (typeof (row as any).calendar_source_url === 'string'
+        ? String((row as any).calendar_source_url) : '').slice(0, 120),
+      has_image: Boolean((row as any).image_data)
+        || Boolean(typeof row.image_cdn_url === 'string' && row.image_cdn_url),
+    };
     items.push(item);
     try {
       const plan = planQueueConformance(row, { submitterEmail });
