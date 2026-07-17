@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   getRedirectResult,
   GoogleAuthProvider,
+  onAuthStateChanged,
   signInWithPopup,
   signInWithRedirect,
   signOut,
@@ -16,6 +17,28 @@ import { auth } from '@/lib/firebase';
 import styles from './login.module.css';
 
 const provider = new GoogleAuthProvider();
+provider.setCustomParameters({ prompt: 'select_account' });
+
+function authErrorCode(error: unknown): string {
+  return error && typeof error === 'object' && 'code' in error
+    ? String((error as { code?: unknown }).code || '')
+    : '';
+}
+
+function authErrorMessage(error: unknown): string {
+  switch (authErrorCode(error)) {
+    case 'auth/network-request-failed':
+      return 'Google sign-in could not reach the authentication service. Check your connection and try again.';
+    case 'auth/operation-not-allowed':
+      return 'Google sign-in is not enabled for this workspace. Contact your administrator.';
+    case 'auth/unauthorized-domain':
+      return 'This site is not authorized for Google sign-in. Contact your administrator.';
+    case 'auth/user-disabled':
+      return 'This Google account has been disabled. Contact your administrator.';
+    default:
+      return 'Sign-in did not complete. Try again or contact your administrator.';
+  }
+}
 
 const WORKFLOW = [
   'Check each record against its original source.',
@@ -53,20 +76,43 @@ export default function LoginPage() {
 
   useEffect(() => {
     let active = true;
+    let completing = false;
+
+    const completeOnce = async (firebaseUser: User) => {
+      if (!active || completing) return;
+      completing = true;
+      setLoading(true);
+      setError('');
+      try {
+        await completeWorkspaceSignIn(firebaseUser);
+      } catch (error) {
+        if (!active) return;
+        setError(authErrorMessage(error));
+        setLoading(false);
+      }
+    };
+
+    // Firebase can restore a valid signed-in user even when getRedirectResult()
+    // returns null (for example after a reload or browser storage recovery).
+    // Always observe auth state so a completed Google login becomes an app
+    // session instead of leaving the user stranded on this page.
+    const unsubscribe = onAuthStateChanged(auth, firebaseUser => {
+      if (firebaseUser) void completeOnce(firebaseUser);
+    });
+
     void getRedirectResult(auth)
       .then(credential => {
-        if (!credential || !active) return;
-        setLoading(true);
-        setError('');
-        return completeWorkspaceSignIn(credential.user);
+        if (credential) return completeOnce(credential.user);
       })
-      .catch(() => {
-        if (!active) return;
-        setError('Google redirect sign-in did not complete. Try again or contact your administrator.');
+      .catch(error => {
+        if (!active || completing) return;
+        setError(authErrorMessage(error));
         setLoading(false);
       });
+
     return () => {
       active = false;
+      unsubscribe();
     };
   }, [completeWorkspaceSignIn]);
 
@@ -74,12 +120,17 @@ export default function LoginPage() {
     setLoading(true);
     setError('');
     try {
+      // Recover a Firebase session that already exists but was not yet copied
+      // into the application's local session.
+      if (auth.currentUser) {
+        await completeWorkspaceSignIn(auth.currentUser);
+        return;
+      }
+
       const credential = await signInWithPopup(auth, provider);
       await completeWorkspaceSignIn(credential.user);
     } catch (caught: unknown) {
-      const code = caught && typeof caught === 'object' && 'code' in caught
-        ? String((caught as { code?: unknown }).code || '')
-        : '';
+      const code = authErrorCode(caught);
       if (code === 'auth/popup-closed-by-user') {
         setLoading(false);
         return;
@@ -94,9 +145,7 @@ export default function LoginPage() {
           return;
         }
       }
-      setError(
-        'Sign-in did not complete. Try again or contact your administrator.',
-      );
+      setError(authErrorMessage(caught));
       setLoading(false);
     }
   }
