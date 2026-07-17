@@ -2,10 +2,13 @@
 
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import {
   GoogleAuthProvider,
+  isSignInWithEmailLink,
   onAuthStateChanged,
+  sendSignInLinkToEmail,
+  signInWithEmailLink,
   signInWithPopup,
   signOut,
   type User,
@@ -35,6 +38,11 @@ function authErrorMessage(error: unknown): string {
       return 'A second Google sign-in request interrupted the first one. Try again once.';
     case 'auth/popup-blocked':
       return 'Chrome blocked the Google sign-in window. Allow popups for this site, then try again.';
+    case 'auth/invalid-email':
+      return 'Enter a valid staff email address.';
+    case 'auth/invalid-action-code':
+    case 'auth/expired-action-code':
+      return 'This email sign-in link is invalid or expired. Request a new link and try again.';
     case 'auth/operation-not-allowed':
       return 'Google sign-in is not enabled for this workspace. Contact your administrator.';
     case 'auth/unauthorized-domain':
@@ -55,6 +63,9 @@ const WORKFLOW = [
 export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [email, setEmail] = useState('');
+  const [emailLinkSent, setEmailLinkSent] = useState(false);
+  const [pendingEmailLink, setPendingEmailLink] = useState(false);
   const router = useRouter();
 
   const completeWorkspaceSignIn = useCallback(async (firebaseUser: User) => {
@@ -104,6 +115,31 @@ export default function LoginPage() {
       if (firebaseUser) void completeOnce(firebaseUser);
     });
 
+    const finishEmailLink = async () => {
+      if (!isSignInWithEmailLink(auth, window.location.href)) return;
+
+      const storedEmail = localStorage.getItem('emailForSignIn');
+      if (!storedEmail) {
+        setPendingEmailLink(true);
+        setError('Enter the email address that received this link to finish signing in.');
+        return;
+      }
+
+      setLoading(true);
+      setError('');
+      try {
+        const credential = await signInWithEmailLink(auth, storedEmail, window.location.href);
+        localStorage.removeItem('emailForSignIn');
+        await completeOnce(credential.user);
+      } catch (emailLinkError) {
+        if (!active) return;
+        setError(authErrorMessage(emailLinkError));
+        setLoading(false);
+      }
+    };
+
+    void finishEmailLink();
+
     return () => {
       active = false;
       unsubscribe();
@@ -136,6 +172,38 @@ export default function LoginPage() {
         return;
       }
       setError(authErrorMessage(caught));
+      setLoading(false);
+    }
+  }
+
+  async function handleEmailLogin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail || !normalizedEmail.includes('@')) {
+      setError('Enter a valid staff email address.');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+    setEmailLinkSent(false);
+    try {
+      if (pendingEmailLink && isSignInWithEmailLink(auth, window.location.href)) {
+        const credential = await signInWithEmailLink(auth, normalizedEmail, window.location.href);
+        localStorage.removeItem('emailForSignIn');
+        await completeWorkspaceSignIn(credential.user);
+        return;
+      }
+
+      await sendSignInLinkToEmail(auth, normalizedEmail, {
+        url: `${window.location.origin}/login`,
+        handleCodeInApp: true,
+      });
+      localStorage.setItem('emailForSignIn', normalizedEmail);
+      setEmailLinkSent(true);
+      setLoading(false);
+    } catch (emailError) {
+      setError(authErrorMessage(emailError));
       setLoading(false);
     }
   }
@@ -220,6 +288,34 @@ export default function LoginPage() {
             )}
             <span>{loading ? 'Signing in…' : 'Continue with Google'}</span>
           </button>
+
+          <div className={styles.divider}><span>or</span></div>
+
+          <form className={styles.emailForm} onSubmit={handleEmailLogin}>
+            <label htmlFor="staff-email">
+              {pendingEmailLink ? 'Confirm your staff email' : 'Sign in without a popup'}
+            </label>
+            <input
+              id="staff-email"
+              name="email"
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={event => setEmail(event.target.value)}
+              placeholder="you@oberlin.edu"
+              disabled={loading}
+              required
+            />
+            <button type="submit" disabled={loading}>
+              {pendingEmailLink ? 'Finish sign in' : 'Email me a sign-in link'}
+            </button>
+          </form>
+
+          {emailLinkSent && (
+            <p className={styles.success} role="status">
+              Check your inbox. Open the sign-in link in this browser to continue.
+            </p>
+          )}
 
           <p className={styles.helpText}>
             Need access? Contact your CommunityHub administrator.
