@@ -4,11 +4,9 @@ import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import {
-  getRedirectResult,
   GoogleAuthProvider,
   onAuthStateChanged,
   signInWithPopup,
-  signInWithRedirect,
   signOut,
   type User,
 } from 'firebase/auth';
@@ -35,6 +33,8 @@ function authErrorMessage(error: unknown): string {
       return 'The Google sign-in window closed before authentication completed. Try again and keep it open until you return to the workspace.';
     case 'auth/cancelled-popup-request':
       return 'A second Google sign-in request interrupted the first one. Try again once.';
+    case 'auth/popup-blocked':
+      return 'Chrome blocked the Google sign-in window. Allow popups for this site, then try again.';
     case 'auth/operation-not-allowed':
       return 'Google sign-in is not enabled for this workspace. Contact your administrator.';
     case 'auth/unauthorized-domain':
@@ -98,23 +98,11 @@ export default function LoginPage() {
       }
     };
 
-    // Firebase can restore a valid signed-in user even when getRedirectResult()
-    // returns null (for example after a reload or browser storage recovery).
-    // Always observe auth state so a completed Google login becomes an app
-    // session instead of leaving the user stranded on this page.
+    // Always observe restored auth state so a completed popup login or page
+    // reload becomes an app session instead of leaving the user stranded here.
     const unsubscribe = onAuthStateChanged(auth, firebaseUser => {
       if (firebaseUser) void completeOnce(firebaseUser);
     });
-
-    void getRedirectResult(auth)
-      .then(credential => {
-        if (credential) return completeOnce(credential.user);
-      })
-      .catch(error => {
-        if (!active || completing) return;
-        setError(authErrorMessage(error));
-        setLoading(false);
-      });
 
     return () => {
       active = false;
@@ -143,14 +131,9 @@ export default function LoginPage() {
         return;
       }
       if (code === 'auth/popup-blocked') {
-        try {
-          await signInWithRedirect(auth, provider);
-          return;
-        } catch (redirectError) {
-          setError(authErrorMessage(redirectError));
-          setLoading(false);
-          return;
-        }
+        setError(authErrorMessage(caught));
+        setLoading(false);
+        return;
       }
       setError(authErrorMessage(caught));
       setLoading(false);

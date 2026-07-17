@@ -1,11 +1,6 @@
 import type { NextConfig } from "next";
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://ai-microgrant-research-oberlin.vercel.app';
-const FIREBASE_AUTH_DOMAIN = process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || 'ai-microgrant-research.firebaseapp.com';
-
-if (!/^[a-z0-9-]+\.(?:firebaseapp\.com|web\.app)$/.test(FIREBASE_AUTH_DOMAIN)) {
-  throw new Error('NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN must be a Firebase Hosting domain.');
-}
 
 const securityHeaders = [
   { key: 'X-DNS-Prefetch-Control',  value: 'on' },
@@ -32,21 +27,6 @@ const nextConfig: NextConfig = {
   },
   images: {
     formats: ['image/avif', 'image/webp'],
-  },
-  async rewrites() {
-    // Firebase redirect auth must use same-origin helper pages on browsers
-    // that partition third-party storage. Keep these as transparent rewrites;
-    // a 302 redirect would put the helper back on a cross-origin domain.
-    return [
-      {
-        source: '/__/auth/:path*',
-        destination: `https://${FIREBASE_AUTH_DOMAIN}/__/auth/:path*`,
-      },
-      {
-        source: '/__/firebase/:path*',
-        destination: `https://${FIREBASE_AUTH_DOMAIN}/__/firebase/:path*`,
-      },
-    ];
   },
   async headers() {
     return [
