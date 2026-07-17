@@ -10,8 +10,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Delete past events
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          curl -fsS -X POST "${{ secrets.APP_URL }}/api/cleanup" \
-            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
-            -H "Content-Type: application/json" | tee /tmp/result.json
-          cat /tmp/result.json
+          set -Eeuo pipefail
+          : "${APP_URL:?APP_URL secret is not configured}"
+          : "${CRON_SECRET:?CRON_SECRET secret is not configured}"
+          APP_URL="${APP_URL%/}"
+          RESPONSE="$RUNNER_TEMP/cleanup-response.json"
+          curl --silent --show-error --fail-with-body --retry 3 --retry-delay 2 \
+            --connect-timeout 10 --max-time 60 -X POST "$APP_URL/api/cleanup" \
+            -H "x-cron-secret: $CRON_SECRET" \
+            -H "Content-Type: application/json" | tee "$RESPONSE"
+          jq -e '
+            def nni: type == "number" and . >= 0 and floor == .;
+            type == "object"
+            and .ok == true
+            and .skipped_locked == false
+            and (.archived_event_counts | nni)
+            and (.deleted_past_events | nni)
+            and (.purged_poster_blobs | nni)
+            and (.purged_outbox_blobs | nni)
+            and (.deleted_old_runs | nni)
+          ' "$RESPONSE" >/dev/null

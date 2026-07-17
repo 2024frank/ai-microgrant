@@ -1,9 +1,12 @@
 import { NextRequest } from 'next/server';
 import pool from '@/lib/db';
 import { getDueScheduleSlot, validateCronExpression } from '@/lib/schedule';
+import { cronUnavailable, isCronAuthorized } from '@/lib/cronAuth';
 
 export const maxDuration = 60;
-const DISPATCH_LOOKBACK_MINUTES = 6 * 60;
+// GitHub scheduled workflows can be delayed or dropped for more than a day.
+// The database's source+slot claim still makes repeated checks idempotent.
+const DISPATCH_LOOKBACK_MINUTES = 30 * 60;
 const STALE_RUN_MINUTES = 10;
 
 type SourceRow = {
@@ -19,6 +22,10 @@ type DispatchResult = {
   status: 'dispatched' | 'skipped' | 'error';
   run_id?: number;
   error?: string;
+  reason?: string;
+  attempts?: number;
+  max_attempts?: number;
+  retry_after_seconds?: number;
 };
 
 async function readJson(response: Response): Promise<any> {
@@ -44,10 +51,11 @@ async function dispatchSource(
         'x-schedule-slot': slotIso,
       },
       cache: 'no-store',
+      signal: AbortSignal.timeout(15_000),
     });
     const body = await readJson(response);
 
-    if (response.ok) {
+    if (response.ok && Number.isSafeInteger(body.run_id) && body.run_id > 0) {
       return {
         source_id: source.id,
         source: source.name,
@@ -56,7 +64,20 @@ async function dispatchSource(
         run_id: body.run_id,
       };
     }
-    if (response.status === 409 && body.duplicate) {
+    if (response.ok) {
+      return {
+        source_id: source.id,
+        source: source.name,
+        slot: slotIso,
+        status: 'error',
+        error: 'Trigger returned success without a valid run id',
+        reason: 'invalid_trigger_response',
+      };
+    }
+    if (
+      response.status === 409
+      && (body.duplicate || body.reason === 'schedule_slot_retry_cooldown')
+    ) {
       return {
         source_id: source.id,
         source: source.name,
@@ -64,6 +85,10 @@ async function dispatchSource(
         status: 'skipped',
         run_id: body.run_id,
         error: body.reason || 'Run already claimed',
+        reason: body.reason,
+        attempts: body.attempts,
+        max_attempts: body.max_attempts,
+        retry_after_seconds: body.retry_after_seconds,
       };
     }
     return {
@@ -72,6 +97,9 @@ async function dispatchSource(
       slot: slotIso,
       status: 'error',
       error: body.error || `Trigger returned ${response.status}`,
+      reason: body.reason,
+      attempts: body.attempts,
+      max_attempts: body.max_attempts,
     };
   } catch (error) {
     return {
@@ -88,10 +116,10 @@ async function dispatchSource(
 // with Authorization: Bearer <CRON_SECRET>. Agent work runs in the trigger route.
 export async function GET(req: NextRequest) {
   const cronSecret = process.env.CRON_SECRET?.trim();
-  if (!cronSecret) {
+  if (!cronSecret || cronUnavailable()) {
     return Response.json({ error: 'CRON_SECRET is not configured' }, { status: 503 });
   }
-  if (req.headers.get('authorization') !== `Bearer ${cronSecret}`) {
+  if (!isCronAuthorized(req)) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -106,6 +134,7 @@ export async function GET(req: NextRequest) {
     return Response.json({ error: 'Unable to load scheduled sources' }, { status: 500 });
   }
 
+  const maintenanceErrors: string[] = [];
   let recoveredStaleRuns = 0;
   try {
     const recovery = await pool.query(
@@ -118,6 +147,7 @@ export async function GET(req: NextRequest) {
     recoveredStaleRuns = Number(recovery?.[0]?.affectedRows || 0);
   } catch (error) {
     console.error('[scheduler] stale-run recovery failed:', error);
+    maintenanceErrors.push('stale_run_recovery_failed');
   }
 
   let recoveredCorrectionRequests = 0;
@@ -150,6 +180,7 @@ export async function GET(req: NextRequest) {
     }
   } catch (error) {
     console.error('[scheduler] orphaned-correction recovery failed:', error);
+    maintenanceErrors.push('correction_recovery_failed');
   }
 
   const now = new Date();
@@ -168,8 +199,8 @@ export async function GET(req: NextRequest) {
       continue;
     }
     // GitHub's scheduled workflow can start well after its nominal minute.
-    // A six-hour window catches delayed slots without replaying an old day; the unique
-    // source+schedule_slot claim keeps repeated invocations idempotent.
+    // A 30-hour window catches a missed daily dispatch; the unique source+slot
+    // claim keeps repeated invocations idempotent.
     const slot = getDueScheduleSlot(
       source.schedule_cron,
       now,
@@ -183,15 +214,19 @@ export async function GET(req: NextRequest) {
     due.map(({ source, slot }) => dispatchSource(req, source, slot, cronSecret)),
   );
 
+  const failed = results.filter(result => result.status === 'error').length;
+  const hasErrors = maintenanceErrors.length > 0 || invalid.length > 0 || failed > 0;
+  const responseStatus = maintenanceErrors.length > 0 ? 500 : hasErrors ? 502 : 200;
   return Response.json({
     checked: sources.length,
     recovered_stale_runs: recoveredStaleRuns,
     recovered_correction_requests: recoveredCorrectionRequests,
+    maintenance_errors: maintenanceErrors,
     due: due.length,
     dispatched: results.filter(result => result.status === 'dispatched').length,
     skipped: results.filter(result => result.status === 'skipped').length,
-    failed: results.filter(result => result.status === 'error').length,
+    failed,
     invalid_schedules: invalid,
     results,
-  });
+  }, { status: responseStatus });
 }

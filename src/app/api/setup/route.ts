@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
       results.push({ email: admin.email, status: 'updated' });
     } else {
       await pool.query(
-        `INSERT INTO users (email, full_name, role, active, firebase_uid) VALUES (?,?,?,1,'')`,
+        `INSERT INTO users (email, full_name, role, active, firebase_uid) VALUES (?,?,?,1,NULL)`,
         [admin.email, admin.full_name, admin.role]
       );
       results.push({ email: admin.email, status: 'created' });

@@ -36,7 +36,7 @@ async function seed() {
 
     await pool.query(
       `INSERT INTO users (email, full_name, role, active, firebase_uid)
-       VALUES (?, ?, ?, 1, '')`,
+       VALUES (?, ?, ?, 1, NULL)`,
       [admin.email, admin.full_name, admin.role]
     );
     console.log(`✓ Created admin: ${admin.email}`);

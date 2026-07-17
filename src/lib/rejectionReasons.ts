@@ -8,6 +8,7 @@ export const REJECTION_REASONS = [
   { code: 'not_public_event', label: 'Private or invitation-only' },
   { code: 'wrong_post_type', label: 'Post kind or category is wrong' },
   { code: 'bad_location', label: 'Location is missing or wrong' },
+  { code: 'communityhub_rejected', label: 'Rejected by CommunityHub moderation' },
   { code: 'other', label: 'Other' },
 ] as const;
 

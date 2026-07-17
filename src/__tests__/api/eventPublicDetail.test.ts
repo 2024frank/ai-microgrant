@@ -11,6 +11,7 @@ const EVENT = {
   source_id: 3,
   title: 'Community Concert',
   status: 'pending',
+  communityhub_moderation_status: 'pending',
   sponsors: '[]',
   post_type_ids: '[]',
   sessions: '[]',
@@ -34,13 +35,23 @@ describe('GET /api/events/:id visibility', () => {
 
   it('serves an approved event publicly with public caching', async () => {
     db.default.query.mockResolvedValueOnce([[
-      { ...EVENT, status: 'approved' },
+      { ...EVENT, status: 'approved', communityhub_moderation_status: 'approved' },
     ]]);
 
     const response = await GET(new NextRequest('http://localhost/api/events/10'), context);
 
     expect(response.status).toBe(200);
     expect(response.headers.get('cache-control')).toContain('public');
+  });
+
+  it('hides legacy locally-approved records until external approval is verified', async () => {
+    db.default.query.mockResolvedValueOnce([[
+      { ...EVENT, status: 'approved', communityhub_moderation_status: 'unknown' },
+    ]]);
+
+    const response = await GET(new NextRequest('http://localhost/api/events/10'), context);
+
+    expect(response.status).toBe(404);
   });
 
   it('enforces reviewer source assignments for a pending event', async () => {

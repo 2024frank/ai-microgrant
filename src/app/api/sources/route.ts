@@ -80,23 +80,19 @@ export async function GET(req: NextRequest) {
   if (!user) return unauthorized();
 
   if (user.role !== 'admin') {
+    const scopeClause = user.canReviewAllSources
+      ? ''
+      : `AND EXISTS (
+          SELECT 1 FROM reviewer_sources rs
+          WHERE rs.reviewer_id=? AND rs.source_id=s.id
+        )`;
+    const scopeParams = user.canReviewAllSources ? [] : [user.id];
     const [rows] = await pool.query(
       `SELECT s.id, s.name
        FROM sources s
-       WHERE s.active=1 AND (
-         NOT EXISTS (
-           SELECT 1 FROM reviewer_sources rs0
-           JOIN users u0 ON u0.id=rs0.reviewer_id
-           WHERE u0.firebase_uid=?
-         )
-         OR EXISTS (
-           SELECT 1 FROM reviewer_sources rs
-           JOIN users u ON u.id=rs.reviewer_id
-           WHERE u.firebase_uid=? AND rs.source_id=s.id
-         )
-       )
+       WHERE s.active=1 ${scopeClause}
        ORDER BY s.name ASC`,
-      [user.uid, user.uid],
+      scopeParams,
     ) as any;
     return Response.json(Array.isArray(rows) ? rows : []);
   }
@@ -115,7 +111,8 @@ export async function GET(req: NextRequest) {
         const [countResult, runResult] = await Promise.all([
           pool.query(
             `SELECT COUNT(*) AS total_events,
-                    SUM(status='approved') AS total_approved,
+                    SUM(status='approved' AND communityhub_moderation_status='approved') AS total_approved,
+                    SUM(status='submitted') AS total_submitted,
                     SUM(status='pending') AS review_queue,
                     SUM(status='pending') AS pending_review,
                     SUM(status='pending_fix' OR (status='rejected' AND sent_for_correction=1)) AS pending_fix,
@@ -149,7 +146,10 @@ export async function GET(req: NextRequest) {
                (SELECT COUNT(*) FROM needs_fix)                                             AS pending_fix,
                (SELECT COUNT(*) FROM raw_events WHERE sent_for_correction = 1)              AS total_sent_for_fix,
                (SELECT COUNT(*) FROM raw_events WHERE corrected_from_id IS NOT NULL)        AS total_fixed,
-               (SELECT COUNT(*) FROM raw_events WHERE corrected_from_id IS NOT NULL AND status = 'approved') AS fixed_approved
+               (SELECT COUNT(*) FROM raw_events
+                WHERE corrected_from_id IS NOT NULL
+                  AND status = 'approved'
+                  AND communityhub_moderation_status = 'approved') AS fixed_approved
             `
           ) as any;
           fix_stats = fs;

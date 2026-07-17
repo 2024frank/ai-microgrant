@@ -31,20 +31,28 @@ describe('GET /api/admin/stats', () => {
     expect(res.status).toBe(200);
     expect(data.total_extracted).toBe(50);
     expect(data.approval_rate).toBe(70.0);
+    expect(db.default.query.mock.calls[1][0]).toContain(
+      "status='approved' AND communityhub_moderation_status='approved'",
+    );
+    expect(db.default.query.mock.calls[2][0]).toContain('0 AS total_approved');
   });
 
   it('returns by-source breakdown', async () => {
     db.default.query
       .mockResolvedValueOnce([[MOCK_ADMIN]])
       .mockResolvedValueOnce([[
-        { id: 1, name: 'Oberlin College', total: 30, approved: 25, rejected: 4, pending: 1, approval_rate: 83.3 },
-        { id: 2, name: 'Apollo Theatre',  total: 20, approved: 10, rejected: 6, pending: 4, approval_rate: 50.0 },
+        { id: 1, name: 'Oberlin College', total_current_records: 30, total_live: 25, approved_live: 25, rejected_live: 4, pending: 1, total_archived: 2, approved_archived: 0, rejected_archived: 1 },
+        { id: 2, name: 'Apollo Theatre',  total_current_records: 20, total_live: 10, approved_live: 10, rejected_live: 6, pending: 4, total_archived: 0, approved_archived: 0, rejected_archived: 0 },
       ]]);
 
     const res  = await GET(makeReq({ type: 'by-source' }));
     const data = await res.json();
     expect(data).toHaveLength(2);
     expect(data[0].name).toBe('Oberlin College');
+    expect(data[0]).toMatchObject({ total: 32, total_live: 25, approved: 25, approved_archived: 0 });
+    expect(db.default.query.mock.calls[1][0]).toContain(
+      "re.status='approved' AND re.communityhub_moderation_status='approved'",
+    );
   });
 
   it('returns rejection reasons flattened from JSON arrays', async () => {
@@ -90,6 +98,9 @@ describe('GET /api/admin/stats', () => {
     const data = await res.json();
     expect(data).toHaveLength(2);
     expect(data[0].extracted).toBe(10);
+    expect(db.default.query.mock.calls[1][0]).toContain(
+      "status='approved' AND communityhub_moderation_status='approved'",
+    );
   });
 
   it('returns 403 for reviewer', async () => {

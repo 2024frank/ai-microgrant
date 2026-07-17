@@ -116,4 +116,21 @@ describe('safe remote image fetching', () => {
     await expect(loadImageAsJpeg('data:image/jpeg;base64,bm90LWltYWdl'))
       .rejects.toEqual(expect.objectContaining<Partial<SafeImageError>>({ code: 'INVALID_IMAGE' }));
   });
+
+  it('rejects whitespace, malformed padding, and unsupported embedded formats', async () => {
+    await expect(loadImageAsJpeg('data:image/png;base64,AA AA'))
+      .rejects.toMatchObject({ code: 'UNSUPPORTED_TYPE' });
+    await expect(loadImageAsJpeg('data:image/png;base64,AA=A'))
+      .rejects.toMatchObject({ code: 'UNSUPPORTED_TYPE' });
+    await expect(loadImageAsJpeg('data:image/svg+xml;base64,PHN2Zz4='))
+      .rejects.toMatchObject({ code: 'UNSUPPORTED_TYPE' });
+  });
+
+  it('bounds embedded images by decoded bytes before Sharp allocation', async () => {
+    const oversized = Buffer.alloc(5 * 1024 * 1024 + 1).toString('base64');
+
+    await expect(loadImageAsJpeg(`data:image/png;base64,${oversized}`))
+      .rejects.toMatchObject({ code: 'TOO_LARGE' });
+    expect(getSharp).not.toHaveBeenCalled();
+  });
 });

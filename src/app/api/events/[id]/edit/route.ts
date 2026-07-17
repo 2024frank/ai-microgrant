@@ -4,6 +4,13 @@ import { forbidden, getAuthUser, unauthorized } from '@/lib/auth';
 import { isEventType } from '@/lib/eventTypes';
 import { validateCommunityHubPayload } from '@/lib/communityHubPayload';
 import { canAccessSource } from '@/lib/reviewerAccess';
+import { fieldAuditValue } from '@/lib/fieldAuditValue';
+import {
+  eventImageEditErrorStatus,
+  normalizeEventImageEdit,
+  type NormalizedEventImageEdit,
+} from '@/lib/eventImageEdits';
+import { boundedEventSnapshot, eventWithoutImageData } from '@/lib/eventImagePrivacy';
 
 const FIELD_TO_PAYLOAD: Record<string, string> = {
   event_type: 'eventType',
@@ -96,6 +103,19 @@ export async function POST(
     'calendar_source_name', 'calendar_source_url',
   ];
 
+  let imageEdit: NormalizedEventImageEdit | undefined;
+  if (Object.hasOwn(edits, 'image_cdn_url')) {
+    try {
+      imageEdit = await normalizeEventImageEdit(edits.image_cdn_url);
+      edits.image_cdn_url = imageEdit.imageCdnUrl;
+    } catch (error) {
+      const status = eventImageEditErrorStatus(error);
+      return Response.json({
+        error: error instanceof Error ? error.message : 'Invalid event image',
+      }, { status });
+    }
+  }
+
   const proposedEvent = {
     ...event,
     email:
@@ -134,6 +154,31 @@ export async function POST(
 
     for (const field of editableFields) {
       if (edits[field] === undefined) continue;
+      if (field === 'image_cdn_url' && imageEdit) {
+        const oldVal = String(event.image_data || event.image_cdn_url || '');
+        const newVal = String(imageEdit.imageData || imageEdit.imageCdnUrl || '');
+        const storageChanged = String(event.image_cdn_url || '') !== String(imageEdit.imageCdnUrl || '')
+          || String(event.image_data || '') !== String(imageEdit.imageData || '');
+        if (storageChanged) {
+          changedFields.push(field);
+          setClauses.push('image_cdn_url = ?', 'image_data = ?');
+          setVals.push(imageEdit.imageCdnUrl, imageEdit.imageData);
+          await conn.query(
+            `INSERT INTO field_edit_log
+               (raw_event_id, source_id, reviewer_id, field_name, old_value, new_value)
+             VALUES (?,?,?,?,?,?)`,
+            [
+              id,
+              event.source_id,
+              reviewerId,
+              field,
+              fieldAuditValue(oldVal),
+              fieldAuditValue(newVal),
+            ],
+          );
+        }
+        continue;
+      }
       const oldVal = String(event[field] ?? '');
       const newVal = storedValue(field, edits[field], normalizedPayload);
 
@@ -147,7 +192,14 @@ export async function POST(
           `INSERT INTO field_edit_log
              (raw_event_id, source_id, reviewer_id, field_name, old_value, new_value)
            VALUES (?,?,?,?,?,?)`,
-          [id, event.source_id, reviewerId, field, oldVal, newVal]
+          [
+            id,
+            event.source_id,
+            reviewerId,
+            field,
+            fieldAuditValue(oldVal),
+            fieldAuditValue(newVal),
+          ]
         );
       }
     }
@@ -165,7 +217,9 @@ export async function POST(
     if (changedFields.length > 0) {
       const correctionLines = changedFields.map(f => {
         const oldV = String(event[f] ?? '').slice(0, 300);
-        const newV = storedValue(f, edits[f], normalizedPayload).slice(0, 300);
+        const newV = f === 'image_cdn_url' && imageEdit
+          ? fieldAuditValue(imageEdit.imageData || imageEdit.imageCdnUrl || '').slice(0, 300)
+          : storedValue(f, edits[f], normalizedPayload).slice(0, 300);
         return `${f}: was "${oldV}" → corrected to "${newV}"`;
       });
       const fullNote = note.trim()
@@ -181,7 +235,7 @@ export async function POST(
           JSON.stringify(['field_correction']),
           fullNote,
           event.title,
-          JSON.stringify(event),
+          JSON.stringify(boundedEventSnapshot(event)),
         ]
       );
     }
@@ -196,7 +250,7 @@ export async function POST(
     return Response.json({
       ok:             true,
       changed_fields: changedFields,
-      event:          updated,
+      event:          eventWithoutImageData(updated),
       validation_errors: validationErrors,
       ready_to_publish: validationErrors.length === 0,
       feedback_recorded: changedFields.length > 0,

@@ -206,6 +206,12 @@ export default function ReviewEventPage() {
   const [screenIdsDraft, setScreenIdsDraft] = useState('');
   const [reviewNowSeconds, setReviewNowSeconds] = useState(0);
   const [timezoneLabel] = useState(getTimezoneLabel);
+  const [posterPreviewUrl, setPosterPreviewUrl] = useState('');
+  const eventLoaded = event !== null;
+  const eventHasImageData = Boolean(event?.has_image_data);
+  const eventImageUrl = String(event?.image_cdn_url || '');
+  const eventImageUpdatedAt = String(event?.updated_at || '');
+  const imageEditPending = Object.hasOwn(edits, 'image_cdn_url');
 
   useEffect(() => {
     reviewStartedAt.current = Date.now();
@@ -254,6 +260,47 @@ export default function ReviewEventPage() {
     return () => { cancelled = true; };
   }, [ready, token, params.id]);
 
+  useEffect(() => {
+    if (!token || !params.id || !eventLoaded) return;
+    if (imageEditPending) {
+      setPosterPreviewUrl('');
+      return;
+    }
+    if (!eventHasImageData && !eventImageUrl) {
+      setPosterPreviewUrl('');
+      return;
+    }
+    const controller = new AbortController();
+    let objectUrl = '';
+    fetch(`/api/events/${params.id}/image`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    })
+      .then(async response => {
+        if (!response.ok) throw new Error('Poster unavailable');
+        return response.blob();
+      })
+      .then(blob => {
+        objectUrl = URL.createObjectURL(blob);
+        setPosterPreviewUrl(objectUrl);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setPosterPreviewUrl('');
+      });
+    return () => {
+      controller.abort();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [
+    token,
+    params.id,
+    eventLoaded,
+    eventHasImageData,
+    eventImageUrl,
+    eventImageUpdatedAt,
+    imageEditPending,
+  ]);
+
   function field<T = any>(key: string, fallback: T = '' as T): T {
     if (edits[key] !== undefined) return edits[key] as T;
     if (event?.[key] !== null && event?.[key] !== undefined) return event[key] as T;
@@ -270,10 +317,12 @@ export default function ReviewEventPage() {
   }
 
   const isRejectedRecord = event?.status === 'rejected';
+  const isSubmittedRecord = event?.status === 'submitted';
+  const isPublishedRecord = event?.status === 'approved';
   const isCorrectionInProgress = event?.status === 'pending_fix'
     || (isRejectedRecord && (event?.sent_for_correction === true || Number(event?.sent_for_correction) === 1));
   const isRejected = isRejectedRecord && !isCorrectionInProgress;
-  const isReadOnly = isRejected || isCorrectionInProgress;
+  const isReadOnly = event?.status !== 'pending';
   const postKind = String(field('event_type', ''));
   const title = String(field('title', ''));
   const description = String(field('description', ''));
@@ -286,7 +335,6 @@ export default function ReviewEventPage() {
   const phone = String(field('phone', ''));
   const website = String(field('website', ''));
   const imageUrl = String(field('image_cdn_url', ''));
-  const safeImageUrl = imageUrl && validatePublicHttpUrl(imageUrl).success ? imageUrl : '';
   const display = String(field('display', ''));
   const sessions = normalizeSessions(field('sessions', []));
   const sponsors = normalizeStringArray(field('sponsors', []));
@@ -328,7 +376,7 @@ export default function ReviewEventPage() {
     const displayReady = ['all', 'ps', 'sps', 'ss'].includes(display) && (display !== 'ss' || screenIds.length > 0);
     const optionalContactsReady = (!contactEmail || validEmail(contactEmail))
       && (!website || validHttpUrl(website))
-      && (!imageUrl || Boolean(safeImageUrl))
+      && (!imageUrl || validatePublicHttpUrl(imageUrl).success)
       && (!phone || validPhone(phone));
     const sourceLinksReady = (!calendarSourceUrl || validHttpUrl(calendarSourceUrl))
       && (!ingestedPostUrl || validHttpUrl(ingestedPostUrl));
@@ -459,7 +507,7 @@ export default function ReviewEventPage() {
     if (field('place_name', '')) payload.placeName = field('place_name');
     if (field('room_num', '')) payload.roomNum = field('room_num');
     payload.buttons = buttons;
-    if (field('image_cdn_url', '') || event?.image_data) payload.image_cdn_url = '[application poster endpoint]';
+    if (field('image_cdn_url', '') || event?.has_image_data) payload.image_cdn_url = '[application poster endpoint]';
     return Object.fromEntries(Object.entries(payload).filter(([, value]) => value !== undefined));
   })();
 
@@ -531,7 +579,7 @@ export default function ReviewEventPage() {
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || 'CommunityHub did not accept this payload.');
-      showToast('Published to CommunityHub.');
+      showToast('Submitted to CommunityHub and awaiting moderation.');
       window.dispatchEvent(new Event('review-queue-updated'));
       window.setTimeout(() => router.push('/reviewer/queue'), 900);
     } catch (error) {
@@ -649,7 +697,7 @@ export default function ReviewEventPage() {
             <div className="studio-grid">
               <div>
                 <form className="studio-form" onSubmit={event => event.preventDefault()}>
-                  <fieldset className="studio-form__fieldset" disabled={isReadOnly} aria-label={isRejected ? 'Archived rejected payload' : isCorrectionInProgress ? 'Payload locked during correction' : 'Editable review payload'}>
+                  <fieldset className="studio-form__fieldset" disabled={isReadOnly} aria-label={isRejected ? 'Archived rejected payload' : isCorrectionInProgress ? 'Payload locked during correction' : isSubmittedRecord ? 'Payload awaiting CommunityHub moderation' : isPublishedRecord ? 'Published payload' : 'Editable review payload'}>
                   <StudioSection title="Post identity" hint="Post kind and categories are separate CommunityHub fields.">
                     <fieldset className="fieldset">
                       <legend className="fieldset__legend">Post kind · eventType</legend>
@@ -939,26 +987,32 @@ export default function ReviewEventPage() {
                 </form>
 
                 <div className="studio-actions" aria-label="Review actions">
-                  {isRejected ? (
+                  {isSubmittedRecord ? (
+                    <div className="studio-actions__status">CommunityHub accepted this submission. It is not published until CommunityHub moderation approves it.</div>
+                  ) : isPublishedRecord ? (
+                    <div className="studio-actions__status">CommunityHub moderation approved this record. It is published.</div>
+                  ) : isRejected ? (
                     <>
                       <div className="studio-actions__status">The rejected original stays in the audit trail. A successful correction creates a new pending draft that must be reviewed before publishing.</div>
                       <button type="button" className="btn-primary" onClick={() => setCorrectionOpen(true)} disabled={submitting}><RefreshCcw size={14} /> Request corrected draft</button>
                     </>
                   ) : isCorrectionInProgress ? (
                     <div className="studio-actions__status">Correction is in progress. This original is not part of the review queue; a new pending draft will appear when the correction succeeds.</div>
+                  ) : isReadOnly ? (
+                    <div className="studio-actions__status">This record is locked in its current workflow state. Refresh the queue or use the appropriate reconciliation workflow before taking another action.</div>
                   ) : (
                     <>
                       <div className="studio-actions__status">
                         {hasEdits
                           ? 'Draft fields changed. Save feedback before rejecting or requesting a correction; publishing can include the current draft directly.'
                           : payloadReady
-                          ? 'All documented payload checks pass. Publishing submits immediately to CommunityHub.'
+                          ? 'All documented payload checks pass. Submission sends the record to CommunityHub for moderation.'
                           : `${failedChecks.length} documented requirement${failedChecks.length === 1 ? '' : 's'} must be fixed before publishing.`}
                       </div>
                       <button type="button" className="btn-secondary" onClick={saveEdits} disabled={!hasEdits || saving || submitting}><Save size={14} /> {saving ? 'Saving…' : 'Save feedback'}</button>
                       {event.source_slug !== 'fixed-events' && <button type="button" className="btn-warning" onClick={() => setCorrectionOpen(true)} disabled={submitting || hasEdits} title={hasEdits ? 'Save or revert draft edits first' : undefined}><RefreshCcw size={14} /> Request correction</button>}
                       <button type="button" className="btn-danger" onClick={() => setRejectOpen(true)} disabled={submitting || hasEdits} title={hasEdits ? 'Save or revert draft edits first' : undefined}><X size={14} /> Reject</button>
-                      <button type="button" className="btn-primary" onClick={approve} disabled={!payloadReady || submitting || saving} title={!payloadReady ? 'Fix every readiness blocker before publishing' : undefined}><Check size={15} /> {submitting ? 'Submitting…' : 'Publish to CommunityHub'}</button>
+                      <button type="button" className="btn-primary" onClick={approve} disabled={!payloadReady || submitting || saving} title={!payloadReady ? 'Fix every readiness blocker before submitting' : undefined}><Check size={15} /> {submitting ? 'Submitting…' : 'Submit to CommunityHub'}</button>
                     </>
                   )}
                 </div>
@@ -966,9 +1020,9 @@ export default function ReviewEventPage() {
 
               <aside className="studio-aside" aria-label="Source evidence and payload readiness">
                 <section className="card source-evidence">
-                  {safeImageUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element -- reviewer evidence can originate from arbitrary external hosts.
-                    <img className="source-evidence__image" src={safeImageUrl} alt="Extracted poster preview" />
+                  {posterPreviewUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- this is an authenticated same-origin blob URL.
+                    <img className="source-evidence__image" src={posterPreviewUrl} alt="Extracted poster preview" />
                   ) : (
                     <div className="source-evidence__image" style={{ display: 'grid', placeItems: 'center', color: 'var(--ink-400)' }}><ImageIcon size={28} /><span className="sr-only">No poster image</span></div>
                   )}

@@ -10,7 +10,13 @@ export default function UsersPage() {
   const [sources, setSources] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm]       = useState({ email:'', full_name:'', role:'reviewer', source_ids:[] as number[] });
+  const [form, setForm]       = useState({
+    email:'',
+    full_name:'',
+    role:'reviewer',
+    source_ids:[] as number[],
+    can_review_all_sources:false,
+  });
   const [adding, setAdding]   = useState(false);
   const [error, setError]     = useState('');
 
@@ -32,7 +38,9 @@ export default function UsersPage() {
     });
     const data = await res.json();
     if (!res.ok) { setError(data.error||'Failed'); setAdding(false); return; }
-    setShowAdd(false); setForm({ email:'', full_name:'', role:'reviewer', source_ids:[] }); load(); setAdding(false);
+    setShowAdd(false);
+    setForm({ email:'', full_name:'', role:'reviewer', source_ids:[], can_review_all_sources:false });
+    load(); setAdding(false);
   }
 
   async function toggleActive(u: any) {
@@ -50,7 +58,11 @@ export default function UsersPage() {
   }
 
   function toggleSource(id: number) {
-    setForm(f => ({ ...f, source_ids: f.source_ids.includes(id) ? f.source_ids.filter(s=>s!==id) : [...f.source_ids, id] }));
+    setForm(f => ({
+      ...f,
+      can_review_all_sources: false,
+      source_ids: f.source_ids.includes(id) ? f.source_ids.filter(s=>s!==id) : [...f.source_ids, id],
+    }));
   }
 
   if (!ready || !user) return null;
@@ -100,7 +112,11 @@ export default function UsersPage() {
                         </span>
                       </td>
                       <td style={{ padding:'0.875rem 1rem', fontSize:12, color:'#666' }}>
-                        {assigned.length>0 ? assigned.map((s:any)=>s.name).join(', ') : <span style={{ color:'#bbb' }}>All sources</span>}
+                        {u.role === 'admin' || Number(u.can_review_all_sources) === 1
+                          ? <span>All sources</span>
+                          : assigned.length > 0
+                          ? assigned.map((s:any)=>s.name).join(', ')
+                          : <span style={{ color:'#c0392b' }}>No source access</span>}
                       </td>
                       <td style={{ padding:'0.875rem 1rem' }}>
                         <span style={{ fontSize:11, fontWeight:600, color:u.active?'#3a8c3f':'#c0392b' }}>{u.active?'Active':'Disabled'}</span>
@@ -145,7 +161,12 @@ export default function UsersPage() {
             <label style={labelStyle}>Role</label>
             <div style={{ display:'flex', gap:8, marginBottom:'1rem' }}>
               {['reviewer','admin'].map(r=>(
-                <button key={r} onClick={()=>setForm(f=>({...f,role:r}))}
+                <button key={r} onClick={()=>setForm(f=>({
+                  ...f,
+                  role:r,
+                  source_ids:r === 'admin' ? [] : f.source_ids,
+                  can_review_all_sources:r === 'admin' ? false : f.can_review_all_sources,
+                }))}
                   style={{ flex:1, padding:'0.5rem', borderRadius:6, border:'1.5px solid', fontSize:13, cursor:'pointer', fontWeight:form.role===r?600:400, borderColor:form.role===r?'#3a8c3f':'#ddd', background:form.role===r?'#e8f5e9':'white', color:form.role===r?'#2a6b2e':'#555', display:'flex', alignItems:'center', justifyContent:'center', gap:5 }}>
                   {r==='admin'?<Shield size={13}/>:<Eye size={13}/>} {r}
                 </button>
@@ -153,7 +174,20 @@ export default function UsersPage() {
             </div>
             {form.role==='reviewer' && sources.length>0 && (
               <>
-                <label style={labelStyle}>Assign sources <span style={{ fontWeight:400, textTransform:'none', letterSpacing:0 }}>(empty = all)</span></label>
+                <label style={labelStyle}>Source access</label>
+                <label style={{ display:'flex', alignItems:'center', gap:8, fontSize:13, cursor:'pointer', padding:'0.45rem', borderRadius:4, marginBottom:6, background:form.can_review_all_sources?'#e8f5e9':'transparent' }}>
+                  <input
+                    type="checkbox"
+                    checked={form.can_review_all_sources}
+                    onChange={event=>setForm(f=>({
+                      ...f,
+                      can_review_all_sources:event.target.checked,
+                      source_ids:event.target.checked ? [] : f.source_ids,
+                    }))}
+                  />
+                  All current and future sources
+                </label>
+                <div style={{ fontSize:11, color:'#777', marginBottom:6 }}>Or choose one or more specific sources:</div>
                 <div style={{ display:'flex', flexDirection:'column', gap:4, marginBottom:'1rem', maxHeight:160, overflowY:'auto' }}>
                   {sources.map(s=>(
                     <label key={s.id} style={{ display:'flex', alignItems:'center', gap:8, fontSize:13, cursor:'pointer', padding:'0.3rem 0.4rem', borderRadius:4, background:form.source_ids.includes(s.id)?'#e8f5e9':'transparent' }}>
@@ -168,7 +202,17 @@ export default function UsersPage() {
             </div>
             <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
               <button onClick={()=>{setShowAdd(false);setError('');}} className="btn-ghost" style={{ fontSize:13 }}>Cancel</button>
-              <button onClick={invite} disabled={!form.email||!form.full_name||adding} className="btn-primary" style={{ fontSize:13 }}>
+              <button
+                onClick={invite}
+                disabled={
+                  !form.email
+                  || !form.full_name
+                  || adding
+                  || (form.role === 'reviewer' && !form.can_review_all_sources && form.source_ids.length === 0)
+                }
+                className="btn-primary"
+                style={{ fontSize:13 }}
+              >
                 {adding?'Inviting…':'Add user'}
               </button>
             </div>

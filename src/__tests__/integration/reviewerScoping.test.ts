@@ -6,7 +6,7 @@
  *
  * Rules:
  *  - A reviewer assigned to specific sources sees ONLY those source's events.
- *  - A reviewer with NO source assignments sees ALL sources' events.
+ *  - A reviewer sees all sources only through an explicit global permission.
  *  - Admins see all events regardless of assignments.
  *  - source_id query param further narrows within the reviewer's scope.
  *  - The public /api/events endpoint requires no auth but exposes approved rows only.
@@ -31,25 +31,25 @@ const mockVerify = adminAuth.verifyIdToken as jest.Mock;
 // Reviewer A: assigned to source 1 (Apollo) only
 const REVIEWER_A = {
   id: 10, email: 'alice@oberlin.edu', role: 'reviewer',
-  full_name: 'Alice', active: 1, firebase_uid: 'uid-alice',
+  full_name: 'Alice', active: 1, firebase_uid: 'uid-alice', can_review_all_sources: 0,
 };
 
 // Reviewer B: assigned to source 2 (Oberlin College) only
 const REVIEWER_B = {
   id: 11, email: 'bob@oberlin.edu', role: 'reviewer',
-  full_name: 'Bob', active: 1, firebase_uid: 'uid-bob',
+  full_name: 'Bob', active: 1, firebase_uid: 'uid-bob', can_review_all_sources: 0,
 };
 
-// Reviewer C: no source assignments (sees everything)
+// Reviewer C: explicitly allowed to review all sources
 const REVIEWER_C = {
   id: 12, email: 'carol@oberlin.edu', role: 'reviewer',
-  full_name: 'Carol', active: 1, firebase_uid: 'uid-carol',
+  full_name: 'Carol', active: 1, firebase_uid: 'uid-carol', can_review_all_sources: 1,
 };
 
 // Admin: always sees everything
 const ADMIN = {
   id: 1, email: 'admin@oberlin.edu', role: 'admin',
-  full_name: 'Admin', active: 1, firebase_uid: 'uid-admin',
+  full_name: 'Admin', active: 1, firebase_uid: 'uid-admin', can_review_all_sources: 0,
 };
 
 // Events from each source (as returned by review queue query)
@@ -137,7 +137,7 @@ describe('Review Queue — source assignment scoping', () => {
     expect(sourcesQuery).toContain('reviewer_sources');
   });
 
-  it('reviewer with assignments has their firebase_uid passed as query param (O(1) lookup)', async () => {
+  it('reviewer with assignments uses the authenticated numeric user id', async () => {
     mockVerify.mockResolvedValue({ uid: 'uid-alice', email: 'alice@oberlin.edu' });
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_A]])
@@ -148,7 +148,7 @@ describe('Review Queue — source assignment scoping', () => {
     await getQueue(makeAuthReq('alice@oberlin.edu'));
 
     const eventsQueryParams = db.default.query.mock.calls[1][1] as any[];
-    expect(eventsQueryParams).toContain('uid-alice');
+    expect(eventsQueryParams).toContain(REVIEWER_A.id);
   });
 
   it('reviewer B sees only Oberlin College events, not Apollo events', async () => {
@@ -168,10 +168,10 @@ describe('Review Queue — source assignment scoping', () => {
 });
 
 // ===========================================================================
-// Review Queue — Unassigned Reviewer (all sources)
+// Review Queue — Explicit global reviewer
 // ===========================================================================
-describe('Review Queue — unassigned reviewer sees all events', () => {
-  it('no reviewer_sources subquery when reviewer has no assignments', async () => {
+describe('Review Queue — explicitly global reviewer sees all events', () => {
+  it('does not add an assignment subquery for explicit all-source access', async () => {
     mockVerify.mockResolvedValue({ uid: 'uid-carol', email: 'carol@oberlin.edu' });
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_C]])
@@ -182,12 +182,12 @@ describe('Review Queue — unassigned reviewer sees all events', () => {
     const data = await (await getQueue(makeAuthReq('carol@oberlin.edu'))).json();
 
     const eventsQuery = db.default.query.mock.calls[1][0] as string;
-    expect(eventsQuery).toContain('reviewer_sources');
+    expect(eventsQuery).not.toContain('reviewer_sources');
     // Events from all three sources are returned
     expect(data.total).toBe(3);
   });
 
-  it('unassigned reviewer gets all 3 sources in response', async () => {
+  it('global reviewer gets all 3 sources in response', async () => {
     mockVerify.mockResolvedValue({ uid: 'uid-carol', email: 'carol@oberlin.edu' });
     db.default.query
       .mockResolvedValueOnce([[REVIEWER_C]])

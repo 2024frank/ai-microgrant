@@ -17,7 +17,7 @@ jobs:
   fetch:
     name: Run agent fetchers
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 12
 
     steps:
       - name: Trigger fetch via app API
@@ -26,30 +26,122 @@ jobs:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           SOURCE_ID: ${{ github.event.inputs.source_id }}
         run: |
+          set -Eeuo pipefail
+          : "${APP_URL:?APP_URL secret is not configured}"
+          : "${CRON_SECRET:?CRON_SECRET secret is not configured}"
+          APP_URL="${APP_URL%/}"
+          RESPONSE="$RUNNER_TEMP/fetch-response.json"
           if [ -n "$SOURCE_ID" ]; then
+            [[ "$SOURCE_ID" =~ ^[1-9][0-9]*$ ]] || { echo "source_id must be a positive integer" >&2; exit 1; }
             echo "Triggering fetch for source $SOURCE_ID..."
             SCHEDULE_SLOT="$(date -u +'%Y-%m-%dT%H:%M:00.000Z')"
-            curl -fsS --retry 3 --retry-all-errors --connect-timeout 10 --max-time 60 -X POST \
+            curl --silent --show-error --fail-with-body --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 60 -X POST \
               "$APP_URL/api/agent/trigger/$SOURCE_ID" \
               -H "x-cron-secret: $CRON_SECRET" \
               -H "x-schedule-slot: $SCHEDULE_SLOT" \
               -H "Content-Type: application/json" \
-              | tee response.json
+              | tee "$RESPONSE"
+            jq -e '.ok == true and (.run_id | type == "number")' "$RESPONSE" >/dev/null
+            jq -r '.run_id' "$RESPONSE" > "$RUNNER_TEMP/dispatched-run-ids.txt"
           else
             echo "Triggering fetch for all sources..."
-            curl -fsS --retry 3 --retry-all-errors --connect-timeout 10 --max-time 60 -X GET \
+            curl --silent --show-error --fail-with-body --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 60 -X GET \
               "$APP_URL/api/agent/schedule" \
               -H "Authorization: Bearer $CRON_SECRET" \
-              | tee response.json
+              | tee "$RESPONSE"
+            jq -e '
+              def nni: type == "number" and . >= 0 and floor == .;
+              type == "object"
+              and (.checked | nni)
+              and (.due | nni)
+              and (.dispatched | nni)
+              and (.skipped | nni)
+              and (.failed | nni)
+              and ((.invalid_schedules | type) == "array")
+              and ((.maintenance_errors | type) == "array")
+              and ((.results | type) == "array")
+              and .failed == 0
+              and ((.maintenance_errors | length) == 0)
+              and ((.invalid_schedules | length) == 0)
+              and (.due == (.results | length))
+            ' "$RESPONSE" >/dev/null
+            jq -r '
+              [.results[] | select((.run_id | type) == "number") | .run_id]
+              | unique | join(",")
+            ' "$RESPONSE" > "$RUNNER_TEMP/dispatched-run-ids.txt"
           fi
-          echo ""
-          echo "Response:"
-          cat response.json
+          echo "Dispatcher response validated."
 
-      - name: Check for errors
+      - name: Verify fetch completion
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          if jq -e '(.failed // 0) > 0 or ((.invalid_schedules // []) | length > 0)' response.json >/dev/null; then
-            echo "One or more sources failed or have an invalid schedule — check logs above"
-            exit 1
+          set -Eeuo pipefail
+          : "${APP_URL:?APP_URL secret is not configured}"
+          : "${CRON_SECRET:?CRON_SECRET secret is not configured}"
+          APP_URL="${APP_URL%/}"
+          RUN_IDS="$(cat "$RUNNER_TEMP/dispatched-run-ids.txt")"
+          if [ -z "$RUN_IDS" ]; then
+            echo "No new or existing scheduled runs need terminal-status verification."
+            exit 0
           fi
-          echo "All due sources dispatched successfully"
+
+          RESPONSE="$RUNNER_TEMP/run-status.json"
+          DEADLINE=$((SECONDS + 270))
+          while true; do
+            curl --silent --show-error --fail-with-body --retry 2 --retry-delay 2 \
+              --connect-timeout 10 --max-time 30 \
+              "$APP_URL/api/agent/runs?ids=$RUN_IDS" \
+              -H "Authorization: Bearer $CRON_SECRET" \
+              | tee "$RESPONSE"
+            jq -e '
+              type == "object"
+              and ((.runs | type) == "array")
+              and ((.has_active | type) == "boolean")
+              and ((.failed | type) == "number")
+            ' "$RESPONSE" >/dev/null
+
+            if jq -e '.failed > 0 or any(.runs[]; (.events_errored // 0) > 0)' "$RESPONSE" >/dev/null; then
+              echo "One or more scheduled agent runs failed or completed with event errors." >&2
+              exit 1
+            fi
+            EXPECTED="$(awk -F, '{ print NF }' <<< "$RUN_IDS")"
+            OBSERVED="$(jq '.runs | length' "$RESPONSE")"
+            if [ "$OBSERVED" -eq "$EXPECTED" ] && jq -e '.terminal == true' "$RESPONSE" >/dev/null; then
+              echo "All scheduled agent runs completed successfully."
+              break
+            fi
+            if [ "$SECONDS" -ge "$DEADLINE" ]; then
+              echo "Scheduled agent runs did not finish before the verification deadline." >&2
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: Reconcile CommunityHub moderation
+        if: ${{ always() }}
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -Eeuo pipefail
+          : "${APP_URL:?APP_URL secret is not configured}"
+          : "${CRON_SECRET:?CRON_SECRET secret is not configured}"
+          APP_URL="${APP_URL%/}"
+          RESPONSE="$RUNNER_TEMP/reconcile-response.json"
+          curl --silent --show-error --fail-with-body --retry 3 --retry-delay 2 \
+            --connect-timeout 10 --max-time 240 \
+            "$APP_URL/api/communityhub/reconcile?limit=100" \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            | tee "$RESPONSE"
+          jq -e '
+            type == "object"
+            and .ok == true
+            and ((.checked | type) == "number")
+            and ((.failed | type) == "number")
+            and ((.skipped_locked | type) == "boolean")
+            and ((.results | type) == "array")
+            and .failed == 0
+            and .skipped_locked == false
+          ' "$RESPONSE" >/dev/null

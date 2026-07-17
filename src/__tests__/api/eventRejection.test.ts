@@ -58,7 +58,7 @@ describe('GET /api/events/:id/rejection', () => {
     expect(response.headers.get('cache-control')).toBe('private, no-store');
     expect(db.default.query).toHaveBeenLastCalledWith(
       expect.stringContaining('reviewer_sources'),
-      [REVIEWER.firebase_uid, REVIEWER.firebase_uid, REJECTION.source_id],
+      [REVIEWER.id, REJECTION.source_id],
     );
   });
 

@@ -3,12 +3,19 @@ import pool from '@/lib/db';
 import { getAuthUser } from '@/lib/auth';
 import { isEventType } from '@/lib/eventTypes';
 import { canAccessSource } from '@/lib/reviewerAccess';
+import { createEventMediaToken } from '@/lib/eventMediaToken';
+import { fieldAuditValue } from '@/lib/fieldAuditValue';
+import { eventImageEditErrorStatus, normalizeEventImageEdit } from '@/lib/eventImageEdits';
+import {
+  CommunityHubUpdateConflictError,
+  deliverCommunityHubUpdate,
+  prepareCommunityHubUpdate,
+  type CommunityHubUpdateAuditEntry,
+} from '@/lib/communityHubUpdates';
 import {
   buildCommunityHubPayload,
   CommunityHubPayloadValidationError,
 } from '@/lib/communityHubPayload';
-
-const CH_BASE = 'https://oberlin.communityhub.cloud/api/legacy/calendar';
 
 export async function GET(
   req: NextRequest,
@@ -22,6 +29,8 @@ export async function GET(
             re.display, re.buttons, re.website, re.image_cdn_url,
             re.calendar_source_name, re.calendar_source_url, re.ingested_post_url,
             re.geo_scope, re.geo_json, re.status, re.sent_for_correction,
+            re.communityhub_post_id, re.communityhub_moderation_status,
+            re.communityhub_checked_at, re.communityhub_moderation_error,
             re.superseded_by_id, re.created_at, re.source_id,
             s.name AS source_name, s.calendar_source_name AS source_calendar_name
      FROM raw_events re LEFT JOIN sources s ON re.source_id = s.id WHERE re.id = ?`, [id]
@@ -29,7 +38,9 @@ export async function GET(
   if (!event) return Response.json({ error: 'Not found' }, { status: 404 });
 
   let user: Awaited<ReturnType<typeof getAuthUser>> = null;
-  if (event.status !== 'approved') {
+  const publiclyApproved = event.status === 'approved'
+    && event.communityhub_moderation_status === 'approved';
+  if (!publiclyApproved) {
     if (!req.headers.get('authorization')) {
       return Response.json({ error: 'Not found' }, { status: 404 });
     }
@@ -84,11 +95,11 @@ export async function PATCH(
     return Response.json({ error: 'Forbidden' }, { status: 403 });
   }
   if (!event.communityhub_post_id) return Response.json({ error: 'Not yet submitted' }, { status: 400 });
-  if (!['approved', 'resubmitted'].includes(event.status)) {
+  if (!['approved', 'resubmitted'].includes(event.status)
+      || event.communityhub_moderation_status !== 'approved') {
     return Response.json({ error: 'Only published events can be updated through this endpoint' }, { status: 409 });
   }
 
-  const [[dbUser]] = await pool.query('SELECT id FROM users WHERE firebase_uid = ?', [user.uid]) as any;
   const editableFields = ['event_type','title','description','extended_description','sessions','location_type',
     'location','place_id','place_name','room_num','url_link','sponsors','post_type_ids','geo_scope',
     'contact_email','phone','website','image_cdn_url','buttons','display','screen_ids'];
@@ -98,23 +109,30 @@ export async function PATCH(
     return Response.json({ error: 'No valid fields' }, { status: 400 });
   }
 
-  const base = process.env.NEXT_PUBLIC_APP_URL || 'https://ai-microgrant-research-oberlin.vercel.app';
+  const base = process.env.APP_URL
+    || process.env.NEXT_PUBLIC_APP_URL
+    || 'https://ai-microgrant-research-oberlin.vercel.app';
   const merged = { ...event, ...Object.fromEntries(updateFields.map(field => [field, edits[field]])) };
   let imageDataEdit: string | null | undefined;
-  if (typeof merged.image_cdn_url === 'string' && merged.image_cdn_url.startsWith('data:')) {
-    const dataUri = merged.image_cdn_url;
-    if (!/^data:image\/(?:jpeg|png|gif|webp);base64,[A-Za-z0-9+/=\s]+$/.test(dataUri)) {
-      return Response.json({ error: 'Invalid image data URI' }, { status: 422 });
+  if (edits.image_cdn_url !== undefined) {
+    try {
+      const normalizedImage = await normalizeEventImageEdit(edits.image_cdn_url);
+      imageDataEdit = normalizedImage.imageData;
+      merged.image_cdn_url = normalizedImage.imageCdnUrl;
+    } catch (error) {
+      const status = eventImageEditErrorStatus(error);
+      return Response.json({
+        error: error instanceof Error ? error.message : 'Invalid embedded image',
+      }, { status });
     }
-    if (Buffer.byteLength(dataUri, 'utf8') > 8 * 1024 * 1024) {
-      return Response.json({ error: 'Image data exceeds the 8 MB limit' }, { status: 413 });
+    if (imageDataEdit) {
+      merged.image_data = imageDataEdit;
+      const mediaToken = createEventMediaToken(id, imageDataEdit);
+      merged.image_cdn_url = `${base.replace(/\/$/, '')}/api/events/${id}/poster.jpg?media_token=${encodeURIComponent(mediaToken)}`;
+    } else {
+      // Selecting or clearing an external image must not keep stale embedded data.
+      merged.image_data = null;
     }
-    imageDataEdit = dataUri;
-    merged.image_data = dataUri;
-    merged.image_cdn_url = `${base.replace(/\/$/, '')}/api/events/${id}/poster.jpg`;
-  } else if (edits.image_cdn_url !== undefined) {
-    // Selecting a new external image must not keep serving stale embedded data.
-    imageDataEdit = null;
   }
   let canonicalPayload;
   try {
@@ -136,71 +154,158 @@ export async function PATCH(
     throw error;
   }
 
-  const conn = await pool.getConnection();
-  try {
-    await (conn as any).beginTransaction();
-    for (const field of editableFields) {
-      if (edits[field] !== undefined && String(edits[field]) !== String(event[field] ?? '')) {
+  const fieldMap: Record<string,string> = {
+    event_type:'eventType', title:'title', description:'description', extended_description:'extendedDescription',
+    sessions:'sessions', location_type:'locationType', location:'location',
+    place_id:'placeId', place_name:'placeName', room_num:'roomNum', url_link:'urlLink', sponsors:'sponsors',
+    post_type_ids:'postTypeId', contact_email:'contactEmail', phone:'phone',
+    website:'website', image_cdn_url:'image_cdn_url', buttons:'buttons', display:'display', screen_ids:'screensIds',
+  };
+  const chEdits: Record<string, unknown> = {};
+  const localEdits: Record<string, unknown> = {};
+  const auditEntries: CommunityHubUpdateAuditEntry[] = [];
+  const nullableFields = new Set([
+    'extended_description', 'location', 'place_id', 'place_name', 'room_num',
+    'contact_email', 'image_cdn_url',
+  ]);
+  for (const field of updateFields) {
+    const chKey = fieldMap[field];
+    const requestedValue = edits[field];
+    const clearsNullableField = nullableFields.has(field)
+      && (requestedValue === null
+        || (typeof requestedValue === 'string' && requestedValue.trim() === ''));
+    const localValue = field === 'image_cdn_url' && imageDataEdit
+      ? null
+      : clearsNullableField
+        ? null
+        : chKey ? (canonicalPayload as any)[chKey] : edits[field];
+    const auditNewValue = field === 'image_cdn_url' && imageDataEdit
+      ? imageDataEdit
+      : localValue;
+    localEdits[field] = localValue;
+    if (storedComparable(event[field]) !== storedComparable(auditNewValue)) {
+      auditEntries.push({
+        field,
+        oldValue: fieldAuditValue(event[field]),
+        newValue: fieldAuditValue(auditNewValue),
+      });
+    }
+    if (chKey) {
+      // CommunityHub PATCH distinguishes an omitted key (leave unchanged)
+      // from an explicit empty string (clear an optional text field).
+      chEdits[chKey] = clearsNullableField ? '' : (canonicalPayload as any)[chKey];
+    }
+  }
+  if (imageDataEdit !== undefined) localEdits.image_data = imageDataEdit;
+
+  // geo_scope is local review metadata and does not exist in CommunityHub's
+  // PATCH contract. Apply a local-only change atomically without re-moderation.
+  if (Object.keys(chEdits).length === 0) {
+    const conn = await pool.getConnection();
+    try {
+      await (conn as any).beginTransaction();
+      const fields = Object.keys(localEdits);
+      const [updated] = await conn.query(
+        `UPDATE raw_events SET ${fields.map(field => `${field}=?`).join(',')}
+         WHERE id=? AND communityhub_post_id=? AND status=?`,
+        [
+          ...fields.map(field => databaseStoredValue(localEdits[field])),
+          id,
+          event.communityhub_post_id,
+          event.status,
+        ],
+      ) as any;
+      if (Number(updated?.affectedRows || 0) !== 1) {
+        await (conn as any).rollback();
+        return Response.json({ error: 'Event changed before the update could be saved' }, { status: 409 });
+      }
+      for (const entry of auditEntries) {
         await conn.query(
-          `INSERT INTO field_edit_log (raw_event_id, source_id, reviewer_id, field_name, old_value, new_value)
+          `INSERT INTO field_edit_log
+           (raw_event_id, source_id, reviewer_id, field_name, old_value, new_value)
            VALUES (?,?,?,?,?,?)`,
-          [id, event.source_id, dbUser?.id, field, String(event[field] ?? ''), String(edits[field])]
+          [id, event.source_id, user.id, entry.field, entry.oldValue, entry.newValue],
         );
       }
+      await (conn as any).commit();
+      return Response.json({ ok: true, status: event.status, communityhub: null });
+    } catch (error) {
+      await (conn as any).rollback().catch(() => undefined);
+      return Response.json({ error: error instanceof Error ? error.message : 'Unable to update event' }, { status: 500 });
+    } finally {
+      (conn as any).release();
     }
-    const fieldMap: Record<string,string> = {
-      event_type:'eventType', title:'title', description:'description', extended_description:'extendedDescription',
-      sessions:'sessions', location_type:'locationType', location:'location',
-      place_id:'placeId', place_name:'placeName', room_num:'roomNum', url_link:'urlLink', sponsors:'sponsors',
-      post_type_ids:'postTypeId', contact_email:'contactEmail', phone:'phone',
-      website:'website', image_cdn_url:'image_cdn_url', buttons:'buttons', display:'display', screen_ids:'screensIds',
-    };
-    const chEdits: Record<string,any> = {};
-    for (const [k] of Object.entries(edits)) {
-      if (!fieldMap[k]) continue;
-      const chKey = fieldMap[k];
-      chEdits[chKey] = (canonicalPayload as any)[chKey];
-    }
-
-    let chData: any = null;
-    if (Object.keys(chEdits).length > 0) {
-      const chRes = await fetch(`${CH_BASE}/post/${event.communityhub_post_id}/submit`, {
-        method:'PATCH',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify(chEdits),
-        signal: AbortSignal.timeout(30_000),
-      });
-      const rawText = await chRes.text();
-      try { chData = JSON.parse(rawText); } catch { chData = { raw: rawText.slice(0, 200) }; }
-      if (!chRes.ok) throw new Error(`CommunityHub ${chRes.status}: ${chData.raw ?? JSON.stringify(chData)}`);
-    }
-    const setParts = updateFields.map(k => `${k} = ?`);
-    const setVals = updateFields.map(field => {
-      if (field === 'image_cdn_url' && imageDataEdit) return null;
-      const chKey = fieldMap[field];
-      const value = chKey ? (canonicalPayload as any)[chKey] : edits[field];
-      if (value !== null && typeof value === 'object') return JSON.stringify(value);
-      return value ?? null;
-    });
-    if (imageDataEdit !== undefined) {
-      setParts.push('image_data = ?');
-      setVals.push(imageDataEdit);
-    }
-    const setClauses = setParts.join(', ');
-    if (setClauses) {
-      await conn.query(
-        `UPDATE raw_events SET ${setClauses}, status='approved' WHERE id=?`,
-        [...setVals, id],
-      );
-    }
-    await (conn as any).commit();
-    return Response.json({ ok: true, communityhub: chData });
-  } catch (err: any) {
-    await (conn as any).rollback();
-    return Response.json({ error: err.message }, { status: 500 });
-  } finally {
-    (conn as any).release();
   }
+
+  let prepared: { id: number; operationKey: string };
+  try {
+    prepared = await prepareCommunityHubUpdate({
+      rawEventId: Number(id),
+      sourceId: Number(event.source_id),
+      communityHubPostId: String(event.communityhub_post_id),
+      originalStatus: event.status,
+      chEdits,
+      localEdits,
+      auditEntries,
+      reviewerId: user.id,
+    });
+  } catch (error) {
+    if (error instanceof CommunityHubUpdateConflictError) {
+      return Response.json({ error: error.message }, { status: 409 });
+    }
+    console.error(`[events/${id}] unable to prepare CommunityHub update:`, error);
+    return Response.json({ error: 'Unable to prepare CommunityHub update' }, { status: 500 });
+  }
+
+  const delivery = await deliverCommunityHubUpdate(
+    prepared.id,
+    Number(id),
+    String(event.communityhub_post_id),
+    chEdits,
+    { rollbackOnPermanentFailure: true },
+  );
+  if (delivery.status === 'succeeded') {
+    return Response.json({
+      ok: true,
+      status: 'submitted',
+      moderation_status: 'unknown',
+      update_id: prepared.id,
+      communityhub: delivery.response ?? null,
+    });
+  }
+  if (delivery.status === 'failed') {
+    const remoteMissing = delivery.response_status === 404 || delivery.response_status === 410;
+    return Response.json({
+      error: delivery.error,
+      update_id: prepared.id,
+      retry_safe: !remoteMissing,
+      ...(remoteMissing ? { moderation_status: 'missing' } : {}),
+    }, { status: remoteMissing ? 409 : delivery.response_status && delivery.response_status < 500 ? 422 : 502 });
+  }
+  return Response.json({
+    error: delivery.error || 'CommunityHub update outcome is unresolved',
+    update_id: prepared.id,
+    submission_state: 'unresolved',
+    retry_safe: false,
+  }, { status: 502 });
+}
+
+function storedComparable(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'object') return JSON.stringify(value);
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      if (parsed !== null && typeof parsed === 'object') return JSON.stringify(parsed);
+    } catch {
+      // Plain string.
+    }
+  }
+  return String(value);
+}
+
+function databaseStoredValue(value: unknown): unknown {
+  return value !== null && typeof value === 'object' ? JSON.stringify(value) : value ?? null;
 }
 
 function pj(val: any, fallback: any): any {

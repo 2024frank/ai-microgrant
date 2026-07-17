@@ -6,7 +6,15 @@ const db         = require('@/lib/db');
 const mockVerify = adminAuth.verifyIdToken as jest.Mock;
 
 const ADMIN    = { id: 1, email: 'admin@oberlin.edu', role: 'admin',    full_name: 'Admin', active: 1, firebase_uid: 'uid-admin' };
-const REVIEWER = { id: 2, email: 'rev@oberlin.edu',   role: 'reviewer', full_name: 'Rev',   active: 1, firebase_uid: 'uid-rev' };
+const REVIEWER = {
+  id: 2,
+  email: 'rev@oberlin.edu',
+  role: 'reviewer',
+  full_name: 'Rev',
+  active: 1,
+  firebase_uid: 'uid-rev',
+  can_review_all_sources: 0,
+};
 
 function makeReq() {
   return new NextRequest('http://localhost/api/reviewer/dashboard', {
@@ -24,7 +32,6 @@ describe('GET /api/reviewer/dashboard', () => {
     mockVerify.mockResolvedValue({ uid: 'uid-rev', email: 'rev@oberlin.edu' });
     db.default.query
       .mockResolvedValueOnce([[REVIEWER]])                                    // getAuthUser
-      .mockResolvedValueOnce([[{ id: 2 }]])                                   // db user lookup
       .mockResolvedValueOnce([[{ pending: 5 }]])                              // pending count (Promise.all #1)
       .mockResolvedValueOnce([[{ total_reviewed: 20, total_approved: 15, total_rejected: 5, avg_time_sec: 42, approved_today: 3, rejected_today: 1 }]]) // personalStats (#2)
       .mockResolvedValueOnce([[{ corrections_approved: 2 }]])                 // corrections_approved (#3)
@@ -42,6 +49,17 @@ describe('GET /api/reviewer/dashboard', () => {
     expect(data.assigned_sources).toHaveLength(1);
     expect(data.oldest_pending.title).toBe('Old Event');
 
+    const personalStatsQuery = db.default.query.mock.calls.find(
+      ([sql]: [string]) => sql.includes('COUNT(*) AS total_reviewed'),
+    );
+    const correctionsQuery = db.default.query.mock.calls.find(
+      ([sql]: [string]) => sql.includes('corrections_approved'),
+    );
+    expect(personalStatsQuery[0]).toContain("SUM(action = 'approved')");
+    expect(personalStatsQuery[0]).not.toContain('communityhub_moderation_status');
+    expect(correctionsQuery[0]).toContain('COUNT(DISTINCT fixed.id)');
+    expect(correctionsQuery[0]).toContain("fixed.communityhub_moderation_status = 'approved'");
+
     const pendingQuery = db.default.query.mock.calls.find(
       ([sql]: [string]) => sql.includes('COUNT(*) AS pending'),
     );
@@ -54,7 +72,7 @@ describe('GET /api/reviewer/dashboard', () => {
     for (const call of [pendingQuery, sourcesQuery, oldestQuery]) {
       expect(call).toBeDefined();
       expect(call[0]).toContain('reviewer_sources');
-      expect(call[1]).toEqual([REVIEWER.id, REVIEWER.id]);
+      expect(call[1]).toEqual([REVIEWER.id]);
     }
     expect(res.headers.get('cache-control')).toBe('private, no-store');
   });
@@ -63,7 +81,6 @@ describe('GET /api/reviewer/dashboard', () => {
     mockVerify.mockResolvedValue({ uid: 'uid-admin', email: 'admin@oberlin.edu' });
     db.default.query
       .mockResolvedValueOnce([[ADMIN]])
-      .mockResolvedValueOnce([[{ id: 1 }]])   // db user lookup
       .mockResolvedValueOnce([[{ pending: 12 }]])
       .mockResolvedValueOnce([[{ total_reviewed: 0, total_approved: 0, total_rejected: 0, avg_time_sec: null, approved_today: 0, rejected_today: 0 }]])
       .mockResolvedValueOnce([[{ corrections_approved: 0 }]])
@@ -100,7 +117,6 @@ describe('GET /api/reviewer/dashboard', () => {
     mockVerify.mockResolvedValue({ uid: 'uid-rev', email: 'rev@oberlin.edu' });
     db.default.query
       .mockResolvedValueOnce([[REVIEWER]])
-      .mockResolvedValueOnce([[{ id: 2 }]])   // db user lookup
       .mockResolvedValueOnce([[{ pending: 0 }]])
       .mockResolvedValueOnce([[{ total_reviewed: 10, total_approved: 10, total_rejected: 0, avg_time_sec: 30, approved_today: 0, rejected_today: 0 }]])
       .mockResolvedValueOnce([[{ corrections_approved: 0 }]])

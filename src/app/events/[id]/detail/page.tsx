@@ -9,6 +9,7 @@ import { getTimezoneLabel } from '@/lib/timezone';
 const STATUS_STYLES: Record<string, { bg: string; color: string; label: string }> = {
   pending:     { bg: '#fff3e0', color: '#c05e00', label: 'Pending review' },
   approved:    { bg: '#e8f5e9', color: '#2a6b2e', label: 'Published'      },
+  submitted:   { bg: '#eef2f6', color: '#425466', label: 'Awaiting CommunityHub review' },
   rejected:    { bg: '#fdecea', color: '#c0392b', label: 'Rejected'       },
   resubmitted: { bg: '#e3f2fd', color: '#1565c0', label: 'Resubmitted'    },
 };
@@ -115,7 +116,7 @@ export default function EventDetailPage() {
 
   const sessions = pj(event.sessions);
   const st       = STATUS_STYLES[event.status] || STATUS_STYLES.pending;
-  const canEdit  = user.role === 'admin' || event.status !== 'approved';
+  const canEdit  = event.status === 'pending';
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: '#f8f9fa' }}>

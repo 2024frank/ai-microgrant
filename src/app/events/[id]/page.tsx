@@ -12,6 +12,7 @@ import EventTypeBadge from '@/components/EventTypeBadge';
 const STATUS_STYLES: Record<string, { bg:string; color:string; label:string }> = {
   pending:     { bg:'#fff3e0', color:'#c05e00', label:'Pending review'   },
   approved:    { bg:'#e8f5e9', color:'#2a6b2e', label:'Published'        },
+  submitted:   { bg:'#eef2f6', color:'#425466', label:'Awaiting CommunityHub review' },
   rejected:    { bg:'#fdecea', color:'#c0392b', label:'Rejected'         },
   resubmitted: { bg:'#e3f2fd', color:'#1565c0', label:'Resubmitted'      },
   pending_fix: { bg:'#fff3e0', color:'#c05e00', label:'Sent for correction' },

@@ -31,11 +31,17 @@ export async function GET(req: NextRequest) {
       `SELECT
          s.id, s.name, s.slug, s.agent_id, s.active,
          COUNT(DISTINCT re.id)                                              AS total,
-         SUM(re.status = 'approved')                                        AS approved,
-         SUM(re.status = 'rejected')                                        AS rejected,
-         SUM(re.status = 'pending')                                         AS pending,
+         COUNT(DISTINCT CASE
+           WHEN re.status = 'approved' AND re.communityhub_moderation_status = 'approved'
+           THEN re.id END)                                                  AS approved,
+         COUNT(DISTINCT CASE WHEN re.status = 'rejected' THEN re.id END)    AS rejected,
+         COUNT(DISTINCT CASE WHEN re.status = 'pending' THEN re.id END)     AS pending,
          COUNT(DISTINCT fel.raw_event_id)                                   AS edited,
-         SUM(re.status = 'approved' AND fel.raw_event_id IS NULL)           AS clean_approved
+         COUNT(DISTINCT CASE
+           WHEN re.status = 'approved'
+             AND re.communityhub_moderation_status = 'approved'
+             AND fel.raw_event_id IS NULL
+           THEN re.id END)                                                  AS clean_approved
        FROM sources s
        LEFT JOIN raw_events re ON re.source_id = s.id AND re.created_at >= NOW() - INTERVAL ? DAY
        LEFT JOIN field_edit_log fel ON fel.raw_event_id = re.id

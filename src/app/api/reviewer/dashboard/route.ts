@@ -6,38 +6,21 @@ export async function GET(req: NextRequest) {
   const user = await getAuthUser(req);
   if (!user) return unauthorized();
 
-  const [[dbUser]] = await pool.query(
-    'SELECT id FROM users WHERE firebase_uid = ?', [user.uid]
-  ) as any;
-  const userId = dbUser?.id;
+  const userId = user.id;
 
-  // Keep dashboard queue summaries inside the same assignment boundary as the
-  // review queue and event-detail routes. Reviewers with no assignments retain
-  // the shared-queue behavior; once an assignment exists, only those sources
-  // contribute to their counts and oldest-item summary. Admins remain global.
-  const reviewerEventScope = user.role === 'reviewer'
-    ? `AND (
-        NOT EXISTS (
-          SELECT 1 FROM reviewer_sources rs0 WHERE rs0.reviewer_id = ?
-        )
-        OR EXISTS (
-          SELECT 1 FROM reviewer_sources rs
-          WHERE rs.reviewer_id = ? AND rs.source_id = re.source_id
-        )
+  const reviewerEventScope = user.role === 'reviewer' && !user.canReviewAllSources
+    ? `AND EXISTS (
+        SELECT 1 FROM reviewer_sources rs
+        WHERE rs.reviewer_id=? AND rs.source_id=re.source_id
       )`
     : '';
-  const reviewerSourceScope = user.role === 'reviewer'
-    ? `AND (
-        NOT EXISTS (
-          SELECT 1 FROM reviewer_sources rs0 WHERE rs0.reviewer_id = ?
-        )
-        OR EXISTS (
-          SELECT 1 FROM reviewer_sources rs
-          WHERE rs.reviewer_id = ? AND rs.source_id = s.id
-        )
+  const reviewerSourceScope = user.role === 'reviewer' && !user.canReviewAllSources
+    ? `AND EXISTS (
+        SELECT 1 FROM reviewer_sources rs
+        WHERE rs.reviewer_id=? AND rs.source_id=s.id
       )`
     : '';
-  const scopeParams = user.role === 'reviewer' ? [userId, userId] : [];
+  const scopeParams = reviewerEventScope ? [userId] : [];
 
   // All queries run in parallel — O(log n) each with composite indexes
   const [
@@ -66,10 +49,11 @@ export async function GET(req: NextRequest) {
       [userId]
     ),
     pool.query(
-      `SELECT COUNT(*) AS corrections_approved
+      `SELECT COUNT(DISTINCT fixed.id) AS corrections_approved
        FROM review_sessions rs
        JOIN raw_events fixed ON fixed.corrected_from_id = rs.raw_event_id
          AND fixed.status = 'approved'
+         AND fixed.communityhub_moderation_status = 'approved'
        WHERE rs.reviewer_id = ? AND rs.action = 'sent_for_correction'`,
       [userId]
     ),

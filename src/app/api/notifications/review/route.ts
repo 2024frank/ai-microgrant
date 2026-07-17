@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
 
   // Get all active reviewers
   const [reviewers] = await pool.query(
-    `SELECT u.id, u.email, u.full_name,
+    `SELECT u.id, u.email, u.full_name, u.can_review_all_sources,
        GROUP_CONCAT(s.name ORDER BY s.name SEPARATOR '|||') AS source_names
      FROM users u
      LEFT JOIN reviewer_sources rs ON rs.reviewer_id = u.id
@@ -29,7 +29,10 @@ export async function POST(req: NextRequest) {
 
   for (const reviewer of reviewers) {
     // Get pending count for this reviewer's sources
-    const hasAssignedSources = reviewer.source_names;
+    const reviewsAllSources = reviewer.can_review_all_sources === true
+      || reviewer.can_review_all_sources === 1
+      || reviewer.can_review_all_sources === '1';
+    const hasAssignedSources = reviewer.source_names && !reviewsAllSources;
     let pendingCount: number;
     let sources: { name: string; count: number }[];
 
@@ -45,8 +48,7 @@ export async function POST(req: NextRequest) {
       ) as any;
       sources = rows;
       pendingCount = rows.reduce((sum: number, r: any) => sum + r.count, 0);
-    } else {
-      // No specific assignment = all sources
+    } else if (reviewsAllSources) {
       const [rows] = await pool.query(
         `SELECT s.name, COUNT(re.id) AS count
          FROM raw_events re
@@ -56,6 +58,9 @@ export async function POST(req: NextRequest) {
       ) as any;
       sources = rows;
       pendingCount = rows.reduce((sum: number, r: any) => sum + r.count, 0);
+    } else {
+      sources = [];
+      pendingCount = 0;
     }
 
     if (pendingCount === 0) continue; // Don't email if nothing to review

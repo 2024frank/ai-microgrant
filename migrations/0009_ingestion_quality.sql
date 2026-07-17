@@ -50,7 +50,7 @@ ALTER TABLE raw_events
   MODIFY COLUMN status
     ENUM(
       'pending','approved','rejected','resubmitted','pending_fix',
-      'publishing','superseded'
+      'publishing','superseded','submitted'
     ) NOT NULL DEFAULT 'pending';
 
 SET @ddl = IF(
@@ -81,7 +81,7 @@ CREATE TABLE IF NOT EXISTS communityhub_submissions (
   id                   BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   raw_event_id         INT UNSIGNED NOT NULL,
   payload_hash         CHAR(64) NOT NULL,
-  status               ENUM('prepared','sending','succeeded','failed') NOT NULL DEFAULT 'prepared',
+  status               ENUM('prepared','sending','accepted_unreconciled','succeeded','failed') NOT NULL DEFAULT 'prepared',
   payload              JSON NOT NULL,
   response             JSON NULL,
   error_message        TEXT NULL,

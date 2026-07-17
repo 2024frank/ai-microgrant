@@ -57,7 +57,10 @@ async function sendScopedReviewNotifications(
        AND u.email IS NOT NULL
        AND (
          u.role = 'admin'
-         OR (u.role = 'reviewer' AND target.source_id IS NOT NULL)
+         OR (
+           u.role = 'reviewer'
+           AND (u.can_review_all_sources=1 OR target.source_id IS NOT NULL)
+         )
        )`,
     [source.id],
   ) as any;
@@ -73,8 +76,15 @@ async function sendScopedReviewNotifications(
     try {
       const reviewerScope = recipient.role === 'reviewer'
         ? `AND EXISTS (
-            SELECT 1 FROM reviewer_sources rs
-            WHERE rs.reviewer_id = ? AND rs.source_id = re.source_id
+            SELECT 1 FROM users scoped_user
+            WHERE scoped_user.id=?
+              AND (
+                scoped_user.can_review_all_sources=1
+                OR EXISTS (
+                  SELECT 1 FROM reviewer_sources rs
+                  WHERE rs.reviewer_id=scoped_user.id AND rs.source_id=re.source_id
+                )
+              )
           )`
         : '';
       const params = recipient.role === 'reviewer'

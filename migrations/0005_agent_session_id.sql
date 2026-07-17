@@ -1,11 +1,9 @@
 -- ============================================================
--- 0005_agent_session_id — store the Anthropic session id per run
--- ============================================================
--- "Stop" currently only flips agent_runs.status to 'stopped' — the Anthropic
--- session keeps running API-side (the SDK has no cancel; delete is the only
--- teardown). Storing the session id lets the stop route delete the session so
--- the agent actually stops. Best-effort everywhere, so this degrades gracefully
--- until applied.
+-- 0005_agent_session_id — retry-safe managed-agent session id
 -- ============================================================
 
-ALTER TABLE agent_runs ADD COLUMN session_id VARCHAR(120) NULL;
+SET @ddl = IF(EXISTS(
+  SELECT 1 FROM information_schema.columns
+  WHERE table_schema=DATABASE() AND table_name='agent_runs' AND column_name='session_id'
+), 'SELECT 1', 'ALTER TABLE agent_runs ADD COLUMN session_id VARCHAR(120) NULL');
+PREPARE session_ddl FROM @ddl; EXECUTE session_ddl; DEALLOCATE PREPARE session_ddl;

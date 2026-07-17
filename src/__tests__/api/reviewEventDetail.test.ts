@@ -34,17 +34,23 @@ describe('GET /api/review/events/:id assignment scope', () => {
   it('returns the event when the reviewer can access its source', async () => {
     db.default.query
       .mockResolvedValueOnce([[REVIEWER]])
-      .mockResolvedValueOnce([[EVENT]])
+      .mockResolvedValueOnce([[
+        { ...EVENT, image_data: 'data:image/jpeg;base64,bG9uZw==' },
+      ]])
       .mockResolvedValueOnce([[{ allowed: 1 }]]);
 
     const response = await GET(request(), context());
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({
+    const body = await response.json();
+    expect(body).toMatchObject({
       ...EVENT,
+      has_image_data: true,
       publishing_email_configured: true,
     });
+    expect(body).not.toHaveProperty('image_data');
     expect(db.default.query.mock.calls[1][0]).toContain('rejection_log');
+    expect(db.default.query.mock.calls[1][0]).not.toContain('re.*');
   });
 
   it('fails closed when the assignment lookup result is missing', async () => {

@@ -16,14 +16,20 @@ export async function GET(req: NextRequest) {
   if (type === 'by-source') {
     const [rows] = await pool.query(
       `SELECT s.id, s.name, s.slug, s.agent_id, s.active,
-         /* live counts */
-         COUNT(DISTINCT re.id)                                 AS total_live,
-         SUM(re.status='approved')                            AS approved_live,
-         SUM(re.status='rejected')                            AS rejected_live,
-         SUM(re.status='pending')                             AS pending,
+         /* current-record and externally verified live counts */
+         COUNT(DISTINCT re.id)                                 AS total_current_records,
+         COUNT(DISTINCT CASE
+           WHEN re.status='approved' AND re.communityhub_moderation_status='approved'
+           THEN re.id END)                                    AS total_live,
+         COUNT(DISTINCT CASE
+           WHEN re.status='approved' AND re.communityhub_moderation_status='approved'
+           THEN re.id END)                                    AS approved_live,
+         COUNT(DISTINCT CASE WHEN re.status='rejected' THEN re.id END) AS rejected_live,
+         COUNT(DISTINCT CASE WHEN re.status='pending' THEN re.id END)  AS pending,
          /* archived counts (events that have been deleted after expiry) */
          COALESCE(arch.total,    0)                           AS total_archived,
-         COALESCE(arch.approved, 0)                           AS approved_archived,
+         /* archive rows predate external moderation evidence */
+         0                                                    AS approved_archived,
          COALESCE(arch.rejected, 0)                           AS rejected_archived,
          ar.last_run_at,
          lr.status                                            AS last_run_status
@@ -32,7 +38,6 @@ export async function GET(req: NextRequest) {
        LEFT JOIN (
          SELECT source_id,
            SUM(total)    AS total,
-           SUM(approved) AS approved,
            SUM(rejected) AS rejected
          FROM event_stats_archive
          WHERE snapshotted_at >= NOW() - INTERVAL ? DAY
@@ -45,14 +50,14 @@ export async function GET(req: NextRequest) {
          SELECT source_id, status FROM agent_runs a1
          WHERE started_at = (SELECT MAX(started_at) FROM agent_runs a2 WHERE a2.source_id = a1.source_id)
        ) lr ON lr.source_id = s.id
-       GROUP BY s.id, s.name, s.slug, s.agent_id, s.active, arch.total, arch.approved, arch.rejected, ar.last_run_at, lr.status
+       GROUP BY s.id, s.name, s.slug, s.agent_id, s.active, arch.total, arch.rejected, ar.last_run_at, lr.status
        ORDER BY s.name ASC`,
       [days, days]
     ) as any;
 
     const result = rows.map((r: any) => {
-      const total    = Number(r.total_live    || 0) + Number(r.total_archived    || 0);
-      const approved = Number(r.approved_live || 0) + Number(r.approved_archived || 0);
+      const total    = Number(r.total_current_records || 0) + Number(r.total_archived || 0);
+      const approved = Number(r.approved_live || 0);
       const rejected = Number(r.rejected_live || 0) + Number(r.rejected_archived || 0);
       const approvalRate = (approved + rejected) > 0
         ? Math.round(approved / (approved + rejected) * 1000) / 10 : null;
@@ -99,7 +104,8 @@ export async function GET(req: NextRequest) {
     if (source_id) { sc = 'AND source_id=?'; params.push(source_id); }
     const [rows] = await pool.query(
       `SELECT DATE(created_at) AS date, COUNT(*) AS extracted,
-         SUM(status='approved') AS approved, SUM(status='rejected') AS rejected
+         SUM(status='approved' AND communityhub_moderation_status='approved') AS approved,
+         SUM(status='rejected') AS rejected
        FROM raw_events WHERE created_at >= NOW() - INTERVAL ? DAY ${sc}
        GROUP BY DATE(created_at) ORDER BY date ASC`,
       params
@@ -162,7 +168,7 @@ export async function GET(req: NextRequest) {
   // Default: summary stats — live + archived
   const [[live]] = await pool.query(
     `SELECT COUNT(*) AS total_extracted,
-       SUM(status='approved') AS total_approved,
+       SUM(status='approved' AND communityhub_moderation_status='approved') AS total_approved,
        SUM(status='rejected') AS total_rejected,
        SUM(status='pending')  AS total_pending
      FROM raw_events WHERE created_at >= NOW() - INTERVAL ? DAY`,
@@ -171,14 +177,16 @@ export async function GET(req: NextRequest) {
 
   const [[arch]] = await pool.query(
     `SELECT COALESCE(SUM(total),0) AS total_extracted,
-       COALESCE(SUM(approved),0) AS total_approved,
+       0 AS total_approved,
        COALESCE(SUM(rejected),0) AS total_rejected
      FROM event_stats_archive WHERE snapshotted_at >= NOW() - INTERVAL ? DAY`,
     [days]
   ) as any;
 
   const total_extracted = Number(live.total_extracted || 0) + Number(arch.total_extracted || 0);
-  const total_approved  = Number(live.total_approved  || 0) + Number(arch.total_approved  || 0);
+  // Archive aggregates have no CommunityHub moderation state, so they cannot
+  // be represented as externally verified approvals.
+  const total_approved  = Number(live.total_approved || 0);
   const total_rejected  = Number(live.total_rejected  || 0) + Number(arch.total_rejected  || 0);
   const total_pending   = Number(live.total_pending   || 0);
   const approval_rate   = (total_approved + total_rejected) > 0
