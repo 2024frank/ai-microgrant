@@ -115,25 +115,35 @@ async function handle(req: NextRequest) {
         imageBudget -= 1;
         markDiscoveryAttempt = true;
         try {
-          const { discoverSourcePageImage } = await import('@/lib/sourcePageImage');
-          const discovered = await discoverSourcePageImage(sourcePage);
-          if (!discovered) {
+          const { discoverSourcePageImageCandidates } = await import('@/lib/sourcePageImage');
+          const candidates = (await discoverSourcePageImageCandidates(sourcePage)).slice(0, 3);
+          if (candidates.length === 0) {
             item.image_action = 'no_source_image';
-            item.image_note = 'the source page names no usable share image';
+            item.image_note = 'the source page names no usable image';
           } else {
-            try {
-              const { loadImageAsJpeg } = await import('@/lib/safeRemoteImage');
-              const jpeg = await loadImageAsJpeg(discovered);
-              imageDataUpdate = `data:image/jpeg;base64,${jpeg.toString('base64')}`;
-              imageUrlUpdate = discovered;
-              item.image_action = 'discovered';
-              item.image_note = discovered;
-            } catch (imageError) {
-              const code = imageError !== null && typeof imageError === 'object' && 'code' in imageError
-                ? String((imageError as { code?: unknown }).code || 'FETCH_FAILED')
-                : 'FETCH_FAILED';
+            // Candidates are ordered share-metadata first, then the page's
+            // own content images; the first one the safe pipeline accepts
+            // (size, type, public host) becomes the poster.
+            const { loadImageAsJpeg } = await import('@/lib/safeRemoteImage');
+            const failures: string[] = [];
+            for (const discovered of candidates) {
+              try {
+                const jpeg = await loadImageAsJpeg(discovered);
+                imageDataUpdate = `data:image/jpeg;base64,${jpeg.toString('base64')}`;
+                imageUrlUpdate = discovered;
+                item.image_action = 'discovered';
+                item.image_note = discovered;
+                break;
+              } catch (imageError) {
+                const code = imageError !== null && typeof imageError === 'object' && 'code' in imageError
+                  ? String((imageError as { code?: unknown }).code || 'FETCH_FAILED')
+                  : 'FETCH_FAILED';
+                failures.push(`${discovered} (${code})`);
+              }
+            }
+            if (item.image_action !== 'discovered') {
               item.image_action = 'image_unusable';
-              item.image_note = `${discovered} (${code})`;
+              item.image_note = failures.join('; ').slice(0, 500);
             }
           }
         } catch (discoveryError) {

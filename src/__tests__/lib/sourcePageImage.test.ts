@@ -1,5 +1,7 @@
 import {
   discoverSourcePageImage,
+  discoverSourcePageImageCandidates,
+  extractContentImageCandidates,
   extractMetaImageCandidates,
 } from '@/lib/sourcePageImage';
 
@@ -68,5 +70,54 @@ describe('discoverSourcePageImage', () => {
     `)) as unknown as typeof fetch;
     await expect(discoverSourcePageImage('https://library.example.org/event', fetcher))
       .resolves.toBe('https://cdn.example.org/safe.jpg');
+  });
+});
+
+describe('extractContentImageCandidates', () => {
+  it('reads body images, honoring lazy-load attributes and skipping chrome', () => {
+    const html = `
+      <img src="/mt-content/uploads/2026/05/ballgame-photo.jpg" width="1200" height="800">
+      <img data-src="/media/lazy-flyer.jpg" src="data:image/svg+xml,placeholder">
+      <img src="/assets/site-logo.png" width="600">
+      <img src="/img/tiny-thumb.jpg" width="90" height="90">
+      <img src="/decor/vector.svg">
+    `;
+    expect(extractContentImageCandidates(html)).toEqual([
+      '/mt-content/uploads/2026/05/ballgame-photo.jpg',
+      '/media/lazy-flyer.jpg',
+    ]);
+  });
+
+  it('takes the first srcset URL when src is a placeholder', () => {
+    const html = '<img src="data:image/gif;base64,R0" srcset="/media/photo-640.jpg 640w, /media/photo-1280.jpg 1280w">';
+    expect(extractContentImageCandidates(html)).toEqual(['/media/photo-640.jpg']);
+  });
+});
+
+describe('discoverSourcePageImageCandidates', () => {
+  it('falls back to content images when the page declares no share metadata', async () => {
+    // The First Church case: real event photos in the body, no og:image.
+    const fetcher = jest.fn().mockResolvedValue(htmlResponse(`
+      <title>Events</title>
+      <img src="/mt-content/uploads/2026/05/pexels-baseball.jpg" width="7008" height="4672">
+      <img src="/mt-content/uploads/2025/05/other-photo.jpg" width="1200" height="800">
+    `)) as unknown as typeof fetch;
+    await expect(discoverSourcePageImageCandidates('https://firstchurch.example.org/events/', fetcher))
+      .resolves.toEqual([
+        'https://library.example.org/mt-content/uploads/2026/05/pexels-baseball.jpg',
+        'https://library.example.org/mt-content/uploads/2025/05/other-photo.jpg',
+      ]);
+  });
+
+  it('keeps share metadata ahead of content images', async () => {
+    const fetcher = jest.fn().mockResolvedValue(htmlResponse(`
+      <meta property="og:image" content="https://cdn.example.org/share.jpg">
+      <img src="https://cdn.example.org/body.jpg" width="800">
+    `)) as unknown as typeof fetch;
+    await expect(discoverSourcePageImageCandidates('https://library.example.org/event', fetcher))
+      .resolves.toEqual([
+        'https://cdn.example.org/share.jpg',
+        'https://cdn.example.org/body.jpg',
+      ]);
   });
 });

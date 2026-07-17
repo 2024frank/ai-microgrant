@@ -8,12 +8,12 @@ jest.mock('@/lib/adminContact', () => ({
   getAdminContact: jest.fn().mockResolvedValue('admin@oberlin.edu'),
 }));
 jest.mock('@/lib/sourcePageImage', () => ({
-  discoverSourcePageImage: jest.fn().mockResolvedValue(null),
+  discoverSourcePageImageCandidates: jest.fn().mockResolvedValue([]),
 }));
 
 const db = require('@/lib/db');
 const { loadImageAsJpeg } = jest.requireMock('@/lib/safeRemoteImage');
-const { discoverSourcePageImage } = jest.requireMock('@/lib/sourcePageImage');
+const { discoverSourcePageImageCandidates } = jest.requireMock('@/lib/sourcePageImage');
 
 function makeReq(secret = 'test-cron-secret') {
   return new NextRequest('http://localhost/api/agent/queue-conformance', {
@@ -75,7 +75,7 @@ beforeEach(() => {
   db.mockConn.release = jest.fn();
   (loadImageAsJpeg as jest.Mock).mockClear()
     .mockResolvedValue(Buffer.from('poster-bytes'));
-  (discoverSourcePageImage as jest.Mock).mockClear().mockResolvedValue(null);
+  (discoverSourcePageImageCandidates as jest.Mock).mockClear().mockResolvedValue([]);
 });
 
 describe('POST /api/agent/queue-conformance', () => {
@@ -126,8 +126,8 @@ describe('POST /api/agent/queue-conformance', () => {
   });
 
   it('discovers a missing poster from the source page share metadata', async () => {
-    (discoverSourcePageImage as jest.Mock).mockResolvedValueOnce(
-      'https://cdn.example.org/storytime.jpg',
+    (discoverSourcePageImageCandidates as jest.Mock).mockResolvedValueOnce(
+      ['https://cdn.example.org/storytime.jpg'],
     );
     mockQueue([pendingRow({
       image_cdn_url: null,
@@ -138,7 +138,7 @@ describe('POST /api/agent/queue-conformance', () => {
     const data = await (await POST(makeReq())).json();
 
     expect(data.items[0].image_action).toBe('discovered');
-    expect(discoverSourcePageImage).toHaveBeenCalledWith('https://library.example.org/event/storytime');
+    expect(discoverSourcePageImageCandidates).toHaveBeenCalledWith('https://library.example.org/event/storytime');
     expect(loadImageAsJpeg).toHaveBeenCalledWith('https://cdn.example.org/storytime.jpg');
     const update = db.mockConn.query.mock.calls.find(
       ([sql]: [string]) => typeof sql === 'string' && sql.includes('UPDATE raw_events SET'),
@@ -146,6 +146,27 @@ describe('POST /api/agent/queue-conformance', () => {
     // The discovered URL is stored for provenance and the bytes for serving.
     expect(update![0]).toContain('image_cdn_url=?');
     expect(update![0]).toContain('image_data=?');
+  });
+
+  it('falls through to the next discovered candidate when the first will not load', async () => {
+    (discoverSourcePageImageCandidates as jest.Mock).mockResolvedValueOnce([
+      'https://cdn.example.org/huge-original.jpg',
+      'https://cdn.example.org/body-photo.jpg',
+    ]);
+    (loadImageAsJpeg as jest.Mock)
+      .mockRejectedValueOnce(Object.assign(new Error('too big'), { code: 'TOO_LARGE' }))
+      .mockResolvedValueOnce(Buffer.from('poster-bytes'));
+    mockQueue([pendingRow({
+      image_cdn_url: null,
+      image_data: null,
+      calendar_source_url: 'https://firstchurch.example.org/events/',
+    })]);
+
+    const data = await (await POST(makeReq())).json();
+
+    expect(data.items[0].image_action).toBe('discovered');
+    expect(data.items[0].image_note).toBe('https://cdn.example.org/body-photo.jpg');
+    expect(loadImageAsJpeg).toHaveBeenCalledTimes(2);
   });
 
   it('records a no-source-image outcome and timestamps the attempt', async () => {
@@ -177,7 +198,7 @@ describe('POST /api/agent/queue-conformance', () => {
     const data = await (await POST(makeReq())).json();
 
     expect(data.items[0].image_action).toBeUndefined();
-    expect(discoverSourcePageImage).not.toHaveBeenCalled();
+    expect(discoverSourcePageImageCandidates).not.toHaveBeenCalled();
   });
 
   it('removes a permanently unfetchable poster and flags a transient failure', async () => {
