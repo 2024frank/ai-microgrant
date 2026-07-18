@@ -1,0 +1,51 @@
+name: CommunityHub Image Update
+
+# Manual trigger for POST /api/agent/communityhub-image-update: refresh the
+# image on already-published CommunityHub posts (PATCH by post id, which
+# updates the same post and cannot create a duplicate). Dry-run by default;
+# set apply=1 to write, and limit to test on one post first.
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'Set to 1 to actually PATCH CommunityHub (otherwise dry-run)'
+        required: false
+        default: ''
+      limit:
+        description: 'Max posts to touch (use 1 to test on one first)'
+        required: false
+        default: '50'
+      source_id:
+        description: 'Source id to refresh (default 7 = Oberlin Public Library)'
+        required: false
+        default: '7'
+
+jobs:
+  update:
+    name: Refresh CommunityHub post images
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Invoke image-update endpoint
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          APPLY: ${{ github.event.inputs.apply }}
+          LIMIT: ${{ github.event.inputs.limit }}
+          SOURCE_ID: ${{ github.event.inputs.source_id }}
+        run: |
+          set -Eeuo pipefail
+          : "${APP_URL:?APP_URL secret is not configured}"
+          : "${CRON_SECRET:?CRON_SECRET secret is not configured}"
+          APP_URL="${APP_URL%/}"
+          QS="limit=${LIMIT:-50}&source_id=${SOURCE_ID:-7}"
+          if [ "${APPLY:-}" = "1" ]; then QS="apply=1&${QS}"; fi
+          RESPONSE="$RUNNER_TEMP/image-update-response.json"
+          curl --silent --show-error --fail-with-body --retry 2 --retry-delay 2 \
+            --connect-timeout 10 --max-time 280 -X POST \
+            "$APP_URL/api/agent/communityhub-image-update?$QS" \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            | tee "$RESPONSE"
+          jq -e 'type == "object" and .ok == true and ((.errors | type) == "number") and .errors == 0' "$RESPONSE" >/dev/null
+          echo "CommunityHub image update completed."
