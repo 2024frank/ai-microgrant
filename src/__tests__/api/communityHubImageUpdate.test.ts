@@ -37,6 +37,7 @@ function makeReq(qs = '') {
 describe('POST /api/agent/communityhub-image-update', () => {
   beforeEach(() => {
     process.env.CRON_SECRET = 'test-cron-secret';
+    process.env.APP_URL = 'https://app.example.org';
     (fetchCommunityHubInventory as jest.Mock).mockReset().mockResolvedValue(INVENTORY);
     db.default.query.mockReset().mockResolvedValue([{ affectedRows: 1 }]);
     mockFetch.mockReset().mockResolvedValue({ ok: true, status: 200, text: async () => 'ok' });
@@ -72,7 +73,9 @@ describe('POST /api/agent/communityhub-image-update', () => {
     expect(chInit.method).toBe('PATCH');
     const sent = JSON.parse(chInit.body);
     expect(Object.keys(sent)).toEqual(['image_cdn_url']);
-    expect(String(sent.image_cdn_url)).toContain('images.locable.com');
+    // CommunityHub needs a real extension, so it downloads from the app's
+    // .jpg re-serve, not the extension-less Locable URL.
+    expect(String(sent.image_cdn_url)).toBe('https://app.example.org/api/media/library/lego.jpg');
   });
 
   it('reports a CH failure as an error without throwing', async () => {

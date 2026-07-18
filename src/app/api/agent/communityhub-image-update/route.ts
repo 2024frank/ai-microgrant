@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { cronUnavailable, isCronAuthorized } from '@/lib/cronAuth';
-import { validatePublicHttpUrl } from '@/lib/publicHttpUrl';
 import { fetchCommunityHubInventory } from '@/lib/communityHubInventory';
+import { libraryImagesByTitle, libraryPosterSlug } from '@/lib/libraryPosters';
 import pool from '@/lib/db';
 
 export const maxDuration = 300;
@@ -16,24 +16,15 @@ const CH_BASE = 'https://oberlin.communityhub.cloud/api/legacy/calendar';
  * from WhoFi's logo to Locable's per-event photos). This reads the live
  * CommunityHub inventory, matches each library post by name to its real
  * image, and PATCHes that post by id. PATCH /post/{id}/submit updates the
- * SAME post, so it can never create a duplicate public entry, and it points
- * CommunityHub straight at the public image URL to download.
+ * SAME post, so it can never create a duplicate public entry.
+ *
+ * CommunityHub rejects the extension-less Locable CDN URLs, so it is pointed
+ * at the app's /api/media/library/<slug>.jpg endpoint, which re-serves the
+ * same image as a JPEG at a real extension.
  *
  * Query params: apply=1 to actually PATCH (else dry-run); limit=N to cap
- * (test with 1 first). Body may override { images: { "<title>": "<url>" } }.
+ * (test with 1 first).
  */
-
-// The Oberlin Public Library programs currently on its Locable calendar and
-// their real per-event images.
-const LIBRARY_IMAGES: Record<string, string> = {
-  'Storytime at Oberlin Public Library': 'https://images.locable.com/eyJidWNrZXQiOiJpbXBhY3QtcHJvZHVjdGlvbiIsImtleSI6Il9vcmlnaW5hbHMvNTg1MDZhYjktNmMxZC00MzUxLTljYzQtZGY3ZmI5ZGNkNGM4L1N0b3J5dGltZS5wbmciLCJlZGl0cyI6eyJyZXNpemUiOnsid2lkdGgiOjQwMH0sInBuZyI6eyJxdWFsaXR5Ijo4MCwiYWRhcHRpdmVGaWx0ZXJpbmciOnRydWV9fX0=',
-  'Kitten Storytime at OPL': 'https://images.locable.com/eyJidWNrZXQiOiJpbXBhY3QtcHJvZHVjdGlvbiIsImtleSI6Il9vcmlnaW5hbHMvYmUyMTQ4ZWEtMzAxZC00ZjRmLTk0MTQtZmM3YTc0ZWRmNGEwL0tpdHRlbiBTdG9yeXRpbWUgMjAyNiAoMSkucG5nIiwiZWRpdHMiOnsicmVzaXplIjp7IndpZHRoIjo0MDB9LCJwbmciOnsicXVhbGl0eSI6ODAsImFkYXB0aXZlRmlsdGVyaW5nIjp0cnVlfX19',
-  'Reading Buddies with Maya the Therapy Dog': 'https://images.locable.com/eyJidWNrZXQiOiJpbXBhY3QtcHJvZHVjdGlvbiIsImtleSI6Il9vcmlnaW5hbHMvOTY2OTI2ODItMTIyMC00NDM2LTgyNTgtMDA2Mzc4Y2Q5M2FkL1JlYWRpbmcgQnVkZGllcyBGbHllciAoSW5zdGFncmFtIFBvc3QgKDQ1KSkgKDMpLnBuZyIsImVkaXRzIjp7InJlc2l6ZSI6eyJ3aWR0aCI6NDAwfSwicG5nIjp7InF1YWxpdHkiOjgwLCJhZGFwdGl2ZUZpbHRlcmluZyI6dHJ1ZX19fQ==',
-  'Kombucha In Your Kitchen (OPL Modern Homesteading)': 'https://images.locable.com/eyJidWNrZXQiOiJpbXBhY3QtcHJvZHVjdGlvbiIsImtleSI6Il9vcmlnaW5hbHMvNjRmYzc0OGQtZTc5Ny00Mjk2LTkwNTEtMGViNDA3NWM5MTgxLzc0NDMzMzAwNl8yODYyMTE3NzEyMDgwNTI1OV8yNDU4MzEzOTk0NjE1MzY3ODI2X24uanBnIiwiZWRpdHMiOnsicmVzaXplIjp7IndpZHRoIjo0MDB9LCJqcGVnIjp7InF1YWxpdHkiOjgwfX19',
-  'L.E.G.O.': 'https://images.locable.com/eyJidWNrZXQiOiJpbXBhY3QtcHJvZHVjdGlvbiIsImtleSI6Il9lZGl0ZWQvMDJkOTYzOTYtZmRmYy00M2VhLTlmOWEtZWE2YTUxYzBlZWRkL0xFR08ucG5nIiwiZWRpdHMiOnsicmVzaXplIjp7IndpZHRoIjo0MDB9LCJwbmciOnsicXVhbGl0eSI6ODAsImFkYXB0aXZlRmlsdGVyaW5nIjp0cnVlfX19',
-  'Music Open Mic': 'https://images.locable.com/eyJidWNrZXQiOiJpbXBhY3QtcHJvZHVjdGlvbiIsImtleSI6Il9vcmlnaW5hbHMvYTk5ODY3NmUtYWIzOS00ZmQzLWI4ZWQtMWRiOWY1NzE5N2NkLzAucG5nIiwiZWRpdHMiOnsicmVzaXplIjp7IndpZHRoIjo0MDB9LCJwbmciOnsicXVhbGl0eSI6ODAsImFkYXB0aXZlRmlsdGVyaW5nIjp0cnVlfX19',
-  'Bird Conversation: Where Have All The Birds Gone?': 'https://images.locable.com/eyJidWNrZXQiOiJpbXBhY3QtcHJvZHVjdGlvbiIsImtleSI6Il9vcmlnaW5hbHMvNzI2NGJlMzAtM2ViMS00ZjRkLTg5NTQtYjY1ODM5ZmM3MjdmL0JpcmRzLnBuZyIsImVkaXRzIjp7InJlc2l6ZSI6eyJ3aWR0aCI6NDAwfSwicG5nIjp7InF1YWxpdHkiOjgwLCJhZGFwdGl2ZUZpbHRlcmluZyI6dHJ1ZX19fQ==',
-};
 
 const STOPWORDS = new Set([
   'the', 'at', 'of', 'and', 'in', 'to', 'a', 'an', 'with', 'for', 'opl',
@@ -111,19 +102,12 @@ async function handle(req: NextRequest) {
   const apply = url.searchParams.get('apply') === '1';
   const limit = Math.max(1, Math.min(50, Number(url.searchParams.get('limit')) || 50));
 
-  let images = LIBRARY_IMAGES;
-  try {
-    const body = await req.json();
-    if (body && typeof body.images === 'object' && body.images) images = body.images;
-  } catch {
-    // No body: use the default map.
-  }
-  const validImages: Record<string, string> = {};
-  for (const [title, imageUrl] of Object.entries(images)) {
-    if (typeof imageUrl === 'string' && validatePublicHttpUrl(imageUrl).success) {
-      validImages[title] = imageUrl;
-    }
-  }
+  const appUrl = (
+    process.env.APP_URL
+    || process.env.NEXT_PUBLIC_APP_URL
+    || 'https://ai-microgrant-research-oberlin.vercel.app'
+  ).replace(/\/$/, '');
+  const validImages = libraryImagesByTitle();
   const keys = Object.keys(validImages);
 
   let inventory;
@@ -158,7 +142,10 @@ async function handle(req: NextRequest) {
       continue;
     }
     if (touched >= limit) break;
-    const imageUrl = validImages[matchedTitle];
+    // CommunityHub downloads the image from its URL and requires a real file
+    // extension, so it is pointed at the app's .jpg re-serve of the poster.
+    const slug = libraryPosterSlug(matchedTitle);
+    const imageUrl = slug ? `${appUrl}/api/media/library/${slug}.jpg` : validImages[matchedTitle];
     if (!apply) {
       touched++;
       items.push({ post_id: postId, post_name: postName, matched_title: matchedTitle, image_url: imageUrl, status: 'matched' });
