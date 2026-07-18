@@ -1,11 +1,11 @@
 import { NextRequest } from 'next/server';
 
-jest.mock('@/lib/safeRemoteImage', () => ({
-  loadImageAsJpeg: jest.fn().mockResolvedValue(Buffer.from('jpeg-bytes')),
+jest.mock('@/lib/communityHubInventory', () => ({
+  fetchCommunityHubInventory: jest.fn(),
 }));
 
 import { POST } from '@/app/api/agent/communityhub-image-update/route';
-import { loadImageAsJpeg } from '@/lib/safeRemoteImage';
+import { fetchCommunityHubInventory } from '@/lib/communityHubInventory';
 
 const db = require('@/lib/db');
 const mockFetch = jest.fn();
@@ -13,11 +13,19 @@ const originalFetch = global.fetch;
 beforeAll(() => { global.fetch = mockFetch as any; });
 afterAll(() => { global.fetch = originalFetch; });
 
-const LIB_ROWS = [
-  { id: 501, title: 'L.E.G.O.', communityhub_post_id: '3994', status: 'approved' },
-  { id: 502, title: 'Music Open Mic', communityhub_post_id: '4349', status: 'submitted' },
-  { id: 503, title: 'Some Unlisted Program', communityhub_post_id: '9999', status: 'approved' },
-];
+function post(id: string, name: string, sourceName = 'Oberlin Public Library') {
+  return { title: name, raw: { id, name, calendarSourceName: sourceName, sponsors: [], organizations: [] } };
+}
+
+const INVENTORY = {
+  posts: [
+    post('3994', 'L.E.G.O.'),
+    post('5000', 'Storytime'),            // short title; must fuzzy-match "Storytime at Oberlin Public Library"
+    post('5048', 'Kitten Storytime'),     // must fuzzy-match "Kitten Storytime at OPL"
+    post('4987', 'Oberlin Writers'),      // no image supplied
+    post('7777', 'Downtown Jazz Night', 'Apollo Theatre'), // not a library post
+  ],
+};
 
 function makeReq(qs = '') {
   return new NextRequest(`http://localhost/api/agent/communityhub-image-update${qs}`, {
@@ -29,13 +37,8 @@ function makeReq(qs = '') {
 describe('POST /api/agent/communityhub-image-update', () => {
   beforeEach(() => {
     process.env.CRON_SECRET = 'test-cron-secret';
-    process.env.APP_URL = 'https://app.example.org';
-    process.env.MEDIA_PROXY_SECRET = 'a-sufficiently-long-media-secret';
-    db.default.query.mockReset().mockImplementation((sql: string) => {
-      if (typeof sql === 'string' && sql.includes('FROM raw_events')) return Promise.resolve([LIB_ROWS]);
-      return Promise.resolve([{ affectedRows: 1 }]);
-    });
-    (loadImageAsJpeg as jest.Mock).mockClear().mockResolvedValue(Buffer.from('jpeg-bytes'));
+    (fetchCommunityHubInventory as jest.Mock).mockReset().mockResolvedValue(INVENTORY);
+    db.default.query.mockReset().mockResolvedValue([{ affectedRows: 1 }]);
     mockFetch.mockReset().mockResolvedValue({ ok: true, status: 200, text: async () => 'ok' });
   });
 
@@ -44,36 +47,32 @@ describe('POST /api/agent/communityhub-image-update', () => {
     expect(res.status).toBe(401);
   });
 
-  it('dry-runs by default: matches by title, writes nothing, calls no CH', async () => {
+  it('dry-runs: fuzzy-matches library posts by name, ignores non-library posts, writes nothing', async () => {
     const body = await (await POST(makeReq())).json();
     expect(body.apply).toBe(false);
-    expect(body.matched).toBe(2); // LEGO + Music Open Mic; the third has no image
+    expect(body.library_posts).toBe(4); // the Apollo post is excluded
+    // LEGO, Storytime, Kitten all match; Oberlin Writers has no image
+    expect(body.matched).toBe(3);
     expect(body.unmatched).toBe(1);
     expect(mockFetch).not.toHaveBeenCalled();
-    expect(loadImageAsJpeg).not.toHaveBeenCalled();
-    const write = db.default.query.mock.calls.find(([sql]: [string]) => sql.includes('UPDATE raw_events SET image_data'));
-    expect(write).toBeUndefined();
+    const legos = body.items.find((i: any) => i.post_id === '5000');
+    expect(legos.matched_title).toBe('Storytime at Oberlin Public Library');
   });
 
-  it('with limit=1 touches exactly one event', async () => {
+  it('with limit=1 touches exactly one post', async () => {
     const body = await (await POST(makeReq('?limit=1'))).json();
     expect(body.items.filter((i: any) => i.status === 'matched')).toHaveLength(1);
   });
 
-  it('apply materializes the image and PATCHes the existing post by id (no duplicate)', async () => {
+  it('apply PATCHes the existing post by id with the public image URL (no duplicate)', async () => {
     const body = await (await POST(makeReq('?apply=1&limit=1'))).json();
     expect(body.updated).toBe(1);
-    expect(loadImageAsJpeg).toHaveBeenCalledTimes(1);
-    // The stored bytes are written before the CH call.
-    const write = db.default.query.mock.calls.find(([sql]: [string]) => sql.includes('UPDATE raw_events SET image_data'));
-    expect(write).toBeDefined();
-    // The CH call is a PATCH to /post/{id}/submit, never a create POST.
     const [chUrl, chInit] = mockFetch.mock.calls[0];
     expect(String(chUrl)).toBe('https://oberlin.communityhub.cloud/api/legacy/calendar/post/3994/submit');
     expect(chInit.method).toBe('PATCH');
     const sent = JSON.parse(chInit.body);
-    expect(String(sent.image_cdn_url)).toContain('/api/events/501/poster.jpg?media_token=');
-    expect(Object.keys(sent)).toEqual(['image_cdn_url']); // partial update: image only
+    expect(Object.keys(sent)).toEqual(['image_cdn_url']);
+    expect(String(sent.image_cdn_url)).toContain('images.locable.com');
   });
 
   it('reports a CH failure as an error without throwing', async () => {

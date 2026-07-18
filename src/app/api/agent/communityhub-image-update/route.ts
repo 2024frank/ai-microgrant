@@ -1,9 +1,8 @@
 import { NextRequest } from 'next/server';
-import pool from '@/lib/db';
 import { cronUnavailable, isCronAuthorized } from '@/lib/cronAuth';
-import { createEventMediaToken } from '@/lib/eventMediaToken';
-import { normalizeCommunityHubPostId } from '@/lib/communityHubResponse';
 import { validatePublicHttpUrl } from '@/lib/publicHttpUrl';
+import { fetchCommunityHubInventory } from '@/lib/communityHubInventory';
+import pool from '@/lib/db';
 
 export const maxDuration = 300;
 
@@ -12,23 +11,20 @@ const CH_BASE = 'https://oberlin.communityhub.cloud/api/legacy/calendar';
 /**
  * POST /api/agent/communityhub-image-update (CRON_SECRET)
  *
- * Refresh the image on already-published CommunityHub posts. Some events were
- * published before their source was pointed at a feed that carries real
- * images (the library moved from WhoFi's logo to Locable's per-event photos).
- * This updates each matched event's stored poster and PATCHes the existing
- * CommunityHub post by its id. PATCH /post/{id}/submit updates the SAME post,
- * so it cannot create a duplicate public entry.
+ * Refresh the image on already-published CommunityHub posts. Some programs
+ * were published before their source carried real images (the library moved
+ * from WhoFi's logo to Locable's per-event photos). This reads the live
+ * CommunityHub inventory, matches each library post by name to its real
+ * image, and PATCHes that post by id. PATCH /post/{id}/submit updates the
+ * SAME post, so it can never create a duplicate public entry, and it points
+ * CommunityHub straight at the public image URL to download.
  *
- * Query params:
- *  - apply=1        actually materialize and PATCH; otherwise dry-run only.
- *  - limit=N        cap how many events to touch (test on one first).
- *  - source_id=N    which source's events to refresh (default 7, the library).
- * Body (optional): { images: { "<title>": "<public https image url>" } } to
- * override the default title-to-image map.
+ * Query params: apply=1 to actually PATCH (else dry-run); limit=N to cap
+ * (test with 1 first). Body may override { images: { "<title>": "<url>" } }.
  */
 
-// The seven live Oberlin Public Library programs and their real Locable
-// images, gathered from the library's own calendar.
+// The Oberlin Public Library programs currently on its Locable calendar and
+// their real per-event images.
 const LIBRARY_IMAGES: Record<string, string> = {
   'Storytime at Oberlin Public Library': 'https://images.locable.com/eyJidWNrZXQiOiJpbXBhY3QtcHJvZHVjdGlvbiIsImtleSI6Il9vcmlnaW5hbHMvNTg1MDZhYjktNmMxZC00MzUxLTljYzQtZGY3ZmI5ZGNkNGM4L1N0b3J5dGltZS5wbmciLCJlZGl0cyI6eyJyZXNpemUiOnsid2lkdGgiOjQwMH0sInBuZyI6eyJxdWFsaXR5Ijo4MCwiYWRhcHRpdmVGaWx0ZXJpbmciOnRydWV9fX0=',
   'Kitten Storytime at OPL': 'https://images.locable.com/eyJidWNrZXQiOiJpbXBhY3QtcHJvZHVjdGlvbiIsImtleSI6Il9vcmlnaW5hbHMvYmUyMTQ4ZWEtMzAxZC00ZjRmLTk0MTQtZmM3YTc0ZWRmNGEwL0tpdHRlbiBTdG9yeXRpbWUgMjAyNiAoMSkucG5nIiwiZWRpdHMiOnsicmVzaXplIjp7IndpZHRoIjo0MDB9LCJwbmciOnsicXVhbGl0eSI6ODAsImFkYXB0aXZlRmlsdGVyaW5nIjp0cnVlfX19',
@@ -39,19 +35,66 @@ const LIBRARY_IMAGES: Record<string, string> = {
   'Bird Conversation: Where Have All The Birds Gone?': 'https://images.locable.com/eyJidWNrZXQiOiJpbXBhY3QtcHJvZHVjdGlvbiIsImtleSI6Il9vcmlnaW5hbHMvNzI2NGJlMzAtM2ViMS00ZjRkLTg5NTQtYjY1ODM5ZmM3MjdmL0JpcmRzLnBuZyIsImVkaXRzIjp7InJlc2l6ZSI6eyJ3aWR0aCI6NDAwfSwicG5nIjp7InF1YWxpdHkiOjgwLCJhZGFwdGl2ZUZpbHRlcmluZyI6dHJ1ZX19fQ==',
 };
 
-function normalizeTitle(value: unknown): string {
-  return String(value ?? '')
+const STOPWORDS = new Set([
+  'the', 'at', 'of', 'and', 'in', 'to', 'a', 'an', 'with', 'for', 'opl',
+  'oberlin', 'public', 'library', 'your',
+]);
+
+function tokens(value: string): string[] {
+  return value
     .toLocaleLowerCase('en-US')
     .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
+    .trim()
+    .split(' ')
+    .filter(token => token.length >= 2);
+}
+
+/** Distinctive tokens for matching: drops generic library words. */
+function keyTokens(value: string): Set<string> {
+  return new Set(tokens(value).filter(token => !STOPWORDS.has(token)));
+}
+
+/** All alphanumerics, lowercased, no separators ("L.E.G.O." -> "lego"). */
+function compact(value: string): string {
+  return value.toLocaleLowerCase('en-US').replace(/[^a-z0-9]/g, '');
+}
+
+/** Best image key for a post name: containment or strong distinctive overlap. */
+function matchImageTitle(postName: string, keys: string[]): string | null {
+  const postCompact = compact(postName);
+  const post = keyTokens(postName);
+  let best: { key: string; score: number } | null = null;
+  for (const key of keys) {
+    const keyCompact = compact(key);
+    // Compact containment handles punctuation-heavy titles ("L.E.G.O.") and
+    // short-vs-long variants ("Storytime" vs "Storytime at Oberlin Public
+    // Library"). Require the shorter side to be at least four characters so a
+    // trivial fragment cannot match.
+    const shorter = postCompact.length <= keyCompact.length ? postCompact : keyCompact;
+    const longer = shorter === postCompact ? keyCompact : postCompact;
+    const compactMatch = shorter.length >= 4 && longer.includes(shorter);
+
+    const wanted = keyTokens(key);
+    const shared = [...wanted].filter(token => post.has(token)).length;
+    const smaller = Math.min(wanted.size, post.size);
+    const coverage = smaller > 0 ? shared / smaller : 0;
+    const union = new Set([...wanted, ...post]).size;
+    const jaccard = union > 0 ? shared / union : 0;
+
+    if (compactMatch || coverage >= 1 || jaccard >= 0.6) {
+      const score = compactMatch ? 1 + shorter.length / 100 : Math.max(coverage, jaccard);
+      if (!best || score > best.score) best = { key, score };
+    }
+  }
+  return best?.key ?? null;
 }
 
 type UpdateItem = {
-  event_id: number;
-  title: string;
-  post_id: string | null;
-  status: 'matched' | 'updated' | 'skipped_no_match' | 'skipped_no_post_id' | 'error';
+  post_id: string;
+  post_name: string;
+  matched_title?: string;
   image_url?: string;
+  status: 'matched' | 'updated' | 'skipped_no_match' | 'error';
   ch_status?: number;
   error?: string;
 };
@@ -67,7 +110,6 @@ async function handle(req: NextRequest) {
   const url = new URL(req.url);
   const apply = url.searchParams.get('apply') === '1';
   const limit = Math.max(1, Math.min(50, Number(url.searchParams.get('limit')) || 50));
-  const sourceId = Number(url.searchParams.get('source_id')) || 7;
 
   let images = LIBRARY_IMAGES;
   try {
@@ -76,88 +118,85 @@ async function handle(req: NextRequest) {
   } catch {
     // No body: use the default map.
   }
-  const imageByTitle = new Map<string, string>();
+  const validImages: Record<string, string> = {};
   for (const [title, imageUrl] of Object.entries(images)) {
     if (typeof imageUrl === 'string' && validatePublicHttpUrl(imageUrl).success) {
-      imageByTitle.set(normalizeTitle(title), imageUrl);
+      validImages[title] = imageUrl;
     }
   }
+  const keys = Object.keys(validImages);
 
-  const appUrl = (
-    process.env.APP_URL
-    || process.env.NEXT_PUBLIC_APP_URL
-    || 'https://ai-microgrant-research-oberlin.vercel.app'
-  ).replace(/\/$/, '');
+  let inventory;
+  try {
+    inventory = await fetchCommunityHubInventory();
+  } catch (error) {
+    return Response.json({
+      error: 'Could not read the CommunityHub inventory',
+      detail: error instanceof Error ? error.message : 'inventory fetch failed',
+    }, { status: 502 });
+  }
 
-  // Only events already on CommunityHub (they have a post id) in a live or
-  // in-moderation state. PATCH updates that exact post; no new post is created.
-  const [rows] = await pool.query(
-    `SELECT id, title, communityhub_post_id, status
-     FROM raw_events
-     WHERE source_id=?
-       AND communityhub_post_id IS NOT NULL
-       AND status IN ('approved','submitted','publishing','resubmitted')
-     ORDER BY id ASC`,
-    [sourceId],
-  ) as any;
-  const events = Array.isArray(rows) ? rows : [];
+  // Restrict to posts attributed to the Oberlin Public Library, then match
+  // each by name to one of the supplied images.
+  const libraryPosts = inventory.posts.filter(post => {
+    const raw = post.raw;
+    const labels = [raw?.calendarSourceName ?? '', ...(raw?.sponsors ?? []), ...(raw?.organizations ?? [])]
+      .join(' ')
+      .toLocaleLowerCase('en-US');
+    return labels.includes('library') || labels.includes('oberlin public');
+  });
 
   const items: UpdateItem[] = [];
   let touched = 0;
-  for (const event of events) {
+  for (const post of libraryPosts) {
+    const postId = post.raw?.id ?? '';
+    const postName = post.raw?.name ?? post.title;
+    if (!postId) continue;
+    const matchedTitle = matchImageTitle(postName, keys);
+    if (!matchedTitle) {
+      items.push({ post_id: postId, post_name: postName, status: 'skipped_no_match' });
+      continue;
+    }
     if (touched >= limit) break;
-    const eventId = Number(event.id);
-    const title = String(event.title ?? '');
-    const postId = normalizeCommunityHubPostId(event.communityhub_post_id);
-    const imageUrl = imageByTitle.get(normalizeTitle(title));
-
-    if (!imageUrl) {
-      items.push({ event_id: eventId, title, post_id: postId, status: 'skipped_no_match' });
-      continue;
-    }
-    if (!postId) {
-      items.push({ event_id: eventId, title, post_id: null, status: 'skipped_no_post_id', image_url: imageUrl });
-      continue;
-    }
+    const imageUrl = validImages[matchedTitle];
     if (!apply) {
       touched++;
-      items.push({ event_id: eventId, title, post_id: postId, status: 'matched', image_url: imageUrl });
+      items.push({ post_id: postId, post_name: postName, matched_title: matchedTitle, image_url: imageUrl, status: 'matched' });
       continue;
     }
-
     touched++;
     try {
-      const { loadImageAsJpeg } = await import('@/lib/safeRemoteImage');
-      const jpeg = await loadImageAsJpeg(imageUrl);
-      const dataUri = `data:image/jpeg;base64,${jpeg.toString('base64')}`;
-      await pool.query(
-        `UPDATE raw_events SET image_data=?, image_cdn_url=? WHERE id=?`,
-        [dataUri, imageUrl, eventId],
-      );
-      const mediaToken = createEventMediaToken(String(eventId), dataUri);
-      const posterUrl = `${appUrl}/api/events/${eventId}/poster.jpg?media_token=${encodeURIComponent(mediaToken)}`;
       const response = await fetch(`${CH_BASE}/post/${encodeURIComponent(postId)}/submit`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image_cdn_url: posterUrl }),
+        body: JSON.stringify({ image_cdn_url: imageUrl }),
         signal: AbortSignal.timeout(30_000),
       });
+      const ok = response.ok;
+      // Best-effort: reflect the new image on any local row for this post.
+      if (ok) {
+        await pool.query(
+          `UPDATE raw_events SET image_cdn_url=?, image_data=NULL
+           WHERE communityhub_post_id=?`,
+          [imageUrl, postId],
+        ).catch(() => undefined);
+      }
       items.push({
-        event_id: eventId,
-        title,
         post_id: postId,
-        status: response.ok ? 'updated' : 'error',
+        post_name: postName,
+        matched_title: matchedTitle,
         image_url: imageUrl,
+        status: ok ? 'updated' : 'error',
         ch_status: response.status,
-        error: response.ok ? undefined : (await response.text().catch(() => '')).slice(0, 300),
+        error: ok ? undefined : (await response.text().catch(() => '')).slice(0, 300),
       });
     } catch (error) {
       items.push({
-        event_id: eventId,
-        title,
         post_id: postId,
-        status: 'error',
+        post_name: postName,
+        matched_title: matchedTitle,
         image_url: imageUrl,
+        status: 'error',
         error: error instanceof Error ? error.message : 'image update failed',
       });
     }
@@ -166,8 +205,7 @@ async function handle(req: NextRequest) {
   return Response.json({
     ok: items.every(item => item.status !== 'error'),
     apply,
-    source_id: sourceId,
-    candidates: events.length,
+    library_posts: libraryPosts.length,
     matched: items.filter(i => i.status === 'matched' || i.status === 'updated').length,
     updated: items.filter(i => i.status === 'updated').length,
     unmatched: items.filter(i => i.status === 'skipped_no_match').length,
