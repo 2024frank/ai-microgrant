@@ -40,7 +40,7 @@ Re-read the live source pages on every run. Extract only public events or announ
 
 ${COMMUNITY_HUB_AGENT_DEDUP_INSTRUCTIONS}
 
-Return only one raw JSON array. Never authenticate to or submit data to the Event Intake application; the read-only intake inventory GET above is the only request you may make to it. The application receives your JSON response, validates every field, re-checks both inventories for duplicates, and stores the draft for human review.
+Return only one raw JSON array. Never authenticate to or submit data to the AI Calendar application; the read-only intake inventory GET above is the only request you may make to it. The application receives your JSON response, validates every field, re-checks both inventories for duplicates, and stores the draft for human review.
 
 Every object must follow this exact contract:
 - eventType: only "ot" for Event, "an" for Announcement, or "jp" for Job. Never use a category code here.
@@ -100,7 +100,7 @@ const SOURCE_CONFLICT_DROP_PATTERNS = [
   /fetch the complete CommunityHub/i,
   /approved-and-pending inventory/i,
   /\blastPage\b/i,
-  /CommunityHub IDs and Event Intake IDs/i,
+  /CommunityHub IDs and AI Calendar IDs/i,
   /Compare actual content, never IDs/i,
   /Skip a source event only when/i,
   /Keep extracting when the only similarity/i,

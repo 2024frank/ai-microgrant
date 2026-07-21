@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import { Comfortaa, Lato } from 'next/font/google';
 import './globals.css';
+import './ai-calendar.css';
 
 const lato = Lato({
   subsets: ['latin'],
@@ -17,11 +18,11 @@ const comfortaa = Comfortaa({
 
 export const metadata: Metadata = {
   title: {
-    default: 'Community Event Intake',
-    template: '%s · Event Intake',
+    default: 'AI Calendar',
+    template: '%s · AI Calendar',
   },
   description:
-    'Source ingestion, payload validation, and human review for community publishing teams.',
+    'AI-assisted event discovery, review, and multi-tenant calendar publishing.',
   icons: {
     icon: '/logo.png',
     apple: '/logo.png',

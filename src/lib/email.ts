@@ -1,6 +1,6 @@
 import nodemailer from 'nodemailer';
 
-// Lazy init — transporter is reused across calls
+// Lazy init — transporter is reused across calls.
 let _transporter: nodemailer.Transporter | null = null;
 function getTransporter(): nodemailer.Transporter {
   if (!_transporter) {
@@ -18,253 +18,243 @@ function getTransporter(): nodemailer.Transporter {
   return _transporter;
 }
 
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-const FROM    = `AI Events Ingestion Software <${process.env.SMTP_USER || 'eve@communityhub.cloud'}>`;
+const APP_URL = (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000').replace(/\/$/, '');
+const LOGO_URL = `${APP_URL}/logo.png`;
+const FROM = `AI Calendar by CommunityHub <${process.env.SMTP_USER || 'eve@communityhub.cloud'}>`;
+
+const COLORS = {
+  ink: '#212934',
+  body: '#4a4e57',
+  muted: '#7a7f88',
+  border: '#dcdee1',
+  surface: '#f6f7f9',
+  green: '#34724a',
+  greenSoft: '#f1faf3',
+  amber: '#8d4d0a',
+  amberSoft: '#fff8eb',
+  red: '#9d3029',
+} as const;
+
+function escapeHtml(value: string | number): string {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
+function brandHeader(context: string): string {
+  return `<tr>
+    <td style="padding:22px 30px;border-bottom:1px solid ${COLORS.border};">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+        <tr>
+          <td width="52" valign="middle">
+            <img src="${LOGO_URL}" width="42" height="42" alt="CommunityHub AI Calendar" style="display:block;width:42px;height:42px;border:0;" />
+          </td>
+          <td valign="middle">
+            <div style="font-size:16px;line-height:20px;font-weight:700;color:${COLORS.ink};">AI Calendar</div>
+            <div style="margin-top:2px;font-size:12px;line-height:17px;color:${COLORS.muted};">CommunityHub · ${escapeHtml(context)}</div>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>`;
+}
+
+function emailShell(opts: { context: string; preheader: string; body: string }): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light" />
+  <title>AI Calendar · ${escapeHtml(opts.context)}</title>
+</head>
+<body style="margin:0;padding:0;background:${COLORS.surface};font-family:Arial,'Helvetica Neue',sans-serif;color:${COLORS.ink};">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">${escapeHtml(opts.preheader)}</div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;background:${COLORS.surface};">
+    <tr>
+      <td align="center" style="padding:32px 12px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;max-width:600px;background:#ffffff;border:1px solid ${COLORS.border};border-radius:6px;">
+          ${brandHeader(opts.context)}
+          <tr><td style="padding:30px;">${opts.body}</td></tr>
+          <tr>
+            <td style="padding:18px 30px;border-top:1px solid ${COLORS.border};font-size:11px;line-height:17px;color:${COLORS.muted};">
+              AI Calendar · CommunityHub<br />Oberlin, Ohio
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+}
+
+function sectionLabel(label: string): string {
+  return `<p style="margin:26px 0 9px;font-size:13px;line-height:18px;font-weight:700;color:${COLORS.ink};">${escapeHtml(label)}</p>`;
+}
+
+function primaryButton(href: string, label: string): string {
+  return `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:26px 0 2px;">
+    <tr><td bgcolor="${COLORS.green}" style="border-radius:4px;">
+      <a href="${href}" style="display:inline-block;padding:12px 20px;color:#ffffff;text-decoration:none;font-size:14px;line-height:18px;font-weight:700;">${escapeHtml(label)}</a>
+    </td></tr>
+  </table>`;
+}
 
 export async function sendReviewNotification(opts: {
-  reviewerEmail:  string;
-  reviewerName:   string;
-  pendingCount:   number;
-  sources:        { name: string; count: number; pending?: number }[];
-  oldestDate:     string | null;
+  reviewerEmail: string;
+  reviewerName: string;
+  pendingCount: number;
+  sources: { name: string; count: number; pending?: number }[];
+  oldestDate: string | null;
   previewEvents?: { title: string; source: string }[];
 }) {
   const { reviewerEmail, reviewerName, pendingCount, sources, oldestDate, previewEvents = [] } = opts;
-
-  // Subject: "3 new events from Apollo Theatre need your review"
-  //       or "12 new events from 3 sources need your review"
-  const newCount   = sources.reduce((s, r) => s + r.count, 0);
+  const newCount = sources.reduce((sum, source) => sum + source.count, 0);
   const sourcePart = sources.length === 1
     ? `from ${sources[0].name}`
     : `from ${sources.length} sources`;
   const subject = `${newCount} new event${newCount !== 1 ? 's' : ''} ${sourcePart} need${newCount === 1 ? 's' : ''} your review`;
 
-  // Source breakdown rows — show "X new" and, if there's a backlog, "+ Y already waiting"
-  const sourceRows = sources
-    .map(s => {
-      const alreadyWaiting = s.pending != null ? Math.max(0, s.pending - s.count) : null;
-      return `<tr>
-        <td style="padding:9px 12px;border-bottom:1px solid #f0f0f0;font-size:13px;color:#444;">${s.name}</td>
-        <td style="padding:9px 12px;border-bottom:1px solid #f0f0f0;font-size:13px;text-align:right;">
-          <span style="font-weight:700;color:#3a8c3f;">${s.count} new</span>${alreadyWaiting ? `<span style="color:#bbb;font-size:12px;margin-left:8px;">+ ${alreadyWaiting} already waiting</span>` : ''}
-        </td>
-      </tr>`;
-    }).join('');
-
-  // Event preview rows — show up to 5 titles
   const preview = previewEvents.slice(0, 5);
   const previewSection = preview.length > 0 ? `
-  <p style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin:0 0 8px;">What came in</p>
-  <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #eee;border-radius:8px;overflow:hidden;margin-bottom:8px;">
-    ${preview.map((e, i) => `<tr style="background:${i % 2 === 0 ? 'white' : '#fafafa'};">
-      <td style="padding:9px 12px;font-size:13px;color:#333;border-bottom:1px solid #f5f5f5;">${e.title}</td>
-      <td style="padding:9px 12px;font-size:11px;color:#aaa;text-align:right;border-bottom:1px solid #f5f5f5;white-space:nowrap;">${e.source}</td>
-    </tr>`).join('')}
-  </table>
-  ${previewEvents.length > 5
-    ? `<p style="font-size:12px;color:#aaa;margin:0 0 20px;text-align:right;">+ ${previewEvents.length - 5} more</p>`
-    : `<div style="margin-bottom:20px;"></div>`
-  }` : '';
+    ${sectionLabel('New events')}
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;border-top:1px solid ${COLORS.border};">
+      ${preview.map(event => `<tr>
+        <td style="padding:11px 0;border-bottom:1px solid ${COLORS.border};font-size:14px;line-height:20px;color:${COLORS.ink};">${escapeHtml(event.title)}</td>
+        <td align="right" style="padding:11px 0 11px 16px;border-bottom:1px solid ${COLORS.border};font-size:12px;line-height:18px;color:${COLORS.muted};white-space:nowrap;">${escapeHtml(event.source)}</td>
+      </tr>`).join('')}
+    </table>
+    ${previewEvents.length > 5 ? `<p style="margin:8px 0 0;font-size:12px;line-height:18px;color:${COLORS.muted};">+ ${previewEvents.length - 5} more</p>` : ''}` : '';
 
-  // Oldest pending warning
+  const sourceRows = sources.map(source => {
+    const alreadyWaiting = source.pending != null ? Math.max(0, source.pending - source.count) : 0;
+    return `<tr>
+      <td style="padding:10px 0;border-bottom:1px solid ${COLORS.border};font-size:13px;line-height:19px;color:${COLORS.body};">${escapeHtml(source.name)}</td>
+      <td align="right" style="padding:10px 0 10px 16px;border-bottom:1px solid ${COLORS.border};font-size:13px;line-height:19px;color:${COLORS.ink};white-space:nowrap;"><strong>${source.count} new</strong>${alreadyWaiting ? `<br /><span style="font-size:11px;color:${COLORS.muted};">${alreadyWaiting} already waiting</span>` : ''}</td>
+    </tr>`;
+  }).join('');
+
+  const queueNote = pendingCount > newCount
+    ? `<p style="margin:20px 0 0;font-size:13px;line-height:20px;color:${COLORS.body};"><strong style="color:${COLORS.ink};">${pendingCount} event${pendingCount !== 1 ? 's' : ''}</strong> are currently awaiting review.</p>`
+    : '';
   const oldestNote = oldestDate
-    ? `<p style="font-size:12px;color:#c05e00;margin:0 0 16px;background:#fff8f0;padding:8px 12px;border-radius:6px;border-left:3px solid #e67e22;">Oldest pending event received ${oldestDate}</p>`
+    ? `<p style="margin:18px 0 0;padding:11px 13px;border-left:3px solid ${COLORS.amber};background:${COLORS.amberSoft};font-size:12px;line-height:18px;color:${COLORS.amber};">Oldest pending event received ${escapeHtml(oldestDate)}.</p>`
     : '';
 
-  // Total pending callout (only show if different from newCount)
-  const totalNote = pendingCount > newCount
-    ? `<p style="font-size:13px;color:#888;margin:0 0 24px;">Total in queue: <strong style="color:#333;">${pendingCount} event${pendingCount !== 1 ? 's' : ''}</strong> awaiting review</p>`
-    : '';
+  const html = emailShell({
+    context: 'Event review',
+    preheader: subject,
+    body: `
+      <h1 style="margin:0 0 18px;font-size:24px;line-height:31px;font-weight:700;color:${COLORS.ink};">Events are ready for review</h1>
+      <p style="margin:0 0 8px;font-size:15px;line-height:23px;color:${COLORS.ink};">Hi ${escapeHtml(reviewerName)},</p>
+      <p style="margin:0;font-size:14px;line-height:22px;color:${COLORS.body};">${newCount} new event${newCount !== 1 ? 's' : ''} ${newCount === 1 ? 'has' : 'have'} arrived ${escapeHtml(sourcePart)}.</p>
+      ${previewSection}
+      ${sources.length > 0 ? `${sectionLabel('By source')}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;border-top:1px solid ${COLORS.border};">${sourceRows}</table>` : ''}
+      ${queueNote}
+      ${oldestNote}
+      ${primaryButton(`${APP_URL}/reviewer/queue`, 'Open review queue')}
+    `,
+  });
 
-  const html = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"></head>
-<body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-<table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f4;padding:32px 16px;">
-<tr><td align="center">
-<table width="100%" cellpadding="0" cellspacing="0" style="max-width:580px;background:white;border-radius:10px;overflow:hidden;box-shadow:0 1px 8px rgba(0,0,0,0.08);">
-
-  <!-- Header -->
-  <tr><td style="background:#1a1a1a;padding:22px 32px;">
-    <p style="margin:0;font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#888;">CommunityHub</p>
-    <h1 style="color:white;margin:4px 0 0;font-size:18px;font-weight:700;">AI Events Ingestion Software</h1>
-  </td></tr>
-
-  <!-- Body -->
-  <tr><td style="padding:28px 32px 8px;">
-    <p style="margin:0 0 6px;font-size:15px;color:#111;font-weight:600;">Hi ${reviewerName},</p>
-    <p style="margin:0 0 24px;font-size:14px;color:#555;line-height:1.6;">
-      ${newCount} new event${newCount !== 1 ? 's' : ''} just arrived ${sourcePart} and ${newCount === 1 ? 'is' : 'are'} waiting for your review.
-    </p>
-
-    ${previewSection}
-
-    ${sources.length > 0 ? `
-    <p style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin:0 0 8px;">By source</p>
-    <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #eee;border-radius:8px;overflow:hidden;margin-bottom:20px;">${sourceRows}</table>` : ''}
-
-    ${totalNote}
-    ${oldestNote}
-
-    <div style="margin:24px 0 20px;">
-      <a href="${APP_URL}/reviewer/queue" style="display:inline-block;background:#3a8c3f;color:white;text-decoration:none;padding:12px 28px;border-radius:7px;font-size:14px;font-weight:700;letter-spacing:0.2px;">
-        Open review queue
-      </a>
-    </div>
-  </td></tr>
-
-  <!-- Footer -->
-  <tr><td style="padding:16px 32px;border-top:1px solid #eee;">
-    <p style="margin:0;font-size:11px;color:#bbb;">AI Events Ingestion Software &middot; CommunityHub &middot; Oberlin, OH</p>
-  </td></tr>
-
-</table>
-</td></tr>
-</table>
-</body></html>`;
-
-  return getTransporter().sendMail({ from: FROM, to: reviewerEmail, subject, html });
+  return getTransporter().sendMail({
+    from: FROM,
+    to: reviewerEmail,
+    subject,
+    html,
+    text: `Hi ${reviewerName},\n\n${newCount} new event${newCount !== 1 ? 's' : ''} ${newCount === 1 ? 'has' : 'have'} arrived ${sourcePart}.\n\nOpen the review queue: ${APP_URL}/reviewer/queue`,
+  });
 }
 
 export async function sendWelcomeEmail(opts: { email: string; name: string; role: string; pendingCount?: number }) {
   const { email, name, role, pendingCount = 0 } = opts;
+  const isReviewer = role === 'reviewer';
 
   const queueSection = pendingCount > 0 ? `
-  <div style="background:#e8f5e9;border-radius:10px;padding:20px 24px;margin:24px 0;text-align:center;">
-    <div style="font-size:48px;font-weight:800;color:#3a8c3f;line-height:1;">${pendingCount}</div>
-    <div style="font-size:13px;color:#2a6b2e;font-weight:600;margin-top:4px;">event${pendingCount !== 1 ? 's' : ''} waiting for review right now</div>
-  </div>` : '';
+    <p style="margin:22px 0 0;padding:13px 15px;background:${COLORS.greenSoft};border-left:3px solid ${COLORS.green};font-size:13px;line-height:20px;color:${COLORS.body};">
+      <strong style="color:${COLORS.green};">${pendingCount} event${pendingCount !== 1 ? 's' : ''}</strong> ${pendingCount === 1 ? 'is' : 'are'} waiting for review.
+    </p>` : '';
 
-  const actions = role === 'reviewer' ? `
-  <table width="100%" cellpadding="0" cellspacing="0" style="margin:28px 0 8px;">
-    <tr>
-      <td style="padding:0 6px 0 0;">
-        <a href="${APP_URL}/reviewer/queue" style="display:block;background:#3a8c3f;color:white;text-decoration:none;padding:13px 0;border-radius:8px;font-size:14px;font-weight:700;text-align:center;">
-          📋 Review queue
-        </a>
-      </td>
-      <td style="padding:0 0 0 6px;">
-        <a href="${APP_URL}/reviewer/dashboard" style="display:block;background:white;color:#3a8c3f;text-decoration:none;padding:12px 0;border-radius:8px;font-size:14px;font-weight:700;text-align:center;border:2px solid #3a8c3f;">
-          📊 My dashboard
-        </a>
-      </td>
-    </tr>
-  </table>` : `
-  <div style="text-align:center;margin:28px 0 8px;">
-    <a href="${APP_URL}/admin/stats" style="display:inline-block;background:#3a8c3f;color:white;text-decoration:none;padding:13px 32px;border-radius:8px;font-size:15px;font-weight:700;">
-      📊 Go to dashboard →
-    </a>
-  </div>`;
+  const reviewerActions = `${primaryButton(`${APP_URL}/reviewer/queue`, 'Open review queue')}
+    <p style="margin:12px 0 0;font-size:13px;line-height:19px;"><a href="${APP_URL}/reviewer/dashboard" style="color:${COLORS.green};text-decoration:underline;">View your dashboard</a></p>`;
+  const adminActions = primaryButton(`${APP_URL}/admin/stats`, 'Open dashboard');
 
-  const html = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"></head>
-<body style="margin:0;padding:0;background:#f0f7f0;font-family:system-ui,sans-serif;">
-<table width="100%" cellpadding="0" cellspacing="0" style="background:#f0f7f0;padding:32px 16px;">
-<tr><td align="center">
-<table width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:white;border-radius:12px;overflow:hidden;box-shadow:0 2px 16px rgba(58,140,63,0.1);">
-<tr><td style="background:#3a8c3f;padding:28px 32px;text-align:center;">
-  <h1 style="color:white;margin:0 0 4px;font-size:20px;font-weight:800;letter-spacing:0.5px;">AI EVENTS INGESTION SOFTWARE</h1>
-  <p style="color:rgba(255,255,255,0.8);margin:0;font-size:13px;">CommunityHub</p>
-</td></tr>
-<tr><td style="padding:32px;">
-  <p style="margin:0 0 8px;font-size:16px;color:#333;font-weight:600;">Hi ${name},</p>
-  <p style="margin:0 0 16px;font-size:14px;color:#666;line-height:1.6;">
-    You've been added as a <strong style="color:#3a8c3f;">${role}</strong> on AI Events Ingestion Software.
-    Sign in with Google to get started.
-  </p>
-  ${queueSection}
-  <p style="margin:0 0 4px;font-size:13px;color:#666;line-height:1.6;">Here's what you can do:</p>
-  <table width="100%" cellpadding="0" cellspacing="0" style="margin:12px 0 20px;">
-    <tr>
-      <td style="padding:6px 0;font-size:13px;color:#444;">📋</td>
-      <td style="padding:6px 0;font-size:13px;color:#444;padding-left:8px;">Review incoming events from AI agents and approve or reject them</td>
-    </tr>
-    <tr>
-      <td style="padding:6px 0;font-size:13px;color:#444;">✏️</td>
-      <td style="padding:6px 0;font-size:13px;color:#444;padding-left:8px;">Edit event details before approving</td>
-    </tr>
-    <tr>
-      <td style="padding:6px 0;font-size:13px;color:#444;">🔁</td>
-      <td style="padding:6px 0;font-size:13px;color:#444;padding-left:8px;">Send events back to the AI for correction with a note</td>
-    </tr>
-    <tr>
-      <td style="padding:6px 0;font-size:13px;color:#444;">🔔</td>
-      <td style="padding:6px 0;font-size:13px;color:#444;padding-left:8px;">Get notified by email when new events arrive</td>
-    </tr>
-  </table>
-  ${actions}
-</td></tr>
-<tr><td style="background:#f8f9fa;padding:16px 32px;border-top:1px solid #eee;">
-  <p style="margin:0;font-size:11px;color:#aaa;text-align:center;">AI Events Ingestion Software · CommunityHub</p>
-</td></tr>
-</table>
-</td></tr>
-</table>
-</body></html>`;
+  const html = emailShell({
+    context: 'Welcome',
+    preheader: `Your ${role} access is ready.`,
+    body: `
+      <h1 style="margin:0 0 18px;font-size:24px;line-height:31px;font-weight:700;color:${COLORS.ink};">Welcome to AI Calendar</h1>
+      <p style="margin:0 0 8px;font-size:15px;line-height:23px;color:${COLORS.ink};">Hi ${escapeHtml(name)},</p>
+      <p style="margin:0;font-size:14px;line-height:22px;color:${COLORS.body};">You now have <strong>${escapeHtml(role)}</strong> access. Sign in with Google to get started.</p>
+      ${queueSection}
+      ${sectionLabel('What you can do')}
+      <ul style="margin:0;padding:0 0 0 20px;color:${COLORS.body};font-size:13px;line-height:21px;">
+        <li style="margin:0 0 6px;">Review incoming events and approve or reject them.</li>
+        <li style="margin:0 0 6px;">Edit event details before publishing.</li>
+        <li style="margin:0 0 6px;">Return an event for correction with a note.</li>
+        <li style="margin:0;">Receive review notifications when new events arrive.</li>
+      </ul>
+      ${isReviewer ? reviewerActions : adminActions}
+    `,
+  });
 
+  const subject = `Welcome to AI Calendar — ${role} access`;
+  const destination = isReviewer ? `${APP_URL}/reviewer/queue` : `${APP_URL}/admin/stats`;
   return getTransporter().sendMail({
-    from:    FROM,
-    to:      email,
-    subject: pendingCount > 0
-      ? `You're in — ${pendingCount} event${pendingCount !== 1 ? 's' : ''} waiting for your review`
-      : `You've been added to AI Events Ingestion Software as a ${role}`,
+    from: FROM,
+    to: email,
+    subject,
     html,
+    text: `Hi ${name},\n\nYou now have ${role} access to AI Calendar by CommunityHub. Sign in with Google to get started.\n\n${destination}`,
   });
 }
 
 export async function sendAgentRunSummary(opts: {
   adminEmail: string;
-  results:    { source: string; status: string; inserted: number; error?: string }[];
-  totalNew:   number;
+  results: { source: string; status: string; inserted: number; error?: string }[];
+  totalNew: number;
 }) {
   const { adminEmail, results, totalNew } = opts;
+  const runDate = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
 
-  const rows = results.map(r => `<tr>
-    <td style="padding:8px 12px;border-bottom:1px solid #eee;font-size:13px;">${r.source}</td>
-    <td style="padding:8px 12px;border-bottom:1px solid #eee;font-size:13px;">
-      <span style="color:${r.status === 'ok' ? '#3a8c3f' : '#c0392b'};font-weight:600;">${r.status === 'ok' ? '✓' : '✗'} ${r.status}</span>
-    </td>
-    <td style="padding:8px 12px;border-bottom:1px solid #eee;font-size:13px;text-align:right;font-weight:600;color:#3a8c3f;">${r.inserted ?? 0}</td>
-    <td style="padding:8px 12px;font-size:11px;color:#c0392b;">${r.error || ''}</td>
-  </tr>`).join('');
+  const rows = results.map(result => {
+    const ok = result.status === 'ok';
+    return `<tr>
+      <td style="padding:11px 0;border-bottom:1px solid ${COLORS.border};font-size:13px;line-height:19px;color:${COLORS.ink};">${escapeHtml(result.source)}</td>
+      <td style="padding:11px 12px;border-bottom:1px solid ${COLORS.border};font-size:12px;line-height:18px;font-weight:700;color:${ok ? COLORS.green : COLORS.red};">${ok ? 'Complete' : escapeHtml(result.status)}</td>
+      <td align="right" style="padding:11px 0;border-bottom:1px solid ${COLORS.border};font-size:13px;line-height:19px;color:${COLORS.ink};">${result.inserted ?? 0}</td>
+    </tr>
+    ${result.error ? `<tr><td colspan="3" style="padding:8px 0 11px;border-bottom:1px solid ${COLORS.border};font-size:12px;line-height:18px;color:${COLORS.red};">${escapeHtml(result.error)}</td></tr>` : ''}`;
+  }).join('');
 
-  const html = `<!DOCTYPE html>
-<html><body style="margin:0;padding:0;background:#f0f7f0;font-family:system-ui,sans-serif;">
-<table width="100%" cellpadding="0" cellspacing="0" style="background:#f0f7f0;padding:32px 16px;">
-<tr><td align="center">
-<table width="100%" cellpadding="0" cellspacing="0" style="max-width:580px;background:white;border-radius:12px;overflow:hidden;box-shadow:0 2px 16px rgba(58,140,63,0.1);">
-<tr><td style="background:#3a8c3f;padding:24px 32px;text-align:center;">
-  <h1 style="color:white;margin:0;font-size:18px;font-weight:800;">Agent Run Complete</h1>
-  <p style="color:rgba(255,255,255,0.8);margin:6px 0 0;font-size:13px;">${new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}</p>
-</td></tr>
-<tr><td style="padding:32px;">
-  <div style="background:#e8f5e9;border-radius:8px;padding:16px;text-align:center;margin-bottom:24px;">
-    <div style="font-size:40px;font-weight:800;color:#3a8c3f;">${totalNew}</div>
-    <div style="font-size:12px;color:#2a6b2e;font-weight:600;">new events added to review queue</div>
-  </div>
-  <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #eee;border-radius:8px;overflow:hidden;margin-bottom:24px;">
-    <thead><tr style="background:#f8f9fa;">
-      <th style="padding:8px 12px;text-align:left;font-size:11px;color:#888;text-transform:uppercase;">Source</th>
-      <th style="padding:8px 12px;text-align:left;font-size:11px;color:#888;text-transform:uppercase;">Status</th>
-      <th style="padding:8px 12px;text-align:right;font-size:11px;color:#888;text-transform:uppercase;">New events</th>
-      <th style="padding:8px 12px;font-size:11px;color:#888;text-transform:uppercase;">Error</th>
-    </tr></thead>
-    <tbody>${rows}</tbody>
-  </table>
-  <div style="text-align:center;">
-    <a href="${APP_URL}/admin/stats" style="display:inline-block;background:#3a8c3f;color:white;text-decoration:none;padding:11px 28px;border-radius:8px;font-size:14px;font-weight:600;">
-      View dashboard →
-    </a>
-  </div>
-</td></tr>
-</table>
-</td></tr>
-</table>
-</body></html>`;
+  const html = emailShell({
+    context: 'Import summary',
+    preheader: `${totalNew} new event${totalNew !== 1 ? 's' : ''} added to the review queue.`,
+    body: `
+      <p style="margin:0 0 8px;font-size:12px;line-height:18px;color:${COLORS.muted};">${escapeHtml(runDate)}</p>
+      <h1 style="margin:0 0 12px;font-size:24px;line-height:31px;font-weight:700;color:${COLORS.ink};">Import summary</h1>
+      <p style="margin:0;font-size:14px;line-height:22px;color:${COLORS.body};"><strong style="color:${COLORS.ink};">${totalNew} new event${totalNew !== 1 ? 's' : ''}</strong> ${totalNew === 1 ? 'was' : 'were'} added to the review queue.</p>
+      ${sectionLabel('Source results')}
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;border-top:1px solid ${COLORS.border};">
+        <tr>
+          <th align="left" style="padding:9px 0;border-bottom:1px solid ${COLORS.border};font-size:11px;line-height:17px;color:${COLORS.muted};font-weight:700;">Source</th>
+          <th align="left" style="padding:9px 12px;border-bottom:1px solid ${COLORS.border};font-size:11px;line-height:17px;color:${COLORS.muted};font-weight:700;">Status</th>
+          <th align="right" style="padding:9px 0;border-bottom:1px solid ${COLORS.border};font-size:11px;line-height:17px;color:${COLORS.muted};font-weight:700;">Added</th>
+        </tr>
+        ${rows}
+      </table>
+      ${primaryButton(`${APP_URL}/admin/stats`, 'View dashboard')}
+    `,
+  });
 
   return getTransporter().sendMail({
-    from:    FROM,
-    to:      adminEmail,
-    subject: `Agent run: ${totalNew} new event${totalNew !== 1 ? 's' : ''} ready for review`,
+    from: FROM,
+    to: adminEmail,
+    subject: `Import summary: ${totalNew} new event${totalNew !== 1 ? 's' : ''} ready for review`,
     html,
+    text: `${runDate}\n\n${totalNew} new event${totalNew !== 1 ? 's' : ''} ${totalNew === 1 ? 'was' : 'were'} added to the review queue.\n\nView the dashboard: ${APP_URL}/admin/stats`,
   });
 }

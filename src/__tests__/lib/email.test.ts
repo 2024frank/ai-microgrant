@@ -155,4 +155,41 @@ describe('Email templates', () => {
     expect(html).toContain('8');
     expect(html).toContain('Timeout');
   });
+
+  it('uses the CommunityHub logo and restrained brand treatment in every email', async () => {
+    const { sendReviewNotification, sendWelcomeEmail, sendAgentRunSummary } = require('@/lib/email');
+
+    await sendReviewNotification({
+      reviewerEmail: 'r@o.edu', reviewerName: 'Jane', pendingCount: 1,
+      sources: [{ name: 'Apollo Theatre', count: 1 }], oldestDate: null,
+    });
+    await sendWelcomeEmail({ email: 'new@oberlin.edu', name: 'New User', role: 'reviewer' });
+    await sendAgentRunSummary({
+      adminEmail: 'admin@oberlin.edu', totalNew: 1,
+      results: [{ source: 'Apollo Theatre', status: 'ok', inserted: 1 }],
+    });
+
+    for (const [mail] of mockSend.mock.calls) {
+      expect(mail.from).toContain('AI Calendar by CommunityHub');
+      expect(mail.html).toContain('src="https://test.oberlin.edu/logo.png"');
+      expect(mail.html).toContain('alt="CommunityHub AI Calendar"');
+      expect(mail.html).toContain('AI Calendar');
+      expect(mail.html).not.toMatch(/[📋📊✏️🔁🔔✓✗→]/u);
+    }
+  });
+
+  it('escapes user-controlled content in email HTML', async () => {
+    const { sendReviewNotification } = require('@/lib/email');
+    await sendReviewNotification({
+      reviewerEmail: 'r@o.edu', reviewerName: '<script>Jane</script>', pendingCount: 1,
+      sources: [{ name: 'Apollo <Main>', count: 1 }], oldestDate: null,
+      previewEvents: [{ title: '<img src=x onerror=alert(1)>', source: 'Apollo' }],
+    });
+
+    const html = mockSend.mock.calls[0][0].html;
+    expect(html).not.toContain('<script>');
+    expect(html).not.toContain('<img src=x');
+    expect(html).toContain('&lt;script&gt;Jane&lt;/script&gt;');
+    expect(html).toContain('Apollo &lt;Main&gt;');
+  });
 });

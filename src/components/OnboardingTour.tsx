@@ -10,7 +10,7 @@ interface Step {
 
 const ADMIN_STEPS: Step[] = [
   {
-    title: 'Welcome to Event Intake',
+    title: 'Welcome to AI Calendar',
     body:  'This workspace brings source runs, incoming records, and reviewer decisions together. This tour takes about 60 seconds.',
     icon: (
       <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
@@ -98,7 +98,7 @@ const ADMIN_STEPS: Step[] = [
 
 const REVIEWER_STEPS: Step[] = [
   {
-    title: 'Welcome to Event Intake',
+    title: 'Welcome to AI Calendar',
     body:  'Configured extractors bring records from multiple sources here for human review before publication. This tour takes about 60 seconds.',
     icon: (
       <svg width="64" height="64" viewBox="0 0 64 64" fill="none">

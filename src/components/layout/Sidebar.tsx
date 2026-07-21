@@ -245,7 +245,7 @@ export default function Sidebar({
           <Image src="/logo.png" alt="" width={24} height={24} />
         </div>
         <div className="sidebar__brand-copy">
-          <p className="sidebar__product">Event Intake</p>
+          <p className="sidebar__product">AI Calendar</p>
           <div className="sidebar__community">CommunityHub · Oberlin</div>
         </div>
       </div>

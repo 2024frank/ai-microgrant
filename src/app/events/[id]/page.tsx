@@ -227,8 +227,8 @@ export default function EventDeepLinkPage() {
 
         {/* Header */}
         <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:'1.5rem' }}>
-          <Image src="/logo.png" alt="CommunityHub Event Intake" width={32} height={32}/>
-          <div style={{ fontSize:12, fontWeight:800, color:'#3a8c3f', letterSpacing:0.5 }}>COMMUNITYHUB EVENT INTAKE</div>
+          <Image src="/logo.png" alt="CommunityHub AI Calendar" width={32} height={32}/>
+          <div style={{ fontSize:12, fontWeight:800, color:'#3a8c3f', letterSpacing:0.5 }}>AI CALENDAR · COMMUNITYHUB</div>
         </div>
 
         <div style={{ background:'white', borderRadius:12, overflow:'hidden', boxShadow:'0 2px 16px rgba(0,0,0,0.08)' }}>
@@ -438,7 +438,7 @@ export default function EventDeepLinkPage() {
         )}
 
         <p style={{ textAlign:'center', fontSize:11, color:'#aaa', marginTop:'1.5rem' }}>
-          CommunityHub Event Intake · Oberlin
+          AI Calendar · CommunityHub · Oberlin
         </p>
       </div>
 
